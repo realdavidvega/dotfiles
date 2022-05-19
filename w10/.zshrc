@@ -110,13 +110,40 @@ source $ZSH/oh-my-zsh.sh
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
-# Custom aliases
-alias g='git'
-alias c='clear'
+# ---------------------------
+#           Paths
+# ---------------------------
 
-# Custom OS-specific aliases
-alias o='explorer'
+# Workspace
+export WORKSPACE="/cygdrive/d/Workspace"
 
-# Custom directory aliases
-alias ws='cd /cygdrive/d/Workspace'
-alias repos='cd /cygdrive/d/Workspace/Code/repos'
+# Repos
+export REPOS="${WORKSPACE}/Code/repos"
+export DOTFILES="${REPOS}/github/dotfiles"
+
+# ---------------------------
+#       App aliases
+# ---------------------------
+
+# Zsh
+alias zshcfg="vim ~/.zshrc"
+alias ohmyzsh="vim ~/.oh-my-zsh"
+
+# System
+alias g="git"
+alias c="clear"
+alias o="explorer"
+
+# Programs
+alias su="/cygdrive/c/Program\ Files/Sublime\ Text/sublime_text.exe"
+
+# ---------------------------
+#      Directory aliases
+# ---------------------------
+
+# Workspace
+alias ws="cd ${WORKSPACE}"
+
+# Repos
+alias repos="cd ${REPOS}"
+alias dotfiles="cd ${DOTFILES}"
