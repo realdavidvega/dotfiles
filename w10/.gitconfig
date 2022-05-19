@@ -1,0 +1,5 @@
+[user]
+	name = David Vega Lichacz
+	email = davidvegalichacz@gmail.com
+[include]
+     path = ~/.gitalias
