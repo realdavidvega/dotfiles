@@ -112,8 +112,6 @@ source $ZSH/oh-my-zsh.sh
 
 # Linux
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-  echo "Detected system: Linux"
-
   # Paths
   OS_DRIVE="/mnt"
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
@@ -123,10 +121,19 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   alias su="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
   alias code="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe" 
 
+# MacOS
+elif [[ "$OSTYPE" == "darwin21.0"* ]]; then
+  # Paths
+  OS_DRIVE="/Volumes/Macintosh\ HD" 
+  OS_WORKSPACE="~/Workspace" 
+
+  # Apps
+  alias o="open"
+  alias su="open ${OS_DRIVE}/Applications/Sublime\ Text.app"
+  alias code="open ${OS_DRIVE}/Applications/Visual\ Studio\ Code.app"  
+
 # Cygwin
 elif [[ "$OSTYPE" == "cygwin"* ]]; then
-    echo "Detected system: Cygwin"
-
   # Paths
   OS_DRIVE="/cygdrive" 
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
@@ -159,6 +166,20 @@ if [[ -n $SSH_CONNECTION ]]; then
 else
   export EDITOR='mvim'
 fi
+
+# ---------------------------
+#      Development aliases
+# ---------------------------
+
+# NVM
+export NVM_DIR="$HOME/.nvm"
+# This loads nvm
+[ -s "/usr/local/opt/nvm/nvm.sh" ] && \. "/usr/local/opt/nvm/nvm.sh"  
+# This loads nvm bash_completion
+[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/usr/local/opt/nvm/etc/bash_completion.d/nvm"  
+
+# Configure shell for Rust
+source $HOME/.cargo/env
 
 # ---------------------------
 #           Paths
