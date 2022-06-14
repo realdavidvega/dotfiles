@@ -88,13 +88,6 @@ source $ZSH/oh-my-zsh.sh
 # You may need to manually set your language environment
 # export LANG=en_US.UTF-8
 
-# Preferred editor for local and remote sessions
-# if [[ -n $SSH_CONNECTION ]]; then
-#   export EDITOR='vim'
-# else
-#   export EDITOR='mvim'
-# fi
-
 # Compilation flags
 # export ARCHFLAGS="-arch x86_64"
 
@@ -102,23 +95,80 @@ source $ZSH/oh-my-zsh.sh
 # plugins, and themes. Aliases can be placed here, though oh-my-zsh
 # users are encouraged to define aliases within the ZSH_CUSTOM folder.
 # For a full list of active aliases, run `alias`.
-#
-# Example aliases
-# alias zshconfig="mate ~/.zshrc"
-# alias ohmyzsh="mate ~/.oh-my-zsh"
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+
+# -----------------------------------------------------------------
+#
+# ░█████╗░░██████╗░░░░░░░██████╗███████╗████████╗██╗░░░██╗██████╗░
+# ██╔══██╗██╔════╝░░░░░░██╔════╝██╔════╝╚══██╔══╝██║░░░██║██╔══██╗
+# ██║░░██║╚█████╗░█████╗╚█████╗░█████╗░░░░░██║░░░██║░░░██║██████╔╝
+# ██║░░██║░╚═══██╗╚════╝░╚═══██╗██╔══╝░░░░░██║░░░██║░░░██║██╔═══╝░
+# ╚█████╔╝██████╔╝░░░░░░██████╔╝███████╗░░░██║░░░╚██████╔╝██║░░░░░
+# ░╚════╝░╚═════╝░░░░░░░╚═════╝░╚══════╝░░░╚═╝░░░░╚═════╝░╚═╝░░░░░
+#
+# -----------------------------------------------------------------
+
+# Linux
+if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+  echo "Detected system: Linux"
+
+  # Paths
+  OS_DRIVE="/mnt"
+  OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
+
+  # Apps
+  alias o="explorer.exe"
+  alias su="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
+  alias code="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe" 
+
+# Cygwin
+elif [[ "$OSTYPE" == "cygwin"* ]]; then
+    echo "Detected system: Cygwin"
+
+  # Paths
+  OS_DRIVE="/cygdrive" 
+  OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
+
+  # Apps
+  alias o="explorer"
+  alias su="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
+  alias code="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"  
+
+fi
+
+# --------------------------------------------------------
+#
+# ░█████╗░░█████╗░███╗░░░███╗███╗░░░███╗░█████╗░███╗░░██╗
+# ██╔══██╗██╔══██╗████╗░████║████╗░████║██╔══██╗████╗░██║
+# ██║░░╚═╝██║░░██║██╔████╔██║██╔████╔██║██║░░██║██╔██╗██║
+# ██║░░██╗██║░░██║██║╚██╔╝██║██║╚██╔╝██║██║░░██║██║╚████║
+# ╚█████╔╝╚█████╔╝██║░╚═╝░██║██║░╚═╝░██║╚█████╔╝██║░╚███║
+# ░╚════╝░░╚════╝░╚═╝░░░░░╚═╝╚═╝░░░░░╚═╝░╚════╝░╚═╝░░╚══╝
+#
+# --------------------------------------------------------
+
+# ---------------------------
+#       Basic setup
+# ---------------------------
+
+# Preferred editor for local and remote sessions
+if [[ -n $SSH_CONNECTION ]]; then
+  export EDITOR='vim'
+else
+  export EDITOR='mvim'
+fi
 
 # ---------------------------
 #           Paths
 # ---------------------------
 
 # Workspace
-export WORKSPACE="/cygdrive/d/Workspace"
+export WORKSPACE="${OS_WORKSPACE}"
 
 # Repos
-export REPOS="${WORKSPACE}/Code/repos"
+export REPOS="${WORKSPACE}/repos"
 export DOTFILES="${REPOS}/github/dotfiles"
 
 # ---------------------------
@@ -129,13 +179,14 @@ export DOTFILES="${REPOS}/github/dotfiles"
 alias zshcfg="vim ~/.zshrc"
 alias ohmyzsh="vim ~/.oh-my-zsh"
 
+# Git
+alias gitalias="vim ~/.gitalias"
+alias gitconfig="vim ~/.gitconfig"
+
 # System
+alias v="vim"
 alias g="git"
 alias c="clear"
-alias o="explorer"
-
-# Programs
-alias su="/cygdrive/c/Program\ Files/Sublime\ Text/sublime_text.exe"
 
 # ---------------------------
 #      Directory aliases

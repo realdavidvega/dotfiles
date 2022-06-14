@@ -3,3 +3,5 @@
 	email = davidvegalichacz@gmail.com
 [include]
      path = ~/.gitalias
+[core]
+	editor = vim
