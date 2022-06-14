@@ -99,6 +99,20 @@ source $ZSH/oh-my-zsh.sh
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
+# ---------------------------
+#      Development config
+# ---------------------------
+
+# Node Version Manager (NVM)
+export NVM_DIR="$HOME/.nvm"
+# This loads nvm
+[ -s "/usr/local/opt/nvm/nvm.sh" ] && \. "/usr/local/opt/nvm/nvm.sh"  
+# This loads nvm bash_completion
+[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/usr/local/opt/nvm/etc/bash_completion.d/nvm"  
+
+# Rust Shell
+source $HOME/.cargo/env
+
 # -----------------------------------------------------------------
 #
 # ░█████╗░░██████╗░░░░░░░██████╗███████╗████████╗██╗░░░██╗██████╗░
@@ -166,20 +180,6 @@ if [[ -n $SSH_CONNECTION ]]; then
 else
   export EDITOR='mvim'
 fi
-
-# ---------------------------
-#      Development aliases
-# ---------------------------
-
-# NVM
-export NVM_DIR="$HOME/.nvm"
-# This loads nvm
-[ -s "/usr/local/opt/nvm/nvm.sh" ] && \. "/usr/local/opt/nvm/nvm.sh"  
-# This loads nvm bash_completion
-[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/usr/local/opt/nvm/etc/bash_completion.d/nvm"  
-
-# Configure shell for Rust
-source $HOME/.cargo/env
 
 # ---------------------------
 #           Paths
