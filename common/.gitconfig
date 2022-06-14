@@ -1,7 +1,9 @@
 [user]
 	name = David Vega Lichacz
 	email = davidvegalichacz@gmail.com
-[include]
-     path = ~/.gitalias
+[init]
+	defaultBranch = main
 [core]
 	editor = vim
+[include]
+     path = ~/.gitalias
