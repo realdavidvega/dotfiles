@@ -1746,3 +1746,7 @@
   svn-m = merge --squash
   svn-c = svn dcommit
   svn-cp = !GIT_EDITOR='sed -i /^git-svn-id:/d' git cherry-pick --edit
+
+  # Do a push/pull for just one branch
+  ps1 = "!git push origin $(git current-branch)"
+  pl1 = "!git pull origin $(git current-branch)"
