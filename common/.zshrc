@@ -105,10 +105,8 @@ source $ZSH/oh-my-zsh.sh
 
 # Node Version Manager (NVM)
 export NVM_DIR="$HOME/.nvm"
-# This loads nvm
-[ -s "/usr/local/opt/nvm/nvm.sh" ] && \. "/usr/local/opt/nvm/nvm.sh"  
-# This loads nvm bash_completion
-[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/usr/local/opt/nvm/etc/bash_completion.d/nvm"  
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
 # Rust Shell
 source $HOME/.cargo/env
@@ -126,6 +124,7 @@ source $HOME/.cargo/env
 
 # Linux
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+
   # Paths
   OS_DRIVE="/mnt"
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
@@ -137,6 +136,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
 # MacOS
 elif [[ "$OSTYPE" == "darwin21.0"* ]]; then
+
   # Paths
   OS_DRIVE="/Volumes/Macintosh\ HD" 
   OS_WORKSPACE="~/Workspace" 
@@ -148,9 +148,11 @@ elif [[ "$OSTYPE" == "darwin21.0"* ]]; then
 
 # Cygwin
 elif [[ "$OSTYPE" == "cygwin"* ]]; then
+
   # Paths
   OS_DRIVE="/cygdrive" 
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
+  OS_REPOS="${OS_DRIVE}/repos" 
 
   # Apps
   alias o="explorer"
@@ -197,8 +199,9 @@ export DOTFILES="${REPOS}/github/dotfiles"
 # ---------------------------
 
 # Zsh
-alias zshcfg="vim ~/.zshrc"
 alias ohmyzsh="vim ~/.oh-my-zsh"
+alias zshcfg="vim ~/.zshrc"
+alias zshcp="cp ${DOTFILES}/common/.zshrc ~/.zshrc"
 
 # Git
 alias gitalias="vim ~/.gitalias"
