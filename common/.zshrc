@@ -192,7 +192,10 @@ export WORKSPACE="${OS_WORKSPACE}"
 
 # Repos
 export REPOS="${WORKSPACE}/repos"
-export DOTFILES="${REPOS}/github/dotfiles"
+export GITHUB="${REPOS}/github"
+export TOOLS="${GITHUB}/tools"
+export RUST="${GITHUB}/rust"
+export DOTFILES="${TOOLS}/dotfiles"
 
 # ---------------------------
 #       App aliases
@@ -221,4 +224,8 @@ alias ws="cd ${WORKSPACE}"
 
 # Repos
 alias repos="cd ${REPOS}"
+alias github="cd ${GITHUB}"
+alias tools="cd ${TOOLS}"
+alias rust="cd ${RUST}"
 alias dotfiles="cd ${DOTFILES}"
+
