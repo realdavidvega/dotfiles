@@ -152,7 +152,6 @@ elif [[ "$OSTYPE" == "cygwin"* ]]; then
   # Paths
   OS_DRIVE="/cygdrive" 
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
-  OS_REPOS="${OS_DRIVE}/repos" 
 
   # Apps
   alias o="explorer"
@@ -188,14 +187,29 @@ fi
 # ---------------------------
 
 # Workspace
-export WORKSPACE="${OS_WORKSPACE}"
+export WS_WORKSPACE="${OS_WORKSPACE}"
 
 # Repos
+<<<<<<< HEAD
 export REPOS="${WORKSPACE}/repos"
 export GITHUB="${REPOS}/github"
 export TOOLS="${GITHUB}/tools"
 export RUST="${GITHUB}/rust"
 export DOTFILES="${TOOLS}/dotfiles"
+=======
+export WS_REPOS="${WS_WORKSPACE}/repos"
+export WS_GITHUB="${WS_REPOS}/github"
+
+# Tools Repos
+export WS_TOOLS="${WS_GITHUB}/tools"
+export WS_DOTFILES="${WS_TOOLS}/dotfiles"
+
+# Rust Repos
+export WS_RUST="${WS_GITHUB}/rust"
+
+# Web Repos
+export WS_WEB="${WS_GITHUB}/web"
+>>>>>>> feat: update directory structure
 
 # ---------------------------
 #       App aliases
@@ -204,7 +218,6 @@ export DOTFILES="${TOOLS}/dotfiles"
 # Zsh
 alias ohmyzsh="vim ~/.oh-my-zsh"
 alias zshcfg="vim ~/.zshrc"
-alias zshcp="cp ${DOTFILES}/common/.zshrc ~/.zshrc"
 
 # Git
 alias gitalias="vim ~/.gitalias"
@@ -215,17 +228,36 @@ alias v="vim"
 alias g="git"
 alias c="clear"
 
+# Dotfiles repo
+alias zsh_to_home="cp ${DOTFILES}/common/.zshrc ~/.zshrc"
+alias zsh_to_dotfiles="cp ~/.zshrc ${DOTFILES}/common/.zshrc"
+
 # ---------------------------
 #      Directory aliases
 # ---------------------------
 
 # Workspace
-alias ws="cd ${WORKSPACE}"
+alias ws="cd ${WS_WORKSPACE}"
 
 # Repos
+<<<<<<< HEAD
 alias repos="cd ${REPOS}"
 alias github="cd ${GITHUB}"
 alias tools="cd ${TOOLS}"
 alias rust="cd ${RUST}"
 alias dotfiles="cd ${DOTFILES}"
 
+=======
+alias repos="cd ${WS_REPOS}"
+alias github="cd ${WS_GITHUB}"
+
+# Tools Repos
+alias tools="cd ${WS_TOOLS}"
+alias dotfiles="cd ${WS_DOTFILES}"
+
+# Rust Repos
+alias rust="cd ${WS_RUST}"
+
+# Web Repos
+alias web="cd ${WS_WEB}"
+>>>>>>> feat: update directory structure
