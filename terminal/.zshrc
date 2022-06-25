@@ -190,13 +190,7 @@ fi
 export WS_WORKSPACE="${OS_WORKSPACE}"
 
 # Repos
-<<<<<<< HEAD
-export REPOS="${WORKSPACE}/repos"
-export GITHUB="${REPOS}/github"
-export TOOLS="${GITHUB}/tools"
-export RUST="${GITHUB}/rust"
-export DOTFILES="${TOOLS}/dotfiles"
-=======
+
 export WS_REPOS="${WS_WORKSPACE}/repos"
 export WS_GITHUB="${WS_REPOS}/github"
 
@@ -209,7 +203,6 @@ export WS_RUST="${WS_GITHUB}/rust"
 
 # Web Repos
 export WS_WEB="${WS_GITHUB}/web"
->>>>>>> feat: update directory structure
 
 # ---------------------------
 #       App aliases
@@ -240,14 +233,7 @@ alias zsh_to_dotfiles="cp ~/.zshrc ${DOTFILES}/common/.zshrc"
 alias ws="cd ${WS_WORKSPACE}"
 
 # Repos
-<<<<<<< HEAD
-alias repos="cd ${REPOS}"
-alias github="cd ${GITHUB}"
-alias tools="cd ${TOOLS}"
-alias rust="cd ${RUST}"
-alias dotfiles="cd ${DOTFILES}"
 
-=======
 alias repos="cd ${WS_REPOS}"
 alias github="cd ${WS_GITHUB}"
 
@@ -260,4 +246,3 @@ alias rust="cd ${WS_RUST}"
 
 # Web Repos
 alias web="cd ${WS_WEB}"
->>>>>>> feat: update directory structure
