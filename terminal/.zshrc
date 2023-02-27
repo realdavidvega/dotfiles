@@ -77,7 +77,7 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 # Custom plugins may be added to $ZSH_CUSTOM/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(git zsh-cargo-completion)
+plugins=(git ruby zsh-cargo-completion)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -105,8 +105,7 @@ source $ZSH/oh-my-zsh.sh
 
 # Node Version Manager (NVM)
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+source $(brew --prefix nvm)/nvm.sh
 
 # Rust Shell
 source $HOME/.cargo/env
@@ -135,7 +134,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   alias code="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe" 
 
 # MacOS
-elif [[ "$OSTYPE" == "darwin21.0"* ]]; then
+elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Paths
   OS_DRIVE="/Volumes/Macintosh\ HD" 
@@ -145,6 +144,12 @@ elif [[ "$OSTYPE" == "darwin21.0"* ]]; then
   alias o="open"
   alias su="open ${OS_DRIVE}/Applications/Sublime\ Text.app"
   alias code="open ${OS_DRIVE}/Applications/Visual\ Studio\ Code.app"  
+  alias ls="exa"
+  alias l="exa -l"
+  alias ll="exa -la"
+
+  # Ruby env
+  eval "$(rbenv init - zsh)"
 
 # Cygwin
 elif [[ "$OSTYPE" == "cygwin"* ]]; then
@@ -190,9 +195,13 @@ fi
 export WS_WORKSPACE="${OS_WORKSPACE}"
 
 # Repos
-
 export WS_REPOS="${WS_WORKSPACE}/repos"
 export WS_GITHUB="${WS_REPOS}/github"
+export WS_WORK="${WS_REPOS}/work"
+
+# Work-specific
+## @47deg
+export WS_47DEG="${WS_WORK}/47deg"
 
 # Tools Repos
 export WS_TOOLS="${WS_GITHUB}/tools"
@@ -221,6 +230,10 @@ alias v="vim"
 alias g="git"
 alias c="clear"
 
+# Docker
+alias dk="docker"
+alias dc="docker-compose"
+
 # Dotfiles repo
 alias zsh_to_home="cp ${DOTFILES}/common/.zshrc ~/.zshrc"
 alias zsh_to_dotfiles="cp ~/.zshrc ${DOTFILES}/common/.zshrc"
@@ -233,9 +246,13 @@ alias zsh_to_dotfiles="cp ~/.zshrc ${DOTFILES}/common/.zshrc"
 alias ws="cd ${WS_WORKSPACE}"
 
 # Repos
-
 alias repos="cd ${WS_REPOS}"
 alias github="cd ${WS_GITHUB}"
+alias work="cd ${WS_WORK}"
+
+# Work-specific
+## @47deg
+alias 47deg="cd ${WS_47DEG}"
 
 # Tools Repos
 alias tools="cd ${WS_TOOLS}"
@@ -246,3 +263,13 @@ alias rust="cd ${WS_RUST}"
 
 # Web Repos
 alias web="cd ${WS_WEB}"
+
+# Docker Aliases
+source ~/.docker-aliases
+
+### MANAGED BY RANCHER DESKTOP START (DO NOT EDIT)
+export PATH="/Users/david/.rd/bin:$PATH"
+### MANAGED BY RANCHER DESKTOP END (DO NOT EDIT)
+
+
+

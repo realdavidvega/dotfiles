@@ -1750,3 +1750,13 @@
   # Do a push/pull for just one branch
   ps1 = "!git push origin $(git current-branch)"
   pl1 = "!git pull origin $(git current-branch)"
+
+  # Restore
+  r = restore
+  rs = restore --staged
+
+  # Custom git logs
+  l = lg
+  l1 = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --
+
+
