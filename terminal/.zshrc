@@ -99,17 +99,6 @@ source $ZSH/oh-my-zsh.sh
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
-# ---------------------------
-#      Development config
-# ---------------------------
-
-# Node Version Manager (NVM)
-export NVM_DIR="$HOME/.nvm"
-source $(brew --prefix nvm)/nvm.sh
-
-# Rust Shell
-source $HOME/.cargo/env
-
 # -----------------------------------------------------------------
 #
 # ░█████╗░░██████╗░░░░░░░██████╗███████╗████████╗██╗░░░██╗██████╗░
@@ -129,9 +118,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
 
   # Apps
-  alias o="explorer.exe"
-  alias su="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias code="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe" 
+  alias open="explorer.exe"
+  alias sublime="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
+  alias vscode="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe" 
 
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
@@ -141,15 +130,19 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   OS_WORKSPACE="~/Workspace" 
 
   # Apps
-  alias o="open"
-  alias su="open ${OS_DRIVE}/Applications/Sublime\ Text.app"
-  alias code="open ${OS_DRIVE}/Applications/Visual\ Studio\ Code.app"  
+  alias sublime="open ${OS_DRIVE}/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
+  alias vscode="open ${OS_DRIVE}/Applications/Visual\ Studio\ Code.app"  
+
+  # Terminal
   alias ls="exa"
   alias l="exa -l"
   alias ll="exa -la"
 
   # Ruby env
   eval "$(rbenv init - zsh)"
+
+  # Daily wallpaper (execute once, node needed)
+  # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
 
 # Cygwin
 elif [[ "$OSTYPE" == "cygwin"* ]]; then
@@ -159,9 +152,8 @@ elif [[ "$OSTYPE" == "cygwin"* ]]; then
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
 
   # Apps
-  alias o="explorer"
   alias su="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias code="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"  
+  alias vsc="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"  
 
 fi
 
@@ -188,88 +180,112 @@ else
 fi
 
 # ---------------------------
-#           Paths
+#     Paths / Development
+# ---------------------------
+
+# Node Version Manager (NVM)
+export NVM_DIR="$HOME/.nvm"
+source $(brew --prefix nvm)/nvm.sh
+
+# Node path
+export NODE_PATH=$NODE_PATH:`npm root -g`
+
+# Rust Shell
+source $HOME/.cargo/env
+
+# ---------------------------
+#        Custom Paths
 # ---------------------------
 
 # Workspace
-export WS_WORKSPACE="${OS_WORKSPACE}"
+export WORKSPACE="${OS_WORKSPACE}"
+
+# Zsh
+export OH_MY_ZSH="/.oh-my-zsh"
+export ZSHRC="~/.zshrc"
+
+# Git
+export GITALIAS="/.gitalias"
+export GITCONFIG="~/.gitconfig"
 
 # Repos
-export WS_REPOS="${WS_WORKSPACE}/repos"
-export WS_GITHUB="${WS_REPOS}/github"
-export WS_WORK="${WS_REPOS}/work"
+export REPOS="${WORKSPACE}/repos"
+export GITHUB="${REPOS}/github"
+export WORK="${REPOS}/work"
 
 # Work-specific
 ## @47deg
-export WS_47DEG="${WS_WORK}/47deg"
+export FOURTYSEVEN="${WORK}/47deg"
 
-# Tools Repos
-export WS_TOOLS="${WS_GITHUB}/tools"
-export WS_DOTFILES="${WS_TOOLS}/dotfiles"
+# Tools repos
+export TOOLS="${GITHUB}/tools"
+export DOTFILES="${TOOLS}/dotfiles"
 
-# Rust Repos
-export WS_RUST="${WS_GITHUB}/rust"
+# Rust repos
+export RUST="${GITHUB}/rust"
 
-# Web Repos
-export WS_WEB="${WS_GITHUB}/web"
+# Web repos
+export WEB="${GITHUB}/web"
 
 # ---------------------------
 #       App aliases
 # ---------------------------
 
 # Zsh
-alias ohmyzsh="vim ~/.oh-my-zsh"
-alias zshcfg="vim ~/.zshrc"
+alias ohmyzsh="vim ${OH_MY_ZSH}"
+alias zshcfg="vim ${ZSHRC}"
 
 # Git
-alias gitalias="vim ~/.gitalias"
-alias gitconfig="vim ~/.gitconfig"
+alias gitalias="vim ${GITALIAS}"
+alias gitconfig="vim ${GITCONFIG}"
 
 # System
+alias c="clear"
+alias o="open"
 alias v="vim"
 alias g="git"
-alias c="clear"
 
 # Docker
 alias dk="docker"
 alias dc="docker-compose"
 
+# Docker aliases
+source ~/.docker-aliases
+
+# Apps
+alias subl="sublime"
+alias vsc="vscode"
+
 # Dotfiles repo
-alias zsh_to_home="cp ${DOTFILES}/common/.zshrc ~/.zshrc"
-alias zsh_to_dotfiles="cp ~/.zshrc ${DOTFILES}/common/.zshrc"
+alias zsh_to_home="cp ${DOTFILES}/terminal/.zshrc ${ZSHRC}"
+alias zsh_to_dotfiles="cp ${ZSHRC} ${DOTFILES}/terminal/.zshrc"
 
 # ---------------------------
 #      Directory aliases
 # ---------------------------
 
 # Workspace
-alias ws="cd ${WS_WORKSPACE}"
+alias ws="cd ${WORKSPACE}"
 
 # Repos
-alias repos="cd ${WS_REPOS}"
-alias github="cd ${WS_GITHUB}"
-alias work="cd ${WS_WORK}"
+alias repos="cd ${REPOS}"
+alias github="cd ${GITHUB}"
+alias work="cd ${WORK}"
 
 # Work-specific
 ## @47deg
-alias 47deg="cd ${WS_47DEG}"
+alias 47deg="cd ${FOURTYSEVEN}"
 
-# Tools Repos
-alias tools="cd ${WS_TOOLS}"
-alias dotfiles="cd ${WS_DOTFILES}"
+# Tools repos
+alias tools="cd ${TOOLS}"
+alias dotfiles="cd ${DOTFILES}"
 
-# Rust Repos
-alias rust="cd ${WS_RUST}"
+# Rust repos
+alias rust="cd ${RUST}"
 
-# Web Repos
-alias web="cd ${WS_WEB}"
-
-# Docker Aliases
-source ~/.docker-aliases
+# Web repos
+alias web="cd ${WEB}"
 
 ### MANAGED BY RANCHER DESKTOP START (DO NOT EDIT)
 export PATH="/Users/david/.rd/bin:$PATH"
 ### MANAGED BY RANCHER DESKTOP END (DO NOT EDIT)
-
-
-
