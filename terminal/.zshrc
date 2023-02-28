@@ -125,6 +125,12 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
+  # Ruby env
+  eval "$(rbenv init - zsh)"
+
+  # TheFuck
+  eval $(thefuck --alias)
+
   # Paths
   OS_DRIVE="/Volumes/Macintosh\ HD" 
   OS_WORKSPACE="~/Workspace" 
@@ -137,9 +143,6 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   alias ls="exa"
   alias l="exa -l"
   alias ll="exa -la"
-
-  # Ruby env
-  eval "$(rbenv init - zsh)"
 
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
@@ -240,8 +243,11 @@ alias gitalias="vim ${GITALIAS}"
 alias gitconfig="vim ${GITCONFIG}"
 
 # System
+alias clr="clear"
 alias c="clear"
+alias op="open"
 alias o="open"
+alias vi="vim"
 alias v="vim"
 alias g="git"
 
@@ -255,6 +261,10 @@ source ~/.docker-aliases
 # Apps
 alias subl="sublime"
 alias vsc="vscode"
+
+# Fuck aliases
+alias fu="fuck"
+alias FUCK="fuck"
 
 # Dotfiles repo
 alias zsh_to_home="cp ${DOTFILES}/terminal/.zshrc ${ZSHRC}"
