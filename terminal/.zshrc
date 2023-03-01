@@ -125,6 +125,13 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
+  # NVM env
+  export NVM_DIR="$HOME/.nvm"
+  source $(brew --prefix nvm)/nvm.sh
+
+  # Node path
+  export NODE_PATH=$NODE_PATH:`npm root -g`
+
   # Ruby env
   eval "$(rbenv init - zsh)"
 
@@ -185,13 +192,6 @@ fi
 # ---------------------------
 #     Paths / Development
 # ---------------------------
-
-# Node Version Manager (NVM)
-export NVM_DIR="$HOME/.nvm"
-source $(brew --prefix nvm)/nvm.sh
-
-# Node path
-export NODE_PATH=$NODE_PATH:`npm root -g`
 
 # Rust Shell
 source $HOME/.cargo/env
