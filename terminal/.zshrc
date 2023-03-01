@@ -189,12 +189,14 @@ else
   export EDITOR='mvim'
 fi
 
-# ---------------------------
-#     Paths / Development
-# ---------------------------
-
 # Rust Shell
 source $HOME/.cargo/env
+
+# Tere
+tere() {
+  local result=$(command tere "$@")
+  [ -n "$result" ] && cd -- "$result"
+}
 
 # ---------------------------
 #        Custom Paths
