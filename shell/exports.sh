@@ -60,7 +60,7 @@ export OH_MY_ZSH="/.oh-my-zsh"
 export ZSHRC="~/.zshrc"
 
 # Git
-export GITALIAS="/.gitalias"
+export GITALIAS="~/.gitalias"
 export GITCONFIG="~/.gitconfig"
 
 # Repos
@@ -74,7 +74,7 @@ export FOURTYSEVEN="${WORK}/47deg"
 
 # Tools repos
 export TOOLS="${GITHUB}/tools"
-# export DOTFILES="${TOOLS}/dotfiles"
+export DOTFILES="${DOTFILES_PATH}"
 
 # Rust repos
 export RUST="${GITHUB}/rust"
