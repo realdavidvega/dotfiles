@@ -38,8 +38,10 @@ alias up='dot package update_all'
 # ---------------------------
 
 # Zsh
-alias ohmyzsh="vim ${OH_MY_ZSH}"
 alias zshcfg="vim ${ZSHRC}"
+alias exportscfg="vim ${DOTFILES}/shell/exports.sh"
+alias oscfg="vim ${DOTFILES}/shell/os.sh"
+alias aliasescfg="vim ${DOTFILES}/shell/aliases.sh"
 
 # Git
 alias gitalias="vim ${GITALIAS}"
@@ -53,10 +55,6 @@ alias o="open"
 alias vi="vim"
 alias v="vim"
 alias g="git"
-
-# Docker
-alias dk="docker"
-alias dc="docker-compose"
 
 # Docker aliases
 source ~/.docker-aliases
@@ -91,7 +89,6 @@ alias 47deg="cd ${FOURTYSEVEN}"
 
 # Tools repos
 alias tools="cd ${TOOLS}"
-# alias dotfiles="cd ${DOTFILES}"
 
 # Rust repos
 alias rust="cd ${RUST}"

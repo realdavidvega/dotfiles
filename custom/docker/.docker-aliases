@@ -97,6 +97,10 @@ function d-aws-cli-fn {
            amazon/aws-cli:latest $1 $2 $3
 }
 
+function dcn-fn {
+        docker connect $*
+}
+
 alias daws=d-aws-cli-fn
 alias dc=dc-fn
 alias dcu="docker-compose up -d"
@@ -116,4 +120,7 @@ alias drun=drun-fn
 alias dsp="docker system prune --all"
 alias dsr=dsr-fn
 
+# Custom aliases
+alias dk="docker"
+alias dcn=dcnn-fn
 alias dcul="docker compose -f docker-compose.yml -f docker-compose.local.yml up -d"
