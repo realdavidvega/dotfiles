@@ -57,8 +57,11 @@ alias v="vim"
 alias g="git"
 alias copy='pbcopy'
 
-# Docker aliases
+# docker aliases
 source ~/.docker-aliases
+
+# youtube-dl aliases
+source ~/.youtube-dl-aliases
 
 # Apps
 alias subl="sublime"
