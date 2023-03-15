@@ -55,6 +55,7 @@ alias o="open"
 alias vi="vim"
 alias v="vim"
 alias g="git"
+alias copy='pbcopy'
 
 # Docker aliases
 source ~/.docker-aliases
@@ -66,10 +67,6 @@ alias vsc="vscode"
 # Fuck aliases
 alias fu="fuck"
 alias FUCK="fuck"
-
-# Dotfiles repo
-# alias zsh_to_home="cp ${DOTFILES}/terminal/.zshrc ${ZSHRC}"
-# alias zsh_to_dotfiles="cp ${ZSHRC} ${DOTFILES}/terminal/.zshrc"
 
 # ---------------------------
 #      Directory aliases
