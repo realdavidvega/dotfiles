@@ -5,7 +5,8 @@
 	defaultBranch = main
 [core]
     pager = delta
-	editor = vim
+    editor = vim
+    excludesfile = ~/.gitignore
 [interactive]
     diffFilter = delta --color-only
 [add.interactive]

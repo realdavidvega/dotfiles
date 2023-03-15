@@ -23,6 +23,7 @@ source "$ZIM_HOME/init.zsh"
 # Async mode for autocompletion
 ZSH_AUTOSUGGEST_USE_ASYNC=true
 ZSH_HIGHLIGHT_MAXLENGTH=300
+POWERLEVEL9K_INSTANT_PROMPT=verbose
 
 source "$DOTFILES_PATH/shell/init.sh"
 
