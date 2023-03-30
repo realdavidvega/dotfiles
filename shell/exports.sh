@@ -29,6 +29,8 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
+  export HOME="/Users/david/"
+
   # NVM env
   export NVM_DIR="$HOME/.nvm"
   source $(brew --prefix nvm)/nvm.sh
