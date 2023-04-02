@@ -18,6 +18,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   OS_DRIVE="/mnt"
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
+  DOCKER_PATH="${OS_DRIVE}/c/Program Files/Rancher Desktop/resources/resources/linux"
 
   # Apps
   alias open="${OS_DRIVE}/c/Windows/SysWOW64/explorer.exe"
@@ -117,6 +118,7 @@ path=(
 	"$HOME/bin"
 	"$DOTLY_PATH/bin"
 	"$DOTFILES_PATH/bin"
+  "$DOCKER_PATH/bin"
 	"$JAVA_HOME/bin"
 	"$GEM_HOME/bin"
 	"$GOPATH/bin"
