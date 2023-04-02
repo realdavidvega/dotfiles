@@ -17,6 +17,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Paths
   OS_DRIVE="/mnt"
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
+  BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
 
   # Apps
   alias open="${OS_DRIVE}/c/Windows/SysWOW64/explorer.exe"
@@ -25,6 +26,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   # Workaround for slow git on WSL2
   alias git="/mnt/c/Program\ Files/Git/bin/git.exe"
+
+  # Linux brew
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
@@ -47,6 +51,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Paths
   OS_DRIVE="/Volumes/Macintosh\ HD" 
   OS_WORKSPACE="~/Workspace" 
+  BREW_PATH="/opt/homebrew/bin"
 
   # Apps
   alias sublime="open ${OS_DRIVE}/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
@@ -118,7 +123,7 @@ path=(
 	"$HOME/.cargo/bin"
 	"/usr/local/opt/ruby/bin"
 	"/usr/local/opt/python/libexec/bin"
-	"/opt/homebrew/bin"
+	"$BREW_PATH"
 	"/usr/local/bin"
 	"/usr/local/sbin"
 	"/bin"
@@ -162,6 +167,9 @@ export RUST="${GITHUB}/rust"
 
 # Web repos
 export WEB="${GITHUB}/web"
+
+# SDKMAN
+source "$HOME/.sdkman/bin/sdkman-init.sh"
 
 ### MANAGED BY RANCHER DESKTOP START (DO NOT EDIT)
 export PATH="$HOME/.rd/bin:$PATH"
