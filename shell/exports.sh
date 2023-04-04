@@ -12,13 +12,36 @@
 # Linux
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
+  # Paths
   export HOME="/home/david"
 
-  # Paths
   OS_DRIVE="/mnt"
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
   DOCKER_PATH="${OS_DRIVE}/c/Program Files/Rancher Desktop/resources/resources/linux"
+
+  path=(
+    "$HOME/bin"
+    "$DOTLY_PATH/bin"
+    "$DOTFILES_PATH/bin"
+    "$DOCKER_PATH/bin"
+    "$JAVA_HOME/bin"
+    "$GEM_HOME/bin"
+    "$GOPATH/bin"
+    "$HOME/.cargo/bin"
+    "/usr/local/opt/ruby/bin"
+    "/usr/local/opt/python/libexec/bin"
+    "$BREW_PATH"
+    "/usr/local/bin"
+    "/usr/local/sbin"
+    "/bin"
+    "/usr/bin"
+    "/usr/sbin"
+    "/sbin"
+    "$path"
+  )
+
+  export path
 
   # Apps
   alias open="${OS_DRIVE}/c/Windows/SysWOW64/explorer.exe"
@@ -34,7 +57,36 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
-  export HOME="/Users/david/"
+  # Paths
+  export HOME="/Users/david"
+
+  OS_DRIVE="/Volumes/Macintosh\ HD" 
+  OS_WORKSPACE="~/Workspace" 
+  BREW_PATH="/opt/homebrew/bin"
+  DOCKER_PATH="~/.rd/bin"
+  
+  path=(
+    "$HOME/bin"
+    "$DOTLY_PATH/bin"
+    "$DOTFILES_PATH/bin"
+    "$DOCKER_PATH/bin"
+    "$JAVA_HOME/bin"
+    "$GEM_HOME/bin"
+    "$GOPATH/bin"
+    "$HOME/.cargo/bin"
+    "/usr/local/opt/ruby/bin"
+    "/usr/local/opt/python/libexec/bin"
+    "$BREW_PATH"
+    "/usr/local/bin"
+    "/usr/local/sbin"
+    "/bin"
+    "/usr/bin"
+    "/usr/sbin"
+    "/sbin"
+    "$path"
+  )
+
+  export path
 
   # NVM env
   export NVM_DIR="$HOME/.nvm"
@@ -49,11 +101,6 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # TheFuck
   eval $(thefuck --alias)
 
-  # Paths
-  OS_DRIVE="/Volumes/Macintosh\ HD" 
-  OS_WORKSPACE="~/Workspace" 
-  BREW_PATH="/opt/homebrew/bin"
-
   # Apps
   alias sublime="open ${OS_DRIVE}/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
   alias vscode="open ${OS_DRIVE}/Applications/Visual\ Studio\ Code.app"  
@@ -65,17 +112,6 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
-
-# Cygwin
-elif [[ "$OSTYPE" == "cygwin"* ]]; then
-
-  # Paths
-  OS_DRIVE="/cygdrive" 
-  OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
-
-  # Apps
-  alias su="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias vsc="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"  
 
 fi
 
@@ -110,32 +146,6 @@ else
 fi
 
 export FZF_DEFAULT_OPTS="--color=$fzf_colors --reverse"
-
-# ------------------------------------------------------------------------------
-# Path - The higher it is, the more priority it has
-# ------------------------------------------------------------------------------
-path=(
-	"$HOME/bin"
-	"$DOTLY_PATH/bin"
-	"$DOTFILES_PATH/bin"
-  "$DOCKER_PATH/bin"
-	"$JAVA_HOME/bin"
-	"$GEM_HOME/bin"
-	"$GOPATH/bin"
-	"$HOME/.cargo/bin"
-	"/usr/local/opt/ruby/bin"
-	"/usr/local/opt/python/libexec/bin"
-	"$BREW_PATH"
-	"/usr/local/bin"
-	"/usr/local/sbin"
-	"/bin"
-	"/usr/bin"
-	"/usr/sbin"
-	"/sbin"
-	"$path"
-)
-
-export path
 
 # ---------------------------
 #        Custom Paths
@@ -172,7 +182,3 @@ export WEB="${GITHUB}/web"
 
 # SDKMAN
 source "$HOME/.sdkman/bin/sdkman-init.sh"
-
-### MANAGED BY RANCHER DESKTOP START (DO NOT EDIT)
-export PATH="$HOME/.rd/bin:$PATH"
-### MANAGED BY RANCHER DESKTOP END (DO NOT EDIT)
