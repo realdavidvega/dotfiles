@@ -11,6 +11,7 @@ alias ll="ls -l"
 alias la="ls -la"
 alias ~="cd ~"
 alias dotfiles='cd $DOTFILES_PATH'
+alias secrets='cd $DOTFILES_PATH/secrets'
 
 # Git
 alias gaa="git add -A"
@@ -56,6 +57,10 @@ alias vi="vim"
 alias v="vim"
 alias g="git"
 alias copy='pbcopy'
+
+# Python
+alias pip="pip3"
+alias python="python3"
 
 # docker aliases
 source ~/.docker-aliases
