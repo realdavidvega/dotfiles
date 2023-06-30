@@ -14,6 +14,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   # Paths
   export HOME="/home/david"
+  export JAVA_HOME="/home/linuxbrew/.linuxbrew/opt/openjdk@20"
 
   OS_DRIVE="/mnt"
   OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
@@ -50,6 +51,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   # Workaround for slow git on WSL2
   alias git="/mnt/c/Program\ Files/Git/bin/git.exe"
+  
+  # Workaround for invalid java location
+  alias java="$JAVA_HOME/bin/java"
 
   # Linux brew
   eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
@@ -59,6 +63,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Paths
   export HOME="/Users/david"
+  export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/corretto-17.0.6/Contents/Home"
 
   OS_DRIVE="/Volumes/Macintosh\ HD" 
   OS_WORKSPACE="~/Workspace" 
@@ -132,7 +137,6 @@ export CODELY_THEME_PWD_MODE="short" # full, short, home_relative
 # ------------------------------------------------------------------------------
 # Languages
 # ------------------------------------------------------------------------------
-export JAVA_HOME='$HOME/Library/Java/JavaVirtualMachines/corretto-17.0.6/Contents/Home'
 export GEM_HOME="$HOME/.gem"
 export GOPATH="$HOME/.go"
 
