@@ -1756,6 +1756,10 @@
   ps1 = "!git push origin $(git current-branch)"
   pl1 = "!git pull origin $(git current-branch)"
 
+  ### Force pushing ###
+
+  psf = !git push --force-with-lease
+
   ### Reset ###
  
   rst = reset
@@ -1782,7 +1786,7 @@
   }; f"
 
   ### Run git push and then immediately open the Pull Request URL ###
-  
+
   pr1 = "!f() { \
     git push origin HEAD; \
     if [ $? -eq 0 ]; then \
