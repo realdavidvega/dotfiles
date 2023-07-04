@@ -90,7 +90,11 @@ alias work="cd ${WORK}"
 
 # Work-specific
 ## @47deg
-alias 47deg="cd ${FOURTYSEVEN}"
+alias xebia="cd ${XEBIA}"
+alias cortex="cd ${CORTEX}"
+
+## projects
+alias xef="cd ${FOURTYSEVEN}/projects/langchain/langchain4k"
 
 # Tools repos
 alias tools="cd ${TOOLS}"

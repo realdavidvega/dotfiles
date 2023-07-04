@@ -137,6 +137,7 @@ export CODELY_THEME_PWD_MODE="short" # full, short, home_relative
 # ------------------------------------------------------------------------------
 # Languages
 # ------------------------------------------------------------------------------
+export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/openjdk-19.0.2/Contents/Home"
 export GEM_HOME="$HOME/.gem"
 export GOPATH="$HOME/.go"
 
@@ -171,17 +172,18 @@ export GITHUB="${REPOS}/github"
 export WORK="${REPOS}/work"
 
 # Work-specific
-## @47deg
-export FOURTYSEVEN="${WORK}/47deg"
+## main
+export XEBIA="${WORK}/xebia"
+export CORTEX="${WORK}/cortex"
 
-# Tools repos
+## tools
 export TOOLS="${GITHUB}/tools"
 export DOTFILES="${DOTFILES_PATH}"
 
-# Rust repos
+## rust
 export RUST="${GITHUB}/rust"
 
-# Web repos
+## web
 export WEB="${GITHUB}/web"
 
 # SDKMAN
