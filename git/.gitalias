@@ -1747,19 +1747,33 @@
   svn-c = svn dcommit
   svn-cp = !GIT_EDITOR='sed -i /^git-svn-id:/d' git cherry-pick --edit
 
-  # Do a push/pull for just one branch
+  ########################################################################
+  ### Custom aliases
+  ########################################################################
+
+  ### Do a push/pull for just one branch ###
+
   ps1 = "!git push origin $(git current-branch)"
   pl1 = "!git pull origin $(git current-branch)"
 
-  # Restore
+  ### Reset ###
+ 
+  rst = reset
+  rsts = reset --soft
+  rsth = reset --hard
+
+  ### Restore ###
+
   r = restore
   rs = restore --staged
 
-  # Custom git logs
+  ### Custom git logs ###
+
   l = lg
   l1 = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --
 
-  # Open the Pull Request URL for your current directory's branch (base branch defaults to main)
+  ### Open the Pull Request URL for your current directory's branch (base branch defaults to main) ###
+
   opr = "!f() { \
     github_url=$(git remote -v | awk '/fetch/{print $2}' | sed -Ee 's#(git@|git://)#https://#' -e 's@com:@com/@' -e 's%\\.git$%%' | awk '/github/'); \
     branch_name=$(git symbolic-ref HEAD | cut -d'/' -f 3,4); \
@@ -1767,7 +1781,8 @@
     open $pr_url; \
   }; f"
 
-  # Run git push and then immediately open the Pull Request URL
+  ### Run git push and then immediately open the Pull Request URL ###
+  
   pr1 = "!f() { \
     git push origin HEAD; \
     if [ $? -eq 0 ]; then \
