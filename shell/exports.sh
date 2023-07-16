@@ -58,6 +58,14 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Linux brew
   eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
+  # Custom OS Paths
+  alias downloads="cd ${OS_DRIVE}/c/Users/david/Downloads"
+
+  # Symlinks
+  # ln -s ~/.dotfiles/git/.gitconfig ~/.gitconfig
+  # ln -s ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases
+  # ln -s ~/.dotfiles/aliases/.youtube-dl-aliases ~/.youtube-dl-aliases
+
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
