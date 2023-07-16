@@ -7,6 +7,7 @@
     pager = delta
     editor = vim
     excludesfile = ~/.gitignore
+    autocrlf = input
 [interactive]
     diffFilter = delta --color-only
 [add.interactive]
