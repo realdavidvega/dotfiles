@@ -1751,14 +1751,10 @@
   ### Custom aliases
   ########################################################################
 
-  ### Do a push/pull for just one branch ###
+  ### Log ###
 
-  ps1 = "!git push origin $(git current-branch)"
-  pl1 = "!git pull origin $(git current-branch)"
-
-  ### Force pushing ###
-
-  psf = !git push --force-with-lease
+  l = lg
+  l1 = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --
 
   ### Reset ###
  
@@ -1771,10 +1767,27 @@
   r = restore
   rs = restore --staged
 
-  ### Custom git logs ###
+  ### Rebase ###
 
-  l = lg
-  l1 = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --
+  prbm = "!git pull --rebase origin main"
+  prbd = "!git pull --rebase origin develop"
+
+  ### Checkout ###
+  dev = checkout develop
+  main = checkout main
+
+  ### Do a push/pull for just one branch ###
+
+  ps1 = "!git push origin $(git current-branch)"
+  pl1 = "!git pull origin $(git current-branch)"
+
+  ### Force push ###
+
+  psf = !git push --force-with-lease
+
+  ### Clean merged branches ###
+
+  cleanup = "!git branch --merged | grep  -v '\\*\\|master\\|main\\|develop' | xargs -n 1 -r git branch -D"
 
   ### Open the Pull Request URL for your current directory's branch (base branch defaults to main) ###
 
