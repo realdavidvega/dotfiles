@@ -1,3 +1,10 @@
+# yt video aliases
+alias yt="yt-dlp"
+alias yt-best="yt-dlp -f bestvideo+bestaudio"
+alias yt-mp4="yt-dlp -f 22"
+alias yt-mkv="yt-dlp --recode-video mkv -f 22"
+
+# yt audio aliases
 alias yta-aac="yt-dlp --extract-audio --audio-format aac --audio-quality 0"
 alias yta-best="yt-dlp --extract-audio --audio-format best --audio-quality 0"
 alias yta-flac="yt-dlp --extract-audio --audio-format flac --audio-quality 0"
@@ -6,6 +13,3 @@ alias yta-mp3="yt-dlp --extract-audio --audio-format mp3 --audio-quality 0"
 alias yta-opus="yt-dlp --extract-audio --audio-format opus --audio-quality 0"
 alias yta-vorbis="yt-dlp --extract-audio --audio-format vorbis --audio-quality 0"
 alias yta-wav="yt-dlp --extract-audio --audio-format wav --audio-quality 0"
-alias yta-best="yt-dlp -f bestvideo+bestaudio"
-alias yta-mp4="yt-dlp -f 22"
-alias yta-mkv="yt-dlp --recode-video mkv -f 22"
