@@ -101,6 +101,7 @@ function dcn-fn {
         docker connect $*
 }
 
+# Default aliases
 alias daws=d-aws-cli-fn
 alias dc=dc-fn
 alias dcu="docker-compose up -d"

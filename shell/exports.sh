@@ -61,6 +61,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Custom OS Paths
   alias downloads="cd ${OS_DRIVE}/c/Users/david/Downloads"
 
+  # Emacs
+  alias emacs="emacs"
+
   # Symlinks
   # ln -s ~/.dotfiles/git/.gitconfig ~/.gitconfig
   # ln -s ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases

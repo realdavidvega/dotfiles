@@ -38,11 +38,13 @@ alias up='dot package update_all'
 #       App aliases
 # ---------------------------
 
-# Zsh
+# Zsh / cfg
 alias zshcfg="vim ${ZSHRC}"
 alias exportscfg="vim ${DOTFILES}/shell/exports.sh"
 alias oscfg="vim ${DOTFILES}/shell/os.sh"
-alias aliasescfg="vim ${DOTFILES}/shell/aliases.sh"
+alias aliascfg="vim ${DOTFILES}/shell/aliases.sh"
+alias ytcfg="vim ${DOTFILES}/aliases/.youtube-dl-aliases"
+alias dockercfg="vim ${DOTFILES}/aliases/.docker-aliases"
 
 # Git
 alias gitalias="vim ${GITALIAS}"
