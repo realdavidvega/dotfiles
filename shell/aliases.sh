@@ -78,6 +78,12 @@ alias vsc="vscode"
 alias fu="fuck"
 alias FUCK="fuck"
 
+# Gradle aliases
+alias gr="./gradlew"
+alias grb="gr build"
+alias grt="gr test"
+alias grs="gr spotlessApply"
+
 # ---------------------------
 #      Directory aliases
 # ---------------------------
@@ -106,3 +112,4 @@ alias rust="cd ${RUST}"
 
 # Web repos
 alias web="cd ${WEB}"
+
