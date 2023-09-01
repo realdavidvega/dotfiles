@@ -1769,10 +1769,12 @@
 
   ### Rebase ###
 
-  prbm = "!git pull --rebase origin main"
   prbd = "!git pull --rebase origin develop"
+  prbm = "!git pull --rebase origin main"
+  prbms = "!git pull --rebase origin master"
 
   ### Checkout ###
+  
   dev = checkout develop
   main = checkout main
   master = checkout master
