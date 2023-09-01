@@ -1775,6 +1775,7 @@
   ### Checkout ###
   dev = checkout develop
   main = checkout main
+  master = checkout master
 
   ### Do a push/pull for just one branch ###
 
