@@ -1775,9 +1775,15 @@
 
   ### Checkout ###
   
-  dev = checkout develop
-  main = checkout main
-  master = checkout master
+  cod = checkout develop
+  com = checkout main
+  coms = checkout master
+
+  ### Merge (fetch first) ###
+
+  mod = merge origin/develop
+  mom = merge origin/main
+  moms = merge origin/master
 
   ### Do a push/pull for just one branch ###
 
