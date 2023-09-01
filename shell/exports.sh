@@ -166,6 +166,9 @@ export FZF_DEFAULT_OPTS="--color=$fzf_colors --reverse"
 # ---------------------------
 #        Custom Paths
 # ---------------------------
+# Home
+export DOWNLOADS="${HOME}/downloads"
+
 # Workspace
 export WORKSPACE="${OS_WORKSPACE}"
 

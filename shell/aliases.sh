@@ -88,6 +88,9 @@ alias grs="gr spotlessApply"
 #      Directory aliases
 # ---------------------------
 
+# Home
+alias dw="cd ${DOWNLOADS}"
+
 # Workspace
 alias ws="cd ${WORKSPACE}"
 
