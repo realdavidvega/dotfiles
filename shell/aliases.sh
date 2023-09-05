@@ -90,7 +90,9 @@ alias FUCK="fuck"
 alias gr="./gradlew"
 alias grb="gr build"
 alias grt="gr test"
+alias grc="gr check"
 alias grs="gr spotlessApply"
+alias grpl="gr publishToMavenLocal"
 
 # ---------------------------
 #      Directory aliases
