@@ -94,6 +94,27 @@ alias grc="gr check"
 alias grs="gr spotlessApply"
 alias grpl="gr publishToMavenLocal"
 
+# Node aliases
+alias nd="node"
+alias ndv="node -v"
+
+# NPM aliases
+alias np="npm"
+alias npv="npm -v"
+alias npi="npm install"
+alias nps="npm run start"
+
+# Yarn aliases
+alias y="yarn"
+alias yv="yarn -v"
+alias yi="yarn install"
+alias ys="yarn start"
+
+# NVM aliases
+alias nv="nvm"
+alias nvl="nvm list"
+alias nvu="nvm use"
+
 # ---------------------------
 #      Directory aliases
 # ---------------------------
