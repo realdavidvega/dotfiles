@@ -90,8 +90,8 @@ alias FUCK="fuck"
 alias gr="./gradlew"
 alias grb="gr build"
 alias grt="gr test"
-alias grc="gr check"
-alias grs="gr spotlessApply"
+alias grc="gr spotlessCheck --parallel"
+alias grs="gr spotlessApply --parallel"
 alias grpl="gr publishToMavenLocal"
 
 # Node aliases
