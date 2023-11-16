@@ -3,7 +3,7 @@
 # ---------------------------
 
 # Enable aliases to be sudo’ed
-alias sudo='sudo '
+alias sudo="sudo "
 
 # Navigating
 alias ..="cd .."
@@ -18,29 +18,29 @@ alias la="ls -la"
 alias ~="cd ~"
 
 # Directories
-alias dotfiles='cd $DOTFILES_PATH'
-alias secrets='cd $DOTFILES_PATH/secrets'
+alias dotfiles="cd $DOTFILES_PATH"
+alias secrets="cd $DOTFILES_PATH/secrets"
 
 # Git
 alias gaa="git add -A"
-alias gc='$DOTLY_PATH/bin/dot git commit'
+alias gc="$DOTLY_PATH/bin/dot git commit"
 alias gca="git add --all && git commit --amend --no-edit"
 alias gco="git checkout"
-alias gd='$DOTLY_PATH/bin/dot git pretty-diff'
+alias gd="$DOTLY_PATH/bin/dot git pretty-diff"
 alias gs="git status -sb"
 alias gf="git fetch --all -p"
 alias gps="git push"
 alias gpsf="git push --force"
 alias gpl="git pull --rebase --autostash"
 alias gb="git branch"
-alias gl='$DOTLY_PATH/bin/dot git pretty-log'
+alias gl="$DOTLY_PATH/bin/dot git pretty-log"
 
 # Utils
-alias k='kill -9'
-alias i.='(idea $PWD &>/dev/null &)'
-alias c.='(code $PWD &>/dev/null &)'
-alias o.='open .'
-alias up='dot package update_all'
+alias k="kill -9"
+alias i.="(idea $PWD &>/dev/null &)"
+alias c.="(code $PWD &>/dev/null &)"
+alias o.="open ."
+alias up="dot package update_all"
 
 # ---------------------------
 #       App aliases
@@ -66,7 +66,7 @@ alias o="open"
 alias vi="vim"
 alias v="vim"
 alias g="git"
-alias copy='pbcopy'
+alias copy="pbcopy"
 
 # Python
 alias pip="pip3"
@@ -120,7 +120,8 @@ alias nvu="nvm use"
 # ---------------------------
 
 # Home
-alias dw="cd ${DOWNLOADS}"
+alias downloads="cd ${DOWNLOADS}"
+alias dw="downloads"
 
 # Workspace
 alias ws="cd ${WORKSPACE}"

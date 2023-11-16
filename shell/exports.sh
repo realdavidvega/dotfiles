@@ -44,6 +44,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   export path
 
+  # Exports
+  export DOWNLOADS="${OS_DRIVE}/c/Users/david/Downloads"
+
   # Apps
   alias open="${OS_DRIVE}/c/Windows/SysWOW64/explorer.exe"
   alias sublime="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
@@ -104,6 +107,9 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   )
 
   export path
+
+  # Exports
+  export DOWNLOADS="${HOME}/downloads"
 
   # NVM env
   export NVM_DIR="$HOME/.nvm"
@@ -166,8 +172,6 @@ export FZF_DEFAULT_OPTS="--color=$fzf_colors --reverse"
 # ---------------------------
 #        Custom Paths
 # ---------------------------
-# Home
-export DOWNLOADS="${HOME}/downloads"
 
 # Workspace
 export WORKSPACE="${OS_WORKSPACE}"
