@@ -60,11 +60,11 @@ alias gitconfig="vim ${GITCONFIG}"
 
 # System
 alias clr="clear"
-alias c="clear"
+alias c="clr"
 alias op="open"
-alias o="open"
+alias o="op"
 alias vi="vim"
-alias v="vim"
+alias v="vi"
 alias g="git"
 alias copy="pbcopy"
 
@@ -87,7 +87,8 @@ alias fu="fuck"
 alias FUCK="fuck"
 
 # Gradle aliases
-alias gr="./gradlew"
+alias gradlew="./gradlew"
+alias gr="gradlew"
 alias grb="gr build"
 alias grt="gr test"
 alias grc="gr spotlessCheck --parallel"
@@ -147,4 +148,3 @@ alias rust="cd ${RUST}"
 
 # Web repos
 alias web="cd ${WEB}"
-
