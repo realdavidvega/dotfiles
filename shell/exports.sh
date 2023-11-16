@@ -61,10 +61,6 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Linux brew
   eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
-  # Custom OS Paths
-  alias downloads="cd ${OS_DRIVE}/c/Users/david/Downloads"
-  alias dw="downloads"
-
   # Emacs
   alias emacs="emacs"
 
