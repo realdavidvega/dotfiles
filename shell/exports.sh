@@ -17,9 +17,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   export JAVA_HOME="/home/linuxbrew/.linuxbrew/opt/openjdk@20"
 
   OS_DRIVE="/mnt"
-  OS_WORKSPACE="${OS_DRIVE}/d/Workspace" 
+  OS_WORKSPACE="$OS_DRIVE/d/Workspace"
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
-  DOCKER_PATH="${OS_DRIVE}/c/Program Files/Rancher Desktop/resources/resources/linux"
+  DOCKER_PATH="$OS_DRIVE/c/Program Files/Rancher Desktop/resources/resources/linux"
 
   path=(
     "$HOME/bin"
@@ -45,12 +45,12 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   export path
 
   # Exports
-  export DOWNLOADS="${OS_DRIVE}/c/Users/david/Downloads"
+  export DOWNLOADS="$OS_DRIVE/c/Users/david/Downloads"
 
   # Apps
-  alias open="${OS_DRIVE}/c/Windows/SysWOW64/explorer.exe"
-  alias sublime="${OS_DRIVE}/c/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias vscode="${OS_DRIVE}/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe" 
+  alias open="$OS_DRIVE/c/Windows/SysWOW64/explorer.exe"
+  alias sublime="$OS_DRIVE/c/Program\ Files/Sublime\ Text/sublime_text.exe"
+  alias vscode="$OS_DRIVE/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
 
   # Workaround for slow git on WSL2
   alias git="/mnt/c/Program\ Files/Git/bin/git.exe"
@@ -76,8 +76,8 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   export HOME="/Users/david"
   export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/corretto-17.0.6/Contents/Home"
 
-  OS_DRIVE="/Volumes/Macintosh\ HD" 
-  OS_WORKSPACE="~/Workspace" 
+  OS_DRIVE="/Volumes/Macintosh\ HD"
+  OS_WORKSPACE="~/Workspace"
   BREW_PATH="/opt/homebrew/bin"
   DOCKER_PATH="~/.rd/bin"
   
@@ -105,7 +105,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   export path
 
   # Exports
-  export DOWNLOADS="${HOME}/downloads"
+  export DOWNLOADS="$HOME/downloads"
 
   # NVM env
   export NVM_DIR="$HOME/.nvm"
@@ -121,8 +121,8 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   eval $(thefuck --alias)
 
   # Apps
-  alias sublime="open ${OS_DRIVE}/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
-  alias vscode="open ${OS_DRIVE}/Applications/Visual\ Studio\ Code.app"  
+  alias sublime="open $OS_DRIVE/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
+  alias vscode="open $OS_DRIVE/Applications/Visual\ Studio\ Code.app"
 
   # Terminal
   alias ls="exa"
@@ -170,7 +170,7 @@ export FZF_DEFAULT_OPTS="--color=$fzf_colors --reverse"
 # ---------------------------
 
 # Workspace
-export WORKSPACE="${OS_WORKSPACE}"
+export WORKSPACE="$OS_WORKSPACE"
 
 # Zsh
 export OH_MY_ZSH="/.oh-my-zsh"
@@ -181,24 +181,24 @@ export GITALIAS="~/.gitalias"
 export GITCONFIG="~/.gitconfig"
 
 # Repos
-export REPOS="${WORKSPACE}/repos"
-export GITHUB="${REPOS}/github"
-export WORK="${REPOS}/work"
+export REPOS="$WORKSPACE/repos"
+export GITHUB="$REPOS/github"
+export WORK="$REPOS/work"
 
 # Work-specific
 ## main
-export XEBIA="${WORK}/xebia"
-export CORTEX="${WORK}/cortex"
+export XEBIA="$WORK/xebia"
+export CORTEX="$WORK/cortex"
 
 ## tools
-export TOOLS="${GITHUB}/tools"
-export DOTFILES="${DOTFILES_PATH}"
+export TOOLS="$GITHUB/tools"
+export DOTFILES="$DOTFILES_PATH"
 
 ## rust
-export RUST="${GITHUB}/rust"
+export RUST="$GITHUB/rust"
 
 ## web
-export WEB="${GITHUB}/web"
+export WEB="$GITHUB/web"
 
 # SDKMAN
 source "$HOME/.sdkman/bin/sdkman-init.sh"
