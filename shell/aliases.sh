@@ -1,5 +1,5 @@
 # ---------------------------
-#       Dotly aliases
+#       Dotly Aliases
 # ---------------------------
 
 # Enable aliases to be sudo’ed
@@ -43,7 +43,7 @@ alias o.="open ."
 alias up="dot package update_all"
 
 # ---------------------------
-#       App aliases
+#       App Aliases
 # ---------------------------
 
 # Zsh / cfg
@@ -117,15 +117,18 @@ alias nvl="nvm list"
 alias nvu="nvm use"
 
 # ---------------------------
-#      Directory aliases
+#      Directory Aliases
 # ---------------------------
 
 # Home
+alias root="cd /"
+alias home="cd $HOME"
 alias downloads="cd $DOWNLOADS"
 alias dw="downloads"
 
 # Workspace
-alias ws="cd $WORKSPACE"
+alias workspace="cd $WORKSPACE"
+alias ws="workspace"
 
 # Repos
 alias repos="cd $REPOS"
