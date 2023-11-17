@@ -47,16 +47,16 @@ alias up="dot package update_all"
 # ---------------------------
 
 # Zsh / cfg
-alias zshcfg="vim ${ZSHRC}"
-alias exportscfg="vim ${DOTFILES}/shell/exports.sh"
-alias oscfg="vim ${DOTFILES}/shell/os.sh"
-alias aliascfg="vim ${DOTFILES}/shell/aliases.sh"
-alias ytcfg="vim ${DOTFILES}/aliases/.youtube-dl-aliases"
-alias dockercfg="vim ${DOTFILES}/aliases/.docker-aliases"
+alias zshcfg="vim $ZSHRC"
+alias exportscfg="vim $DOTFILES/shell/exports.sh"
+alias oscfg="vim $DOTFILES/shell/os.sh"
+alias aliascfg="vim $DOTFILES/shell/aliases.sh"
+alias ytcfg="vim $DOTFILES/aliases/.youtube-dl-aliases"
+alias dockercfg="vim $DOTFILES/aliases/.docker-aliases"
 
 # Git
-alias gitalias="vim ${GITALIAS}"
-alias gitconfig="vim ${GITCONFIG}"
+alias gitalias="vim $GITALIAS"
+alias gitconfig="vim $GITCONFIG"
 
 # System
 alias clr="clear"
@@ -90,7 +90,7 @@ alias FUCK="fuck"
 alias gradlew="./gradlew"
 alias gr="gradlew"
 alias grb="gr build"
-alias grt="gr test"
+alias grt="gr test --parallel"
 alias grc="gr spotlessCheck --parallel"
 alias grs="gr spotlessApply --parallel"
 alias grpl="gr publishToMavenLocal"
@@ -121,30 +121,30 @@ alias nvu="nvm use"
 # ---------------------------
 
 # Home
-alias downloads="cd ${DOWNLOADS}"
+alias downloads="cd $DOWNLOADS"
 alias dw="downloads"
 
 # Workspace
-alias ws="cd ${WORKSPACE}"
+alias ws="cd $WORKSPACE"
 
 # Repos
-alias repos="cd ${REPOS}"
-alias github="cd ${GITHUB}"
-alias work="cd ${WORK}"
+alias repos="cd $REPOS"
+alias github="cd $GITHUB"
+alias work="cd $WORK"
 
 # Work-specific
-## @47deg
-alias xebia="cd ${XEBIA}"
-alias cortex="cd ${CORTEX}"
+## @xebia-functional
+alias xebia="cd $XEBIA"
+alias cortex="cd $CORTEX"
 
 ## projects
-alias xef="cd ${FOURTYSEVEN}/projects/langchain/langchain4k"
+alias xef="cd $XEBIA/ai/xef"
 
 # Tools repos
-alias tools="cd ${TOOLS}"
+alias tools="cd $TOOLS"
 
 # Rust repos
-alias rust="cd ${RUST}"
+alias rust="cd $RUST"
 
 # Web repos
-alias web="cd ${WEB}"
+alias web="cd $WEB"
