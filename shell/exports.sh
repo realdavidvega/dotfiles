@@ -11,6 +11,8 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   OS_DRIVE="/mnt"
   OS_WORKSPACE="$OS_DRIVE/d/Workspace"
+  C_DRIVE="$OS_DRIVE/c"
+  
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
   DOCKER_PATH="$OS_DRIVE/c/Program Files/Rancher Desktop/resources/resources/linux"
 
@@ -38,15 +40,22 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   export path
 
   # Exports
-  export DOWNLOADS="$OS_DRIVE/c/Users/david/Downloads"
+  export WIN_HOME="$C_DRIVE/Users/david"
+  export DOWNLOADS="$C_DRIVE/Users/david/Downloads"
 
   # Apps
-  alias open="$OS_DRIVE/c/Windows/SysWOW64/explorer.exe"
-  alias sublime="$OS_DRIVE/c/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias vscode="$OS_DRIVE/c/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
+  alias open="$C_DRIVE/Windows/SysWOW64/explorer.exe"
+  alias sublime="$C_DRIVE/Program\ Files/Sublime\ Text/sublime_text.exe"
+  alias vscode="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
 
   # Workaround for slow git on WSL2
-  alias git="/mnt/c/Program\ Files/Git/bin/git.exe"
+  alias git="$C_DRIVE/Program\ Files/Git/bin/git.exe"
+
+  # Use git configuration from dotfiles with windows git
+  cp ~/.dotfiles/git/.gitconfig $WIN_HOME/.gitconfig
+  cp ~/.dotfiles/git/.gitalias $WIN_HOME/.gitalias
+  cp ~/.dotfiles/git/.gitignore $WIN_HOME/.gitignore
+  cp ~/.dotfiles/git/.gitkeep $WIN_HOME/.gitkeep
   
   # Workaround for invalid java location
   alias java="$JAVA_HOME/bin/java"
@@ -58,7 +67,6 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   alias emacs="emacs"
 
   # Symlinks
-  # ln -s ~/.dotfiles/git/.gitconfig ~/.gitconfig
   # ln -s ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases
   # ln -s ~/.dotfiles/aliases/.youtube-dl-aliases ~/.youtube-dl-aliases
 

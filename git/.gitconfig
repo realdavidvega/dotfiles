@@ -6,7 +6,7 @@
 [core]
     pager = delta
     editor = vim
-    excludesfile = ~/.gitignore
+    excludesfile = .gitignore
     autocrlf = input
 [interactive]
     diffFilter = delta --color-only
@@ -21,7 +21,7 @@
 [diff]
     colorMoved = default
 [include]
-     path = ~/.gitalias
+     path = .gitalias
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
