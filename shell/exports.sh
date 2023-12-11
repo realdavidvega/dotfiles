@@ -67,8 +67,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   alias emacs="emacs"
 
   # Symlinks
-  # ln -s ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases
-  # ln -s ~/.dotfiles/aliases/.youtube-dl-aliases ~/.youtube-dl-aliases
+  lnsif ~/.dotfiles/git/.gitconfig ~/.gitconfig
+  lnsif ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases
+  lnsif ~/.dotfiles/aliases/.youtube-dl-aliases ~/.youtube-dl-aliases
 
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
@@ -110,7 +111,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # NVM env
   export NVM_DIR="$HOME/.nvm"
-  source $(brew --prefix nvm)/nvm.sh
+  sourceif $(brew --prefix nvm)/nvm.sh
 
   # Node path
   export NODE_PATH=$NODE_PATH:`npm root -g`
@@ -120,6 +121,9 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # TheFuck
   eval $(thefuck --alias)
+
+  # Rancher Symlink Fix
+  lnsif ~/.rd/bin/docker-compose ~/.docker/cli-plugins/docker-compose
 
   # Apps
   alias sublime="open $OS_DRIVE/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
@@ -198,4 +202,4 @@ export RUST="$GITHUB/rust"
 export WEB="$GITHUB/web"
 
 # SDKMAN
-source "$HOME/.sdkman/bin/sdkman-init.sh"
+sourceif "$HOME/.sdkman/bin/sdkman-init.sh"
