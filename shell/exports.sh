@@ -67,7 +67,6 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   alias emacs="emacs"
 
   # Symlinks
-  lnsif ~/.dotfiles/git/.gitconfig ~/.gitconfig
   lnsif ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases
   lnsif ~/.dotfiles/aliases/.youtube-dl-aliases ~/.youtube-dl-aliases
 
