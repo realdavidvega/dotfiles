@@ -1,3 +1,8 @@
+# ---------------------------
+#       Global functions
+# ---------------------------
+
+# CD if exists
 function cdd() {
 	cd "$(ls -d -- */ | fzf)" || echo "Invalid directory"
 }
@@ -10,6 +15,7 @@ function j() {
 	_z "$1"
 }
 
+# Get recent dirs
 function recent_dirs() {
 	# This script depends on pushd. It works better with autopush enabled in ZSH
 	escaped_home=$(echo $HOME | sed 's/\//\\\//g')
