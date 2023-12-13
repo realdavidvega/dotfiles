@@ -122,6 +122,7 @@ alias dsp="docker system prune --all"
 alias dsr=dsr-fn
 
 # Custom aliases
-alias dk="docker"
+alias d="docker"
 alias dcn=dcnn-fn
+alias dcl="docker-compose logs"
 alias dcul="docker compose -f docker-compose.yml -f docker-compose.local.yml up -d"
