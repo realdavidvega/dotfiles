@@ -116,6 +116,9 @@ alias nv="nvm"
 alias nvl="nvm list"
 alias nvu="nvm use"
 
+# Build aliases
+alias m="make"
+
 # ---------------------------
 #      Directory Aliases
 # ---------------------------
