@@ -121,8 +121,8 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # TheFuck
   eval $(thefuck --alias)
 
-  # Rancher Symlink Fix
-  lnsif ~/.rd/bin/docker-compose ~/.docker/cli-plugins/docker-compose
+  # Rancher Symlink Fix (if no docker-compose plugin is used)
+  # lnsif ~/.rd/bin/docker-compose ~/.docker/cli-plugins/docker-compose
 
   # Apps
   alias sublime="open $OS_DRIVE/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"

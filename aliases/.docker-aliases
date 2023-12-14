@@ -28,6 +28,18 @@
 #                                                                          #
 ############################################################################
 
+# Custom pre-init functions
+try_docker_compose() {
+    if ! docker compose "$@" 2>/dev/null; then
+        docker-compose "$@"
+    fi
+}
+
+# Pre-init custom aliases
+alias d="docker"
+alias dc=try_docker_compose
+
+# Custom default functions
 function dnames-fn {
 	for ID in `docker ps | awk '{print $1}' | grep -v 'CONTAINER'`
 	do
@@ -63,10 +75,6 @@ function drun-fn {
 	docker run -it $1 $2
 }
 
-function dcr-fn {
-	docker-compose run $@
-}
-
 function dsr-fn {
 	docker stop $1;docker rm $1
 }
@@ -86,7 +94,11 @@ function dlab {
 }
 
 function dc-fn {
-        docker-compose $*
+        dc $*
+}
+
+function dcr-fn {
+    dc run $@
 }
 
 function d-aws-cli-fn {
@@ -104,25 +116,24 @@ function dcn-fn {
 # Default aliases
 alias daws=d-aws-cli-fn
 alias dc=dc-fn
-alias dcu="docker-compose up -d"
-alias dcd="docker-compose down"
+alias dcu="dc up -d"
+alias dcd="dc down"
 alias dcr=dcr-fn
 alias dex=dex-fn
 alias di=di-fn
-alias dim="docker images"
+alias dim="d images"
 alias dip=dip-fn
 alias dl=dl-fn
 alias dnames=dnames-fn
-alias dps="docker ps"
-alias dpsa="docker ps -a"
+alias dps="d ps"
+alias dpsa="d ps -a"
 alias drmc=drmc-fn
 alias drmid=drmid-fn
 alias drun=drun-fn
-alias dsp="docker system prune --all"
+alias dsp="d system prune --all"
 alias dsr=dsr-fn
 
 # Custom aliases
-alias d="docker"
 alias dcn=dcnn-fn
-alias dcl="docker-compose logs"
-alias dcul="docker compose -f docker-compose.yml -f docker-compose.local.yml up -d"
+alias dcl="dc logs"
+alias dcul="dc -f docker-compose.yml -f docker-compose.local.yml up -d"
