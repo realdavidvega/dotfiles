@@ -1,0 +1,202 @@
+<application>
+  <component name="ToolWindowLayout"><![CDATA[{
+  "activeLayoutName": "Black",
+  "layouts": {
+    "Black": {
+      "v2": [
+        {
+          "id": "Project",
+          "order": 0,
+          "contentUiType": "COMBO",
+          "isActiveOnStart": true,
+          "isVisible": true,
+          "weight": 0.1393532,
+          "sideWeight": 0.5004753
+        },
+        {
+          "id": "Structure",
+          "order": 2,
+          "weight": 0.1393532
+        },
+        {
+          "id": "Commit",
+          "order": 3,
+          "weight": 0.1393532
+        },
+        {
+          "id": "Kotest",
+          "order": 7,
+          "weight": 0.1393532,
+          "sideWeight": 0.4995247,
+          "isSplit": true
+        },
+        {
+          "id": "CheckStyle",
+          "order": 8,
+          "weight": 0.18532985,
+          "isSplit": true
+        },
+        {
+          "id": "zeppelin-shell-toolwindow",
+          "anchor": "BOTTOM",
+          "isShowStripeButton": false
+        },
+        {
+          "id": "BigDataToolWindow",
+          "order": 1,
+          "anchor": "BOTTOM",
+          "isShowStripeButton": false,
+          "isSplit": true
+        },
+        {
+          "id": "Translation.Wordbook",
+          "order": 2,
+          "anchor": "BOTTOM",
+          "isShowStripeButton": false,
+          "isSplit": true
+        },
+        {
+          "id": "Request List",
+          "order": 3,
+          "anchor": "BOTTOM",
+          "weight": 0.32942706,
+          "isSplit": true
+        },
+        {
+          "id": "JSON Formatter",
+          "order": 4,
+          "anchor": "BOTTOM",
+          "isShowStripeButton": false,
+          "isSplit": true
+        },
+        {
+          "id": "Notifications",
+          "order": 5,
+          "anchor": "BOTTOM",
+          "contentUiType": "COMBO",
+          "weight": 0.25,
+          "isSplit": true
+        },
+        {
+          "id": "Problems",
+          "order": 7,
+          "anchor": "BOTTOM"
+        },
+        {
+          "id": "Sequence Diagram",
+          "order": 10,
+          "anchor": "BOTTOM",
+          "weight": 0.18532985
+        },
+        {
+          "id": "Dependencies",
+          "order": 10,
+          "anchor": "BOTTOM",
+          "isShowStripeButton": false
+        },
+        {
+          "id": "GraphQL",
+          "order": 10,
+          "anchor": "BOTTOM",
+          "weight": 0.18532985
+        },
+        {
+          "id": "Version Control",
+          "order": 14,
+          "anchor": "BOTTOM",
+          "weight": 0.18532985
+        },
+        {
+          "id": "Problems View",
+          "order": 15,
+          "anchor": "BOTTOM",
+          "weight": 0.18532985
+        },
+        {
+          "id": "SonarLint",
+          "order": 16,
+          "anchor": "BOTTOM",
+          "weight": 0.18532985
+        },
+        {
+          "id": "Services",
+          "order": 17,
+          "anchor": "BOTTOM",
+          "weight": 0.24956597
+        },
+        {
+          "id": "Build",
+          "order": 18,
+          "anchor": "BOTTOM",
+          "weight": 0.18532985
+        },
+        {
+          "id": "Terminal",
+          "order": 19,
+          "anchor": "BOTTOM",
+          "floatingBounds": [
+            16,
+            742,
+            2670,
+            332
+          ],
+          "weight": 0.1393532,
+          "sideWeight": 0.4995247
+        },
+        {
+          "id": "Gradle",
+          "order": 1,
+          "anchor": "RIGHT",
+          "weight": 0.33012354,
+          "sideWeight": 0.5004753
+        },
+        {
+          "id": "Maven",
+          "order": 5,
+          "anchor": "RIGHT",
+          "weight": 0.25
+        },
+        {
+          "id": "Web Inspector",
+          "order": 6,
+          "anchor": "RIGHT",
+          "weight": 0.25
+        },
+        {
+          "id": "Database",
+          "order": 8,
+          "anchor": "RIGHT",
+          "weight": 0.33012354,
+          "sideWeight": 0.4995247,
+          "isSplit": true
+        },
+        {
+          "id": "DB Browser",
+          "order": 9,
+          "anchor": "RIGHT",
+          "isShowStripeButton": false,
+          "isSplit": true
+        },
+        {
+          "id": "Kubernetes",
+          "order": 12,
+          "anchor": "RIGHT",
+          "weight": 0.33012354
+        },
+        {
+          "id": "Kubernetes Consoles",
+          "order": 13,
+          "anchor": "RIGHT",
+          "weight": 0.24956597
+        }
+      ],
+      "unifiedWeights": {
+        "top": 0.33,
+        "left": 0.1393532,
+        "bottom": 0.18532985,
+        "right": 0.33012354
+      }
+    }
+  }
+}]]></component>
+</application>

@@ -132,6 +132,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   alias ls="exa"
   alias l="exa -l"
   alias ll="exa -la"
+  alias psa="ps aux"
 
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update

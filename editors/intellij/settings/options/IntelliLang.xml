@@ -1,0 +1,12 @@
+<application>
+  <component name="LanguageInjectionConfiguration">
+    <injection language="JSON5" injector-id="java">
+      <display-name>Query (org.springframework.data.mongodb.repository)</display-name>
+      <ignore-pattern>(:#\{#\w+\}|ObjectId\(.*\)|ISODate\(.*\)|new Date\(.*\))</ignore-pattern>
+      <single-file value="false" />
+      <place><![CDATA[psiMethod().withName("collation").withParameters().definedInClass("org.springframework.data.mongodb.repository.Query")]]></place>
+      <place><![CDATA[psiMethod().withName("fields").withParameters().definedInClass("org.springframework.data.mongodb.repository.Query")]]></place>
+      <place><![CDATA[psiMethod().withName("sort").withParameters().definedInClass("org.springframework.data.mongodb.repository.Query")]]></place>
+    </injection>
+  </component>
+</application>

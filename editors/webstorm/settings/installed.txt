@@ -1,0 +1,11 @@
+String Manipulation
+com.chrisrm.idea.MaterialThemeUI
+com.godwin.json.parser
+com.intellij.ideolog
+com.intellij.properties
+com.mallowigi
+de.netnexus.camelcaseplugin
+izhangzhihao.rainbow.brackets
+org.sonarlint.idea
+ru.adelf.idea.dotenv
+zielu.gittoolbox

@@ -1,0 +1,10 @@
+<application>
+  <component name="RainbowSettings">
+    <option name="enableRainbowVariables" value="true" />
+    <option name="indentGuidesOptions" value="Only selected indent guide" />
+    <option name="rainbowVariablesOptionShowed" value="true" />
+    <option name="rainbowifyTagNameInXML" value="true" />
+    <option name="suppressBigFileCheck" value="true" />
+    <option name="version" value="2023.3.9-233" />
+  </component>
+</application>
