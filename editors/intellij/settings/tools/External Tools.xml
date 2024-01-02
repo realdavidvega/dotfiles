@@ -1,0 +1,9 @@
+<toolSet name="External Tools">
+  <tool name="Open Warp" showInMainMenu="false" showInEditor="false" showInProject="false" showInSearchPopup="false" disabled="false" useConsole="true" showConsoleOnStdOut="false" showConsoleOnStdErr="false" synchronizeAfterRun="true">
+    <exec>
+      <option name="COMMAND" value="/Applications/Warp.app" />
+      <option name="PARAMETERS" value="$ProjectFileDir$" />
+      <option name="WORKING_DIRECTORY" value="/Applications" />
+    </exec>
+  </tool>
+</toolSet>

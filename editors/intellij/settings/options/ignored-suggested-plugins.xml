@@ -1,0 +1,11 @@
+<application>
+  <component name="IgnoredPluginSuggestions">
+    <option name="pluginIds">
+      <list>
+        <option value="com.microsoft.tooling.msservices.intellij.azure" />
+        <option value="aws.toolkit" />
+        <option value="com.intellij.bigdatatools.rfs" />
+      </list>
+    </option>
+  </component>
+</application>
