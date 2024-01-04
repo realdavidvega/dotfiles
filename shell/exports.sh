@@ -78,7 +78,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Paths
   export HOME="/Users/david"
 
-  # Unused in favour of SDKMAN (see sdk list java)
+  # No longer maintained, use SDKMAN instead (see sdk list java)
   # export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/corretto-17.0.6/Contents/Home"
 
   OS_DRIVE="/Volumes/Macintosh\ HD"
