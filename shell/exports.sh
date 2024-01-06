@@ -7,7 +7,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   # Paths
   export HOME="/home/david"
-  export JAVA_HOME="/home/linuxbrew/.linuxbrew/opt/openjdk@20"
+
+  # Unused in favour of SDKMAN (see sdk list java)
+  # export JAVA_HOME="/home/linuxbrew/.linuxbrew/opt/openjdk@20"
 
   OS_DRIVE="/mnt"
   OS_WORKSPACE="$OS_DRIVE/d/Workspace"
@@ -57,8 +59,8 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   cp ~/.dotfiles/git/.gitignore $WIN_HOME/.gitignore
   cp ~/.dotfiles/git/.gitkeep $WIN_HOME/.gitkeep
   
-  # Workaround for invalid java location
-  alias java="$JAVA_HOME/bin/java"
+  # Workaround for invalid java location (unused in favour of SDKMAN)
+  # alias java="$JAVA_HOME/bin/java"
 
   # Linux brew
   eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
@@ -75,7 +77,9 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Paths
   export HOME="/Users/david"
-  export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/corretto-17.0.6/Contents/Home"
+
+  # Unused in favour of SDKMAN (see sdk list java)
+  # export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/corretto-17.0.6/Contents/Home"
 
   OS_DRIVE="/Volumes/Macintosh\ HD"
   OS_WORKSPACE="~/Workspace"
