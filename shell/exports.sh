@@ -8,7 +8,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Paths
   export HOME="/home/david"
 
-  # Unused in favour of SDKMAN (see sdk list java)
+  # No longer maintained, use SDKMAN instead (see sdk list java)
   # export JAVA_HOME="/home/linuxbrew/.linuxbrew/opt/openjdk@20"
 
   OS_DRIVE="/mnt"
@@ -16,7 +16,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   C_DRIVE="$OS_DRIVE/c"
   
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
-  DOCKER_PATH="$OS_DRIVE/c/Program Files/Rancher Desktop/resources/resources/linux"
+
+  # No longer maintained, use PODMAN instead
+  # DOCKER_PATH="$OS_DRIVE/c/Program Files/Rancher Desktop/resources/resources/linux"
 
   path=(
     "$HOME/bin"
@@ -59,7 +61,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   cp ~/.dotfiles/git/.gitignore $WIN_HOME/.gitignore
   cp ~/.dotfiles/git/.gitkeep $WIN_HOME/.gitkeep
   
-  # Workaround for invalid java location (unused in favour of SDKMAN)
+  # Workaround for invalid java location (No longer maintained, use SDKMAN instead)
   # alias java="$JAVA_HOME/bin/java"
 
   # Linux brew
@@ -84,7 +86,9 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   OS_DRIVE="/Volumes/Macintosh\ HD"
   OS_WORKSPACE="~/Workspace"
   BREW_PATH="/opt/homebrew/bin"
-  DOCKER_PATH="~/.rd/bin"
+
+  # No longer maintained, use PODMAN instead
+  # DOCKER_PATH="~/.rd/bin"
   
   path=(
     "$HOME/bin"
@@ -122,6 +126,9 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Ruby env
   eval "$(rbenv init - zsh)"
 
+  # Docker aliases
+  export DOCKER_ALIAS="docker"
+
   # TheFuck
   eval $(thefuck --alias)
 
@@ -140,6 +147,10 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
+
+  # Symlinks
+  lnsif ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases
+  lnsif ~/.dotfiles/aliases/.youtube-dl-aliases ~/.youtube-dl-aliases
   
 fi
 
