@@ -30,20 +30,20 @@
 
 # Custom pre-init functions
 try_docker_compose() {
-    if ! docker compose "$@" 2>/dev/null; then
+    if ! d compose "$@" 2>/dev/null; then
         docker-compose "$@"
     fi
 }
 
 # Pre-init custom aliases
-alias d="docker"
+alias d="$DOCKER_ALIAS"
 alias dc=try_docker_compose
 
 # Custom default functions
 function dnames-fn {
-	for ID in `docker ps | awk '{print $1}' | grep -v 'CONTAINER'`
+	for ID in `d ps | awk '{print $1}' | grep -v 'CONTAINER'`
 	do
-    	docker inspect $ID | grep Name | head -1 | awk '{print $2}' | sed 's/,//g' | sed 's%/%%g' | sed 's/"//g'
+    	d inspect $ID | grep Name | head -1 | awk '{print $2}' | sed 's/,//g' | sed 's%/%%g' | sed 's/"//g'
 	done
 }
 
@@ -52,7 +52,7 @@ function dip-fn {
 
     for DOC in `dnames-fn`
     do
-        IP=`docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$DOC"`
+        IP=`d inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$DOC"`
         OUT+=$DOC'\t'$IP'\n'
     done
     echo -e $OUT | column -t
@@ -60,37 +60,37 @@ function dip-fn {
 }
 
 function dex-fn {
-	docker exec -it $1 ${2:-bash}
+	d exec -it $1 ${2:-bash}
 }
 
 function di-fn {
-	docker inspect $1
+	d inspect $1
 }
 
 function dl-fn {
-	docker logs -f $1
+	d logs -f $1
 }
 
 function drun-fn {
-	docker run -it $1 $2
+	d run -it $1 $2
 }
 
 function dsr-fn {
-	docker stop $1;docker rm $1
+	d stop $1;d rm $1
 }
 
 function drmc-fn {
-       docker rm $(docker ps --all -q -f status=exited)
+       d rm $(d ps --all -q -f status=exited)
 }
 
 function drmid-fn {
-       imgs=$(docker images -q -f dangling=true)
-       [ ! -z "$imgs" ] && docker rmi "$imgs" || echo "no dangling images."
+       imgs=$(d images -q -f dangling=true)
+       [ ! -z "$imgs" ] && d rmi "$imgs" || echo "no dangling images."
 }
 
 # in order to do things like dex $(dlab label) sh
 function dlab {
-       docker ps --filter="label=$1" --format="{{.ID}}"
+       d ps --filter="label=$1" --format="{{.ID}}"
 }
 
 function dc-fn {
@@ -102,7 +102,7 @@ function dcr-fn {
 }
 
 function d-aws-cli-fn {
-    docker run \
+    d run \
            -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
            -e AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION \
            -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
@@ -110,13 +110,13 @@ function d-aws-cli-fn {
 }
 
 function dcn-fn {
-        docker connect $*
+        d connect $*
 }
 
 # Default aliases
 alias daws=d-aws-cli-fn
 alias dc=dc-fn
-alias dcu="dc up -d"
+alias dcu="dc up"
 alias dcd="dc down"
 alias dcr=dcr-fn
 alias dex=dex-fn
@@ -134,6 +134,12 @@ alias dsp="d system prune --all"
 alias dsr=dsr-fn
 
 # Custom aliases
-alias dcn=dcnn-fn
+alias ds="d container stop"
+alias dls="d container ls"
+alias dlsa="d container ls -a"
+alias drm="d container rm"
+alias dils="d image ls"
+alias dirm="d image rm"
 alias dcl="dc logs"
+alias dcud="dc up -d"
 alias dcul="dc -f docker-compose.yml -f docker-compose.local.yml up -d"
