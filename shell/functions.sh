@@ -31,18 +31,22 @@ ws() {
     "repos") cd $REPOS ;;
     "github") cd $GITHUB ;;
     "work") cd $WORK ;;
-	# Work-specific repos
-	## @xebia-functional
+	  # Work-specific repos
+	  ## @xebia-functional
     "xebia") cd $XEBIA ;;
     "cortex") cd $CORTEX ;;
-	## Projects
+	  ## Projects
     "xef") cd "$XEBIA/ai/xef" ;;
-	# Tools repos
+	  # Tools repos
     "tools") cd $TOOLS ;;
-	# Language repos
-	"rust") cd $RUST ;;
+	  # Language repos
+	  "rust") cd $RUST ;;
     "web") cd $WEB ;;
     "php") cd $PHP ;;
+    "java") cd $JAVA ;;
+    "kotlin") cd $KOTLIN ;;
+    "scala") cd $SCALA ;;
+    "python") cd $PYTHON ;;
     # Add more cases for other directories
     *) cd $WORKSPACE ;;
   esac
