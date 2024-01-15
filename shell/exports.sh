@@ -84,7 +84,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/corretto-17.0.6/Contents/Home"
 
   OS_DRIVE="/Volumes/Macintosh\ HD"
-  OS_WORKSPACE="~/Workspace"
+  OS_WORKSPACE="$HOME/Workspace"
   BREW_PATH="/opt/homebrew/bin"
 
   # No longer maintained, use PODMAN instead
@@ -210,11 +210,10 @@ export CORTEX="$WORK/cortex"
 export TOOLS="$GITHUB/tools"
 export DOTFILES="$DOTFILES_PATH"
 
-## rust
+## tech
 export RUST="$GITHUB/rust"
-
-## web
 export WEB="$GITHUB/web"
+export PHP="$GITHUB/php"
 
 # SDKMAN
 sourceif "$HOME/.sdkman/bin/sdkman-init.sh"

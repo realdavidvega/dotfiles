@@ -130,27 +130,25 @@ alias downloads="cd $DOWNLOADS"
 alias dw="downloads"
 
 # Workspace
-alias workspace="cd $WORKSPACE"
-alias ws="workspace"
+alias workspace="ws"
 
 # Repos
-alias repos="cd $REPOS"
-alias github="cd $GITHUB"
-alias work="cd $WORK"
+alias wsre="cd $REPOS"
+alias wsgi="cd $GITHUB"
+alias wswo="cd $WORK"
 
 # Work-specific
 ## @xebia-functional
-alias xebia="cd $XEBIA"
-alias cortex="cd $CORTEX"
+alias wsxeb="cd $XEBIA"
+alias wsco="cd $CORTEX"
 
 ## projects
-alias xef="cd $XEBIA/ai/xef"
+alias wsxef="cd $XEBIA/ai/xef"
 
 # Tools repos
-alias tools="cd $TOOLS"
+alias wsto="cd $TOOLS"
 
-# Rust repos
-alias rust="cd $RUST"
-
-# Web repos
-alias web="cd $WEB"
+# Tech repos
+alias wsru="cd $RUST"
+alias wswe="cd $WEB"
+alias wsph="cd $PHP"
