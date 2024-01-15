@@ -133,22 +133,26 @@ alias dw="downloads"
 alias workspace="ws"
 
 # Repos
-alias wsre="cd $REPOS"
-alias wsgi="cd $GITHUB"
-alias wswo="cd $WORK"
+alias wsre="ws repos"
+alias wsgi="ws github"
+alias wswo="ws work"
 
 # Work-specific
 ## @xebia-functional
-alias wsxeb="cd $XEBIA"
-alias wsco="cd $CORTEX"
+alias wsxeb="ws xebia"
+alias wsco="ws cortex"
 
 ## projects
-alias wsxef="cd $XEBIA/ai/xef"
+alias wsxef="ws xef"
 
 # Tools repos
-alias wsto="cd $TOOLS"
+alias wsto="ws tools"
 
 # Tech repos
-alias wsru="cd $RUST"
-alias wswe="cd $WEB"
-alias wsph="cd $PHP"
+alias wsru="ws rust"
+alias wswe="ws web"
+alias wsph="ws php"
+alias wsja="ws java"
+alias wsko="ws kotlin"
+alias wssc="ws scala"
+alias wspy="ws python"

@@ -214,6 +214,10 @@ export DOTFILES="$DOTFILES_PATH"
 export RUST="$GITHUB/rust"
 export WEB="$GITHUB/web"
 export PHP="$GITHUB/php"
+export JAVA="$GITHUB/java"
+export KOTLIN="$GITHUB/kotlin"
+export SCALA="$GITHUB/scala"
+export PYTHON="$GITHUB/python"
 
 # SDKMAN
 sourceif "$HOME/.sdkman/bin/sdkman-init.sh"
