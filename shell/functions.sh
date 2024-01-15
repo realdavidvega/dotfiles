@@ -24,6 +24,30 @@ function recent_dirs() {
 	cd "$(echo "$selected" | sed "s/\~/$escaped_home/")" || echo "Invalid directory"
 }
 
+# Function to change to the corresponding directory
+ws() {
+  case $1 in
+  	# Main repos
+    "repos") cd $REPOS ;;
+    "github") cd $GITHUB ;;
+    "work") cd $WORK ;;
+	# Work-specific repos
+	## @xebia-functional
+    "xebia") cd $XEBIA ;;
+    "cortex") cd $CORTEX ;;
+	## Projects
+    "xef") cd "$XEBIA/ai/xef" ;;
+	# Tools repos
+    "tools") cd $TOOLS ;;
+	# Language repos
+	"rust") cd $RUST ;;
+    "web") cd $WEB ;;
+    "php") cd $PHP ;;
+    # Add more cases for other directories
+    *) cd $WORKSPACE ;;
+  esac
+}
+
 # Tere
 tere() {
   local result=$(command tere "$@")
