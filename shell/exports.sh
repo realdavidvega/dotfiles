@@ -17,7 +17,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
 
-  # No longer maintained, use PODMAN instead
+  # No longer maintained, use DOCKER/PODMAN instead
   # DOCKER_PATH="$OS_DRIVE/c/Program Files/Rancher Desktop/resources/resources/linux"
 
   path=(
@@ -87,7 +87,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   OS_WORKSPACE="$HOME/Workspace"
   BREW_PATH="/opt/homebrew/bin"
 
-  # No longer maintained, use PODMAN instead
+  # No longer maintained, use DOCKER/PODMAN instead
   # DOCKER_PATH="~/.rd/bin"
   
   path=(
