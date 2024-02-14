@@ -359,6 +359,9 @@
   # rebase interactive - do the rebase with prompts.
   rbi = rebase --interactive
 
+  # rebase onto
+  rbo = rebase --onto
+
   # rbiu - rebase interactive on our unpushed commits.
   #
   # Before we push our local changes, we may want to do some cleanup,
@@ -1243,7 +1246,7 @@
   #
 
   # Checkout our version of a file and add it.
-  ours   = !"f() { git checkout --ours   $@ && git add $@; }; f"
+  ours = !"f() { git checkout --ours   $@ && git add $@; }; f"
 
   # Checkout their version of a file and add it.
   theirs = !"f() { git checkout --theirs $@ && git add $@; }; f"
@@ -1794,9 +1797,19 @@
 
   psf = !git push --force-with-lease
 
+  ### Uncommit ###
+
+  uc = uncommit
+
   ### Clean merged branches ###
 
   cleanup = "!git branch --merged | grep  -v '\\*\\|master\\|main\\|develop' | xargs -n 1 -r git branch -D"
+
+  ### Commit with message all ###
+
+  acm = "!f() { \
+      git add -A && git commit -m \"$1\"; \
+  }; f"
 
   ### Open the Pull Request URL for your current directory's branch (base branch defaults to main) ###
 
@@ -1817,3 +1830,16 @@
         echo 'failed to push commits and open a pull request.'; \
     fi \
   }; f"
+
+  ### Remove $1 commit from history ###
+
+  rmc = "!f() { \
+    git rebase --onto $1^ $1; \
+  }; f"
+
+  ### Reset branch with main | master ###
+
+  rstm = "!f() { \
+      git fetch; \
+      git reset --hard origin/main || git reset --hard origin/master; \
+    }; f"
