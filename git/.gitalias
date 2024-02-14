@@ -1790,8 +1790,11 @@
 
   ### Do a push/pull for just one branch ###
 
-  ps1 = "!git push origin $(git current-branch)"
-  pl1 = "!git pull origin $(git current-branch)"
+  ps = "!git push origin $(git current-branch)"
+  ps1 = ps
+
+  pl = "!git pull origin $(git current-branch)"
+  pl1 = pl1
 
   ### Force push ###
 
@@ -1809,7 +1812,7 @@
 
   acm = "!f() { \
       git add -A && git commit -m \"$1\"; \
-  }; f"
+    }; f"
 
   ### Open the Pull Request URL for your current directory's branch (base branch defaults to main) ###
 
