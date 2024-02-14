@@ -1794,7 +1794,7 @@
   ps1 = ps
 
   pl = "!git pull origin $(git current-branch)"
-  pl1 = pl1
+  pl1 = pl
 
   ### Force push ###
 
