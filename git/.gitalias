@@ -1804,9 +1804,27 @@
 
   uc = uncommit
 
+  ### Diff name-only ###
+
+  dn = diff --compact-summary
+
   ### Clean merged branches ###
 
   cleanup = "!git branch --merged | grep  -v '\\*\\|master\\|main\\|develop' | xargs -n 1 -r git branch -D"
+
+  ### Clean branches that don't have pull requests with 1 month old ###
+
+  cleanup-branches = "!merged_branches=$(git branch | grep -v '\\*\\|master\\|main\\|develop' | xargs); for branch in $merged_branches; do \
+  if ! gh pr list --state all --head $branch | grep -q '\"head\":\"$branch\"'; then \
+      last_commit_date=$(git log -1 --format='%at' $branch); \
+      current_date=$(date +%s); \
+      age=$(( (current_date - last_commit_date) / (60*60*24) )); \
+      if [ $age -gt 30 ]; then \
+          git branch -D $branch; \
+          echo \"Deleted branch $branch\"; \
+      fi; \
+  fi; \
+  done"
 
   ### Commit with message all ###
 
