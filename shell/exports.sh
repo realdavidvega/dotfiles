@@ -135,9 +135,12 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Rancher Symlink Fix (if no docker-compose plugin is used)
   # lnsif ~/.rd/bin/docker-compose ~/.docker/cli-plugins/docker-compose
 
-  # Apps
+  # Apps (also as workaround for loading env variables from zsh / dotly)
   alias sublime="open $OS_DRIVE/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
   alias vscode="open $OS_DRIVE/Applications/Visual\ Studio\ Code.app"
+  alias intellij="open -a $HOME/Applications/IntelliJ\ IDEA\ Ultimate.app"
+  alias webstorm="open -a $HOME/Applications/WebStorm.app"
+  alias rustrover="open -a $HOME/Applications/RustRover.app"
 
   # Terminal
   alias ls="exa"
