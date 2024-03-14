@@ -142,6 +142,9 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   alias webstorm="open -a $HOME/Applications/WebStorm.app"
   alias rustrover="open -a $HOME/Applications/RustRover.app"
 
+  # Shorter Apps
+  alias ij=intellij
+
   # Terminal
   alias ls="exa"
   alias l="exa -l"
