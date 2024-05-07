@@ -144,6 +144,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Shorter Apps
   alias ij=intellij
+  alias wsm=webstorm
 
   # Terminal
   alias ls="exa"
