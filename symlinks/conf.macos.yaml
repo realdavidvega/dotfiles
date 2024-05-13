@@ -17,3 +17,12 @@
     ~/bin/sed: /opt/homebrew/bin/gsed
     ~/bin/touch: /opt/homebrew/bin/gtouch
     ~/bin/zsh: /opt/homebrew/bin/zsh
+    ~/.config/nvim: editors/nvim
+    ~/.docker-aliases: aliases/.docker-aliases
+    ~/.youtube-dl-aliases: aliases/.youtube-dl-aliases
+    ~/.gitalias: git/.gitalias
+    ~/.gitconfig: git/.gitconfig
+    ~/.gitignore: git/.gitignore
+    ~/.gitkeep: git/.gitkeep
+    
+    

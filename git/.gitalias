@@ -1785,8 +1785,8 @@
   ### Checkout ###
 
   disc = checkout --
-  discm = checkout origin/main -- 
-  
+  discm = checkout origin/main --
+
   cod = checkout develop
   com = checkout main
   coms = checkout master

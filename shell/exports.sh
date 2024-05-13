@@ -70,10 +70,6 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Emacs
   alias emacs="emacs"
 
-  # Symlinks
-  lnsif ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases
-  lnsif ~/.dotfiles/aliases/.youtube-dl-aliases ~/.youtube-dl-aliases
-
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
@@ -154,11 +150,6 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
-
-  # Symlinks
-  lnsif ~/.dotfiles/aliases/.docker-aliases ~/.docker-aliases
-  lnsif ~/.dotfiles/aliases/.youtube-dl-aliases ~/.youtube-dl-aliases
-  
 fi
 
 # ---------------------------
