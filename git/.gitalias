@@ -1754,6 +1754,12 @@
   ### Custom aliases
   ########################################################################
 
+  ### Branches ###
+
+  br = git branch -r
+  bd = git branch --sort=-committerdate
+  brd = git branch --sort=-committerdate
+
   ### Log ###
 
   l = lg
@@ -1777,6 +1783,9 @@
   prbms = "!git pull --rebase origin master"
 
   ### Checkout ###
+
+  disc = checkout --
+  discm = checkout origin/main -- 
   
   cod = checkout develop
   com = checkout main
