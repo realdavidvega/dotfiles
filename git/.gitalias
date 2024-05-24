@@ -1813,6 +1813,11 @@
 
   uc = uncommit
 
+  ### Show ###
+
+  sh = show
+  shno = show --name-only
+
   ### Diff name-only ###
 
   dn = diff --compact-summary
