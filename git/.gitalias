@@ -1782,6 +1782,10 @@
   prbm = "!git pull --rebase origin main"
   prbms = "!git pull --rebase origin master"
 
+  ## Clone ##
+
+  cl = clone
+
   ### Checkout ###
 
   disc = checkout --
