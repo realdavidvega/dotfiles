@@ -30,6 +30,7 @@ ws() {
   	# Main repos
     "repos") cd $REPOS ;;
     "github") cd $GITHUB ;;
+    "external") cd $EXTERNAL ;;
     "work") cd $WORK ;;
 	  # Work-specific repos
 	  ## @xebia-functional
