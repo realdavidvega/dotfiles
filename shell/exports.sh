@@ -197,6 +197,7 @@ export GITCONFIG="~/.gitconfig"
 # Repos
 export REPOS="$WORKSPACE/repos"
 export GITHUB="$REPOS/github"
+export EXTERNAL="$REPOS/external"
 export WORK="$REPOS/work"
 
 # Work-specific

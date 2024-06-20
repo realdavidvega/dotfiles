@@ -1770,6 +1770,10 @@
   rst = reset
   rsts = reset --soft
   rsth = reset --hard
+  rsthm = "!f() { \
+      git fetch; \
+      git reset --hard origin/main || git reset --hard origin/master; \
+    }; f"
 
   ### Restore ###
 
@@ -1779,27 +1783,41 @@
   ### Rebase ###
 
   prbd = "!git pull --rebase origin develop"
-  prbm = "!git pull --rebase origin main"
-  prbms = "!git pull --rebase origin master"
+  prbm = "!f() { \
+      git fetch; \
+      git pull --rebase origin main || git pull --rebase origin master; \
+    }; f"
 
   ## Clone ##
 
   cl = clone
 
-  ### Checkout ###
+  ### Discard ###
 
   disc = checkout --
-  discm = checkout origin/main --
+  discm = "!f() { \
+      git fetch; \
+      git checkout origin/main -- || git checkout origin/master --; \
+  }; f"
+
+  ### Checkout ###
 
   cod = checkout develop
-  com = checkout main
-  coms = checkout master
+  com = "!f() { \
+      git fetch; \
+      git checkout origin/main -- || git checkout origin/master --; \
+  }; f"
 
-  ### Merge (fetch first) ###
+  ### Merge (fetching first) ###
 
-  mod = merge origin/develop
-  mom = merge origin/main
-  moms = merge origin/master
+  mod = "!f() { \
+      git fetch; \
+      git merge origin/develop; \
+  }; f"
+  mom = "!f() { \
+      git fetch; \
+      git merge origin/main || git merge origin/master; \
+  }; f"
 
   ### Do a push/pull for just one branch ###
 
@@ -1846,7 +1864,7 @@
 
   ### Commit with message all ###
 
-  acm = "!f() { \
+  aacm = "!f() { \
       git add -A && git commit -m \"$1\"; \
     }; f"
 
@@ -1855,7 +1873,12 @@
   opr = "!f() { \
     github_url=$(git remote -v | awk '/fetch/{print $2}' | sed -Ee 's#(git@|git://)#https://#' -e 's@com:@com/@' -e 's%\\.git$%%' | awk '/github/'); \
     branch_name=$(git symbolic-ref HEAD | cut -d'/' -f 3,4); \
-    pr_url=$github_url\"/compare/main...\"$branch_name; \
+    base_branch=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5); \
+    if [[ \"$base_branch\" == \"master\" ]]; then \
+      pr_url=\"$github_url/compare/$base_branch...$branch_name\"; \
+    else \
+      pr_url=\"$github_url/compare/main...$branch_name\"; \
+    fi; \
     open $pr_url; \
   }; f"
 
@@ -1875,10 +1898,3 @@
   rmc = "!f() { \
     git rebase --onto $1^ $1; \
   }; f"
-
-  ### Reset branch with main | master ###
-
-  rstm = "!f() { \
-      git fetch; \
-      git reset --hard origin/main || git reset --hard origin/master; \
-    }; f"
