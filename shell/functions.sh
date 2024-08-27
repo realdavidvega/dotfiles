@@ -58,3 +58,8 @@ tere() {
   local result=$(command tere "$@")
   [ -n "$result" ] && cd -- "$result"
 }
+
+# Kotlin-Init
+function kotlin-init() {
+    git clone https://github.com/realdavidvega/kotlin-init "$1"
+}
