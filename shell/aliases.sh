@@ -17,9 +17,10 @@ alias ll="ls -l"
 alias la="ls -la"
 alias ~="cd ~"
 
-# Directories
-alias dotfiles="cd $DOTFILES_PATH"
-alias secrets="cd $DOTFILES_PATH/secrets"
+# Dotfiles
+alias .f="cd $DOTFILES_PATH"
+alias dotfiles=".f"
+alias secrets="cd $DOTFILES_SECRETS"
 
 # Git
 alias gaa="git add -A"
@@ -104,6 +105,12 @@ alias np="npm"
 alias npv="npm -v"
 alias npi="npm install"
 alias nps="npm run start"
+alias npmls="npm ls -g --depth=0 --json"
+
+# NPM save/restore aliases
+alias npm-save='rm -f $DOTFILES_CONFIG/node/npm-global.txt && \
+  npm ls -g --depth=0 --json | jq -r ".dependencies | keys[]" > $DOTFILES_CONFIG/node/npm-global.txt'
+alias npm-restore='xargs npm install -g < $DOTFILES_CONFIG/node/npm-global.txt'
 
 # Yarn aliases
 alias y="yarn"
