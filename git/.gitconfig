@@ -4,7 +4,7 @@
 [init]
 	defaultBranch = main
 [core]
-    pager = delta
+    pager = delta # needs git-delta installed
     editor = vim
     excludesfile = .gitignore
     autocrlf = input
