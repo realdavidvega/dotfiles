@@ -14,7 +14,8 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   OS_DRIVE="/mnt"
   OS_WORKSPACE="$OS_DRIVE/d/Workspace"
   C_DRIVE="$OS_DRIVE/c"
-  
+  D_DRIVE="$OS_DRIVE/d"
+
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
 
   # No longer maintained, use DOCKER/PODMAN instead
