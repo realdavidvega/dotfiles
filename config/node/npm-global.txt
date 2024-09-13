@@ -1,3 +1,4 @@
 corepack
+freyr
 npkill
 npm
