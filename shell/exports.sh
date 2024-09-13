@@ -61,6 +61,11 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   cp ~/.dotfiles/git/.gitalias $WIN_HOME/.gitalias
   cp ~/.dotfiles/git/.gitignore $WIN_HOME/.gitignore
   cp ~/.dotfiles/git/.gitkeep $WIN_HOME/.gitkeep
+
+  # Nvm env
+  export NVM_DIR="$HOME/.nvm"
+  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+  [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
   
   # Workaround for invalid java location (No longer maintained, use SDKMAN instead)
   # alias java="$JAVA_HOME/bin/java"
