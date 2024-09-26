@@ -1844,6 +1844,11 @@
 
   dn = diff --compact-summary
 
+  ### Stash ###
+
+  st = stash
+  stp = stash pop
+
   ### Clean merged branches ###
 
   cleanup = "!git branch --merged | grep  -v '\\*\\|master\\|main\\|develop' | xargs -n 1 -r git branch -D"

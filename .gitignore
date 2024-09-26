@@ -1,4 +1,7 @@
 .idea
 .DS_Store
 shell/zsh/.zim/*
+
+# custom folders 
+ai/
 secrets/

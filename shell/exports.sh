@@ -193,6 +193,7 @@ export FZF_DEFAULT_OPTS="--color=$fzf_colors --reverse"
 export WORKSPACE="$OS_WORKSPACE"
 
 # Dotfiles
+export DOTFILES_AI="$DOTFILES_PATH/ai"
 export DOTFILES_SECRETS="$DOTFILES_PATH/secrets"
 export DOTFILES_CONFIG="$DOTFILES_PATH/config"
 
