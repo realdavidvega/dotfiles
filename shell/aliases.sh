@@ -20,6 +20,8 @@ alias ~="cd ~"
 # Dotfiles
 alias .f="cd $DOTFILES_PATH"
 alias dotfiles=".f"
+
+alias ai="cd $DOTFILES_AI"
 alias secrets="cd $DOTFILES_SECRETS"
 
 # Git
