@@ -36,4 +36,5 @@ It also supports other git repos, but you need to know your git repository url.
 This repo does not include custom folders from private repos for:
 
 * ai
+* hax
 * secrets
