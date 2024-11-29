@@ -149,9 +149,9 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   alias wsm=webstorm
 
   # Terminal
-  alias ls="exa"
-  alias l="exa -l"
-  alias ll="exa -la"
+  # alias ls="exa"
+  # alias l="exa -l"
+  # alias ll="exa -la"
   alias psa="ps aux"
 
   # Daily wallpaper (execute once, node needed)
