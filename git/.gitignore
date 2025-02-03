@@ -4,6 +4,8 @@
 *.iws
 .idea-compl
 *.sc
+**/.run/
+
 
 # Build
 .mvn
