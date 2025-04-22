@@ -27,3 +27,6 @@ libsigar-universal64-macosx.dylib
 
 # Custom
 *.no-commit.*
+
+# IA
+**/.qodo/
