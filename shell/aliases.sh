@@ -49,6 +49,25 @@ alias up="dot package update_all"
 #       App Aliases
 # ---------------------------
 
+# System
+alias clr="clear"
+alias c="clr"
+alias op="open"
+alias o="op"
+alias vi="nvim"
+alias vim="nvim"
+alias v="vi"
+alias g="git"
+alias copy="pbcopy"
+
+# Git
+alias gitalias="vim $GITALIAS"
+alias gitconfig="vim $GITCONFIG"
+
+# Python
+alias pip="pip3"
+alias python="python3"
+
 # Zsh / cfg
 alias zshcfg="vim $ZSHRC"
 alias exportscfg="vim $DOTFILES/shell/exports.sh"
@@ -56,24 +75,6 @@ alias oscfg="vim $DOTFILES/shell/os.sh"
 alias aliascfg="vim $DOTFILES/shell/aliases.sh"
 alias ytcfg="vim $DOTFILES/aliases/.youtube-dl-aliases"
 alias dockercfg="vim $DOTFILES/aliases/.docker-aliases"
-
-# Git
-alias gitalias="vim $GITALIAS"
-alias gitconfig="vim $GITCONFIG"
-
-# System
-alias clr="clear"
-alias c="clr"
-alias op="open"
-alias o="op"
-alias vi="vim"
-alias v="vi"
-alias g="git"
-alias copy="pbcopy"
-
-# Python
-alias pip="pip3"
-alias python="python3"
 
 # docker aliases
 source ~/.docker-aliases
