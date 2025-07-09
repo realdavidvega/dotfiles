@@ -10,7 +10,11 @@
   "icon_theme": "Catppuccin Mocha",
   "base_keymap": "JetBrains",
   "ui_font_size": 14,
+  "buffer_font_family": "CaskaydiaCove Nerd Font Mono",
+  // "buffer_font_family": "MesloLGS NF",
+  "buffer_font_weight": 500,
   "buffer_font_size": 13,
+  "buffer_line_height": "standard",
   "theme": {
     "mode": "system",
     "light": "One Light",
@@ -20,6 +24,35 @@
     "after_delay": {
       "milliseconds": 1000
     }
+  },
+  "indent_guides": {
+    "coloring": "indent_aware",
+    "background_coloring": "indent_aware"
+  },
+  "diagnostics": {
+    "button": true,
+    "include_warnings": true,
+    "lsp_pull_diagnostics": {
+      "enabled": true,
+      "debounce_ms": 50
+    },
+    "inline": {
+      "enabled": true,
+      "update_debounce_ms": 150,
+      "padding": 4,
+      "min_column": 0,
+      "max_severity": null
+    }
+  },
+  "inlay_hints": {
+    "enabled": false
+  },
+  "terminal": {
+    "font_family": "CaskaydiaCove Nerd Font Mono",
+    // "font_family": "MesloLGS NF",
+    "font_size": 13,
+    "copy_on_select": true,
+    "keep_selection_on_copy": true
   },
   "languages": {
     "Python": {
@@ -46,6 +79,25 @@
     "pylsp": {
       "binary": {
         "path": "/Users/david/.local/bin/pylsp"
+      },
+      "settings": {
+        "plugins": {
+          "pycodestyle": {
+            "enabled": false
+          },
+          "pyflakes": {
+            "enabled": false
+          },
+          "mccabe": {
+            "enabled": false
+          },
+          "autopep8": {
+            "enabled": false
+          },
+          "yapf": {
+            "enabled": false
+          }
+        }
       }
     },
     "ruff": {
@@ -63,10 +115,55 @@
         "path": "/Users/david/.local/bin/ty",
         "arguments": ["server"]
       }
+    },
+    "metals": {
+      "binary": {
+        "arguments": ["-Dmetals.http=on"]
+      },
+      "initialization_options": {
+        "isHttpEnabled": true
+      },
+      "enableBestEffort": true,
+      "defaultBspToBuildTool": true,
+      "scalafmtConfigPath": ".scalafmt.conf",
+      "scalafixConfigPath": ".scalafix.conf",
+      "autoImportBuild": "all",
+      "settings": {
+        "inlayHints": {
+          "inferredTypes": {
+            "enable": true
+          }
+        }
+      }
     }
   },
-  "terminal": {
-    "font_family": "MesloLGS NF",
-    "font_size": 13
-  }
+  "file_scan_exclusions": [
+    "**/.git",
+    "**/.svn",
+    "**/.hg",
+    "**/CVS",
+    "**/.DS_Store",
+    "**/Thumbs.db",
+    "**/.classpath",
+    "**/.settings",
+    // above is default from Zed
+    "**/out",
+    "**/dist",
+    "**/.idea",
+    "**/.husky",
+    "**/.turbo",
+    "**/.vscode-test",
+    "**/.vscode",
+    "**/.next",
+    "**/.storybook",
+    "**/.tap",
+    "**/.nyc_output",
+    "**/.mypy_cache",
+    "**/.ruff_cache",
+    "**/.ropeproject",
+    "**/report",
+    "**/node_modules",
+    "**/.venv",
+    "**/__pycache__"
+  ]
 }

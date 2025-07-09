@@ -101,6 +101,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
     "$GEM_HOME/bin"
     "$GOPATH/bin"
     "$HOME/.cargo/bin"
+    "$HOME/Library/Application Support/Coursier/bin"
     "/usr/local/opt/ruby/bin"
     "/usr/local/opt/python/libexec/bin"
     "$BREW_PATH"
