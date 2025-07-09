@@ -1,0 +1,72 @@
+// Zed settings
+//
+// For information on how to configure Zed, see the Zed
+// documentation: https://zed.dev/docs/configuring-zed
+//
+// To see all of Zed's default settings without changing your
+// custom settings, run `zed: open default settings` from the
+// command palette (cmd-shift-p / ctrl-shift-p)
+{
+  "icon_theme": "Catppuccin Mocha",
+  "base_keymap": "JetBrains",
+  "ui_font_size": 14,
+  "buffer_font_size": 13,
+  "theme": {
+    "mode": "system",
+    "light": "One Light",
+    "dark": "Catppuccin Mocha"
+  },
+  "autosave": {
+    "after_delay": {
+      "milliseconds": 1000
+    }
+  },
+  "languages": {
+    "Python": {
+      "language_servers": ["pylsp", "ruff", "ty"],
+      "format_on_save": "on",
+      "wrap_guides": [120],
+      "preferred_line_length": 120,
+      "formatter": [
+        {
+          "code_actions": {
+            "source.fixAll.ruff": true,
+            "source.organizeImports.ruff": true
+          }
+        },
+        {
+          "language_server": {
+            "name": "ruff"
+          }
+        }
+      ]
+    }
+  },
+  "lsp": {
+    "pylsp": {
+      "binary": {
+        "path": "/Users/david/.local/bin/pylsp"
+      }
+    },
+    "ruff": {
+      "initialization_options": {
+        "settings": {
+          "lineLength": 120,
+          "lint": {
+            "extendSelect": ["I"]
+          }
+        }
+      }
+    },
+    "ty": {
+      "binary": {
+        "path": "/Users/david/.local/bin/ty",
+        "arguments": ["server"]
+      }
+    }
+  },
+  "terminal": {
+    "font_family": "MesloLGS NF",
+    "font_size": 13
+  }
+}
