@@ -7,6 +7,8 @@
 // custom settings, run `zed: open default settings` from the
 // command palette (cmd-shift-p / ctrl-shift-p)
 {
+  "show_edit_predictions": false,
+  "close_on_file_delete": true,
   "icon_theme": "Catppuccin Mocha",
   "base_keymap": "JetBrains",
   "ui_font_size": 14,
@@ -29,6 +31,9 @@
     "coloring": "indent_aware",
     "background_coloring": "indent_aware"
   },
+  "inlay_hints": {
+    "enabled": true
+  },
   "diagnostics": {
     "button": true,
     "include_warnings": true,
@@ -44,19 +49,28 @@
       "max_severity": null
     }
   },
-  "inlay_hints": {
-    "enabled": false
-  },
   "terminal": {
     "font_family": "CaskaydiaCove Nerd Font Mono",
     // "font_family": "MesloLGS NF",
     "font_size": 13,
-    "copy_on_select": true,
-    "keep_selection_on_copy": true
+    "copy_on_select": true
+  },
+  "minimap": {
+    "show": "never",
+    "thumb": "always",
+    "thumb_border": "left_open",
+    "current_line_highlight": null
+  },
+  "agent": {
+    "enabled": false
+  },
+  "features": {
+    "edit_prediction_provider": "none"
   },
   "languages": {
     "Python": {
-      "language_servers": ["pylsp", "ruff", "ty"],
+      "show_edit_predictions": false,
+      "language_servers": ["ruff", "pyrefly", "!ty"],
       "format_on_save": "on",
       "wrap_guides": [120],
       "preferred_line_length": 120,
@@ -76,30 +90,6 @@
     }
   },
   "lsp": {
-    "pylsp": {
-      "binary": {
-        "path": "/Users/david/.local/bin/pylsp"
-      },
-      "settings": {
-        "plugins": {
-          "pycodestyle": {
-            "enabled": false
-          },
-          "pyflakes": {
-            "enabled": false
-          },
-          "mccabe": {
-            "enabled": false
-          },
-          "autopep8": {
-            "enabled": false
-          },
-          "yapf": {
-            "enabled": false
-          }
-        }
-      }
-    },
     "ruff": {
       "initialization_options": {
         "settings": {
@@ -110,9 +100,26 @@
         }
       }
     },
+    "pyrefly": {
+      "binary": {
+        "path": ".venv/bin/pyrefly",
+        "arguments": ["lsp"]
+      },
+      "settings": {
+        "python": {
+          "pythonPath": ".venv/bin/python"
+        },
+        "pyrefly": {
+          "project_includes": ["src/**/*.py", "tests/**/*.py"],
+          "project_excludes": ["**/.[!/.]*", "**/*venv/**"],
+          "search_path": ["src"],
+          "ignore_errors_in_generated_code": true
+        }
+      }
+    },
     "ty": {
       "binary": {
-        "path": "/Users/david/.local/bin/ty",
+        "path": "/.venv/bin/ty",
         "arguments": ["server"]
       }
     },
@@ -123,11 +130,6 @@
       "initialization_options": {
         "isHttpEnabled": true
       },
-      "enableBestEffort": true,
-      "defaultBspToBuildTool": true,
-      "scalafmtConfigPath": ".scalafmt.conf",
-      "scalafixConfigPath": ".scalafix.conf",
-      "autoImportBuild": "all",
       "settings": {
         "inlayHints": {
           "inferredTypes": {
@@ -165,5 +167,16 @@
     "**/node_modules",
     "**/.venv",
     "**/__pycache__"
-  ]
+  ],
+  "edit_predictions": {
+    "disabled_globs": [
+      "**/.env*",
+      "**/*.pem",
+      "**/*.key",
+      "**/*.cert",
+      "**/*.crt",
+      "**/.dev.vars",
+      "**/secrets.yml"
+    ]
+  }
 }
