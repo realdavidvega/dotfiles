@@ -151,6 +151,9 @@
     // above is default from Zed
     "**/out",
     "**/dist",
+    "**/report",
+    "**/node_modules",
+    "**/__pycache__",
     "**/.idea",
     "**/.husky",
     "**/.turbo",
@@ -163,10 +166,8 @@
     "**/.mypy_cache",
     "**/.ruff_cache",
     "**/.ropeproject",
-    "**/report",
-    "**/node_modules",
     "**/.venv",
-    "**/__pycache__"
+    "**/*.egg-info"
   ],
   "edit_predictions": {
     "disabled_globs": [
