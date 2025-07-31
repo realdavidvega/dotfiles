@@ -17,8 +17,31 @@ setopt +o nomatch
 
 ZSH_HIGHLIGHT_HIGHLIGHTERS=(main brackets)
 
-# Start Zim
+# # Start Zim
+###########################################
+export ZIM_HOME="$DOTFILES_PATH/shell/zsh/.zim"
 source "$ZIM_HOME/init.zsh"
+###########################################
+
+# Start oh-my-zsh
+###########################################
+# export OH_MY_ZSH="$DOTFILES_PATH/shell/zsh/.oh-my-zsh"
+# export ZSH=$OH_MY_ZSH
+# export ZSH_CUSTOM="$OH_MY_ZSH/custom"
+
+# ZSH_THEME="powerlevel10k/powerlevel10k"
+
+# plugins=(
+#   git
+#   docker
+#   zsh-autosuggestions
+#   zsh-syntax-highlighting
+#   fast-syntax-highlighting
+#   zsh-autocomplete
+# )
+
+# source $ZSH/oh-my-zsh.sh
+###########################################
 
 # Async mode for autocompletion
 ZSH_AUTOSUGGEST_USE_ASYNC=true
@@ -36,12 +59,6 @@ source "$DOTLY_PATH/shell/zsh/bindings/dot.zsh"
 source "$DOTLY_PATH/shell/zsh/bindings/reverse_search.zsh"
 source "$DOTFILES_PATH/shell/zsh/key-bindings.zsh"
 
-plugins=(
-  docker
-  zsh-syntax-highlighting
-  zsh-autosuggestions
-)
-
 # Rust Shell
 source $HOME/.cargo/env
 
@@ -49,7 +66,7 @@ source $HOME/.cargo/env
 source "$HOME/.sdkman/bin/sdkman-init.sh"
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+[[ ! -f $HOME/.p10k.zsh ]] || source $HOME/.p10k.zsh
 
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"

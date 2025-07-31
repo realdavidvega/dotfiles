@@ -2,7 +2,10 @@
 zmodule zimfw/environment
 zmodule zimfw/git-info
 zmodule zimfw/input
+zmodule zimfw/utility
 zmodule zimfw/completion
-zmodule zsh-users/zsh-syntax-highlighting
 zmodule zsh-users/zsh-autosuggestions
+zmodule zsh-users/zsh-syntax-highlighting
+zmodule zdharma-continuum/fast-syntax-highlighting
+zmodule marlonrichert/zsh-autocomplete
 zmodule romkatv/powerlevel10k --use degit

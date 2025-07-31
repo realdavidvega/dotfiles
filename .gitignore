@@ -1,6 +1,7 @@
 .idea
 .DS_Store
-shell/zsh/.zim/*
+shell/zsh/.zim
+shell/zsh/.oh-my-zsh
 
 # custom folders 
 ai/

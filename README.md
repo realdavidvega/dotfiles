@@ -33,7 +33,7 @@ It also supports other git repos, but you need to know your git repository url.
 
 ## Custom folders
 
-This repo does not include custom folders from private repos for:
+This repo does not include custom folders from private or encrypted repos like:
 
 * ai
 * hax
