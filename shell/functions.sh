@@ -25,7 +25,7 @@ function recent_dirs() {
 }
 
 # Function to change to the corresponding directory
-ws() {
+function ws() {
   case $1 in
   	# Main repos
     "repos") cd $REPOS ;;
@@ -54,7 +54,7 @@ ws() {
 }
 
 # Tere
-tere() {
+function tere() {
   local result=$(command tere "$@")
   [ -n "$result" ] && cd -- "$result"
 }

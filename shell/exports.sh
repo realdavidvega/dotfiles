@@ -66,7 +66,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   export NVM_DIR="$HOME/.nvm"
   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
   [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
-  
+
   # Workaround for invalid java location (No longer maintained, use SDKMAN instead)
   # alias java="$JAVA_HOME/bin/java"
 
@@ -91,7 +91,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # No longer maintained, use DOCKER/PODMAN instead
   # DOCKER_PATH="~/.rd/bin"
-  
+
   path=(
     "$HOME/bin"
     "$DOTLY_PATH/bin"
@@ -165,7 +165,7 @@ fi
 
 # Paths
 export DOTFILES_PATH="$HOME/.dotfiles"
-export DOTLY_PATH="$DOTFILES_PATH/modules/dotly" 
+export DOTLY_PATH="$DOTFILES_PATH/modules/dotly"
 
 # Theme config
 export CODELY_THEME_MINIMAL=false
@@ -199,12 +199,11 @@ export DOTFILES_SECRETS="$DOTFILES_PATH/secrets"
 export DOTFILES_CONFIG="$DOTFILES_PATH/config"
 
 # Zsh
-export OH_MY_ZSH="/.oh-my-zsh"
-export ZSHRC="~/.zshrc"
+export ZSHRC="$HOME/.zshrc"
 
 # Git
-export GITALIAS="~/.gitalias"
-export GITCONFIG="~/.gitconfig"
+export GITALIAS="$HOME/.gitalias"
+export GITCONFIG="$HOME/.gitconfig"
 
 # Repos
 export REPOS="$WORKSPACE/repos"

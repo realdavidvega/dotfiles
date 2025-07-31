@@ -5,7 +5,7 @@
 # ---------------------------
 
 # Source if exists
-sourceif() {
+function sourceif() {
 	file_path="$1"
 	if test -f "$file_path"; then
 		source "$file_path"
@@ -15,7 +15,7 @@ sourceif() {
 }
 
 # Symlink if not exists
-lnsif() {
+function lnsif() {
     target_path="$1"
     symlink_path="$2"
 
