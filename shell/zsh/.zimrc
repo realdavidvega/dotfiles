@@ -9,4 +9,5 @@ zmodule zsh-users/zsh-autosuggestions
 zmodule zsh-users/zsh-syntax-highlighting
 zmodule zdharma-continuum/fast-syntax-highlighting
 zmodule marlonrichert/zsh-autocomplete
+zmodule agkozak/zsh-z
 zmodule romkatv/powerlevel10k --use degit

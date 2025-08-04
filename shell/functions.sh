@@ -9,9 +9,7 @@ function cdd() {
 
 function j() {
 	fname=$(declare -f -F _z)
-
 	[ -n "$fname" ] || source "$DOTLY_PATH/modules/z/z.sh"
-
 	_z "$1"
 }
 
@@ -20,8 +18,11 @@ function recent_dirs() {
 	# This script depends on pushd. It works better with autopush enabled in ZSH
 	escaped_home=$(echo $HOME | sed 's/\//\\\//g')
 	selected=$(dirs -p | sort -u | fzf)
-
 	cd "$(echo "$selected" | sed "s/\~/$escaped_home/")" || echo "Invalid directory"
+}
+
+function wd() {
+    . ~/.local/wd/wd.sh
 }
 
 # Function to change to the corresponding directory
@@ -32,16 +33,16 @@ function ws() {
     "github") cd $GITHUB ;;
     "external") cd $EXTERNAL ;;
     "work") cd $WORK ;;
-	  # Work-specific repos
-	  ## @xebia-functional
+	# Work-specific repos
+	## @xebia-functional
     "xebia") cd $XEBIA ;;
     "cortex") cd $CORTEX ;;
-	  ## Projects
+	## Projects
     "xef") cd "$XEBIA/ai/xef" ;;
-	  # Tools repos
+	# Tools repos
     "tools") cd $TOOLS ;;
-	  # Language repos
-	  "rust") cd $RUST ;;
+	# Language repos
+	"rust") cd $RUST ;;
     "web") cd $WEB ;;
     "php") cd $PHP ;;
     "java") cd $JAVA ;;
@@ -55,8 +56,8 @@ function ws() {
 
 # Tere
 function tere() {
-  local result=$(command tere "$@")
-  [ -n "$result" ] && cd -- "$result"
+    local result=$(command tere "$@")
+    [ -n "$result" ] && cd -- "$result"
 }
 
 # Kotlin-Init
