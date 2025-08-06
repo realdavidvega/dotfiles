@@ -85,10 +85,11 @@ function yt-mp4 {
 ###################################################
 
 # Win
-Import-Module -Name Microsoft.WinGet.CommandNotFound
-
-# Git aliases for PowerShell
+Import-Module Microsoft.WinGet.CommandNotFound
+Import-Module Terminal-Icons
 Import-Module git-aliases -DisableNameChecking
+Import-Module posh-git
+Import-Module z
 
 # POSH
 & ([ScriptBlock]::Create((oh-my-posh init pwsh --config "$env:POSH_THEMES_PATH\spaceship.omp.json" --print) -join "`n"))
@@ -98,6 +99,7 @@ Import-Module git-aliases -DisableNameChecking
 # Be aware that if you are missing these lines from your profile, tab completion
 # for `choco` will not function.
 # See https://ch0.co/tab-completion for details.
+
 $ChocolateyProfile = "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
 if (Test-Path($ChocolateyProfile)) {
   Import-Module "$ChocolateyProfile"
