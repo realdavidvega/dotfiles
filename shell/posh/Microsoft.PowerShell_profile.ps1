@@ -79,6 +79,15 @@ function yt-mp4 {
     yt-dlp -f bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4 --merge-output-format mp4 $url
 }
 
+# Download Manga
+function comic-dl {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$url
+    )
+    D:\Workspace\apps\comic_dl\comic_dl.exe -ml 2 -i "$url" -v
+}
+
 ############################################################################################################################
 
 # Modules
