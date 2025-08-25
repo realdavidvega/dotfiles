@@ -85,6 +85,7 @@ source ~/.youtube-dl-aliases
 # Apps
 alias subl="sublime"
 alias vsc="vscode"
+alias mcpjam="npx @mcpjam/inspector@latest"
 
 # Fuck aliases
 alias fu="fuck"
