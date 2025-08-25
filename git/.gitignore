@@ -6,7 +6,6 @@
 *.sc
 **/.run/
 
-
 # Build
 .mvn
 .gradle
@@ -26,6 +25,7 @@ completer.hist
 libsigar-universal64-macosx.dylib
 
 # Custom
+.env
 *.no-commit.*
 
 # IA
