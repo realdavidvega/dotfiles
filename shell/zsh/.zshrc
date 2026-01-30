@@ -88,7 +88,7 @@ if [ -f "$HOME/.local/google-cloud-sdk/path.zsh.inc" ]; then . "$HOME/.local/goo
 # The next line enables shell command completion for gcloud.
 if [ -f "$HOME/.local/google-cloud-sdk/completion.zsh.inc" ]; then . "$HOME/.local/google-cloud-sdk/completion.zsh.inc"; fi
 
-. "$HOME/.local/bin/env"
+[[ -f "$HOME/.local/bin/env" ]] && . "$HOME/.local/bin/env"
 
 # >>> conda initialize >>>
 # !! Contents within this block are managed by 'conda init' !!
@@ -104,3 +104,5 @@ else
 fi
 unset __conda_setup
 # <<< conda initialize <<<
+
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
