@@ -21,11 +21,19 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # No longer maintained, use DOCKER/PODMAN instead
   # DOCKER_PATH="$OS_DRIVE/c/Program Files/Rancher Desktop/resources/resources/linux"
 
+  # bun path
+  export BUN_INSTALL="$HOME/.bun"
+
+  # Opencode path
+  export OPENCODE_PATH=$HOME/.opencode
+
   path=(
     "$HOME/bin"
     "$DOTLY_PATH/bin"
     "$DOTFILES_PATH/bin"
     "$DOCKER_PATH/bin"
+    "$BUN_INSTALL/bin"
+    "$OPENCODE_PATH/bin"
     "$JAVA_HOME/bin"
     "$GEM_HOME/bin"
     "$GOPATH/bin"
@@ -92,10 +100,18 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # No longer maintained, use DOCKER/PODMAN instead
   # DOCKER_PATH="~/.rd/bin"
 
+  # bun path
+  export BUN_INSTALL="$HOME/.bun"
+
+  # Opencode path
+  export OPENCODE_PATH=$HOME/.opencode
+
   path=(
     "$HOME/bin"
     "$DOTLY_PATH/bin"
     "$DOTFILES_PATH/bin"
+    "$BUN_INSTALL/bin"
+    "$OPENCODE_PATH/bin"
     "$DOCKER_PATH/bin"
     "$JAVA_HOME/bin"
     "$GEM_HOME/bin"
@@ -207,7 +223,7 @@ export GITCONFIG="$HOME/.gitconfig"
 
 # Repos
 export REPOS="$WORKSPACE/repos"
-export GITHUB="$REPOS/github"
+export GITHUB_REPOS="$REPOS/github"
 export EXTERNAL="$REPOS/external"
 export WORK="$REPOS/work"
 
@@ -217,17 +233,17 @@ export XEBIA="$WORK/xebia"
 export CORTEX="$WORK/cortex"
 
 ## tools
-export TOOLS="$GITHUB/tools"
+export TOOLS="$GITHUB_REPOS/tools"
 export DOTFILES="$DOTFILES_PATH"
 
 ## tech
-export RUST="$GITHUB/rust"
-export WEB="$GITHUB/web"
-export PHP="$GITHUB/php"
-export JAVA="$GITHUB/java"
-export KOTLIN="$GITHUB/kotlin"
-export SCALA="$GITHUB/scala"
-export PYTHON="$GITHUB/python"
+export RUST="$GITHUB_REPOS/rust"
+export WEB="$GITHUB_REPOS/web"
+export PHP="$GITHUB_REPOS/php"
+export JAVA="$GITHUB_REPOS/java"
+export KOTLIN="$GITHUB_REPOS/kotlin"
+export SCALA="$GITHUB_REPOS/scala"
+export PYTHON="$GITHUB_REPOS/python"
 
 # SDKMAN
 sourceif "$HOME/.sdkman/bin/sdkman-init.sh"
