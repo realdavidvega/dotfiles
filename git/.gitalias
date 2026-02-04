@@ -1884,7 +1884,13 @@
     else \
       pr_url=\"$github_url/compare/main...$branch_name\"; \
     fi; \
-    open $pr_url; \
+    if command -v wslview &> /dev/null; then \
+      wslview \"$pr_url\"; \
+    elif command -v open &> /dev/null; then \
+      open \"$pr_url\"; \
+    else \
+      echo \"Open this URL: $pr_url\"; \
+    fi; \
   }; f"
 
   ### Run git push and then immediately open the Pull Request URL ###
