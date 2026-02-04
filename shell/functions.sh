@@ -33,13 +33,12 @@ function ws() {
     "github") cd $GITHUB_REPOS ;;
     "external") cd $EXTERNAL ;;
     "work") cd $WORK ;;
-    "projects") cd $PROJECTS ;;
 	# Work-specific repos
 	## @xebia-functional
     "xebia") cd $XEBIA ;;
-	## Projects
-    "bt") cd "$PROJECTS/black-trading" ;;
-	# Tools repos
+	# Project repos
+    "projects") cd $PROJECTS ;;
+	# Tool repos
     "tools") cd $TOOLS ;;
 	# Language repos
 	"rust") cd $RUST ;;

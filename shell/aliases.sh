@@ -145,13 +145,14 @@ alias workspace="ws"
 # Repos
 alias wsr="ws repos"
 alias wsgh="ws github"
+alias wsex="ws external"
 alias wsw="ws work"
 
 # Work-specific
 ## @xebia-functional
 alias wsxb="ws xebia"
 
-## projects
+# projects
 alias wspj="ws projects"
 
 # Tools repos
