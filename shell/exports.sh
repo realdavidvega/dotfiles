@@ -232,17 +232,19 @@ export REPOS="$WORKSPACE/repos"
 export GITHUB_REPOS="$REPOS/github"
 export EXTERNAL="$REPOS/external"
 export WORK="$REPOS/work"
-export PROJECTS="$REPOS/projects"
 
 # Work-specific
 ## main
 export XEBIA="$WORK/xebia"
 
-## tools
+# Tools
 export TOOLS="$GITHUB_REPOS/tools"
 export DOTFILES="$DOTFILES_PATH"
 
-## tech
+# Projects
+export PROJECTS="$GITHUB_REPOS/projects"
+
+# Tech
 export RUST="$GITHUB_REPOS/rust"
 export WEB="$GITHUB_REPOS/web"
 export PHP="$GITHUB_REPOS/php"
