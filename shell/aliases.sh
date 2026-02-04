@@ -143,17 +143,16 @@ alias dw="downloads"
 alias workspace="ws"
 
 # Repos
-alias wsre="ws repos"
-alias wsgi="ws github"
-alias wswo="ws work"
+alias wsr="ws repos"
+alias wsgh="ws github"
+alias wsw="ws work"
 
 # Work-specific
 ## @xebia-functional
-alias wsxeb="ws xebia"
-alias wsco="ws cortex"
+alias wsxb="ws xebia"
 
 ## projects
-alias wsxef="ws xef"
+alias wspj="ws projects"
 
 # Tools repos
 alias wsto="ws tools"

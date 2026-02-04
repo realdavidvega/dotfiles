@@ -10,7 +10,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   OS_DRIVE="/mnt"
   C_DRIVE="$OS_DRIVE/c"
-  OS_WORKSPACE="$C_DRIVE/Workspace"
+  OS_WORKSPACE="$HOME/workspace"
 
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
 
@@ -232,11 +232,11 @@ export REPOS="$WORKSPACE/repos"
 export GITHUB_REPOS="$REPOS/github"
 export EXTERNAL="$REPOS/external"
 export WORK="$REPOS/work"
+export PROJECTS="$REPOS/projects"
 
 # Work-specific
 ## main
 export XEBIA="$WORK/xebia"
-export CORTEX="$WORK/cortex"
 
 ## tools
 export TOOLS="$GITHUB_REPOS/tools"
