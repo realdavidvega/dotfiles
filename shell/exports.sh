@@ -5,16 +5,12 @@
 # Linux
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
-  # Paths
-  export HOME="/home/david"
-
   # No longer maintained, use SDKMAN instead (see sdk list java)
   # export JAVA_HOME="/home/linuxbrew/.linuxbrew/opt/openjdk@20"
 
   OS_DRIVE="/mnt"
-  OS_WORKSPACE="$OS_DRIVE/d/Workspace"
   C_DRIVE="$OS_DRIVE/c"
-  D_DRIVE="$OS_DRIVE/d"
+  OS_WORKSPACE="$C_DRIVE/Workspace"
 
   BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
 
@@ -55,20 +51,33 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Exports
   export WIN_HOME="$C_DRIVE/Users/david"
   export DOWNLOADS="$C_DRIVE/Users/david/Downloads"
-
+  
   # Apps
   alias open="$C_DRIVE/Windows/SysWOW64/explorer.exe"
   alias sublime="$C_DRIVE/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias vscode="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
+  alias code="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
 
-  # Workaround for slow git on WSL2
-  alias git="$C_DRIVE/Program\ Files/Git/bin/git.exe"
+  # Powershell
+  alias pshcfg="vim $DOTFILES_PATH/shell/posh/Microsoft.PowerShell_profile.ps1"
+
+  # Smart git wrapper - use Linux git for native paths, Windows git for /mnt/c
+  git() {
+    local current_path=$(pwd)
+    
+    # Use Linux git for native Linux filesystem (needed for git-crypt)
+    if [[ "$current_path" == /home/* ]] || [[ "$current_path" == /root/* ]] || [[ "$current_path" == $HOME* ]]; then
+        command /usr/bin/git "$@"
+    else
+        # Use Windows git for /mnt/c paths
+        /mnt/c/Program\ Files/Git/bin/git.exe "$@"
+    fi
+  }
 
   # Use git configuration from dotfiles with windows git
-  cp ~/.dotfiles/git/.gitconfig $WIN_HOME/.gitconfig
-  cp ~/.dotfiles/git/.gitalias $WIN_HOME/.gitalias
-  cp ~/.dotfiles/git/.gitignore $WIN_HOME/.gitignore
-  cp ~/.dotfiles/git/.gitkeep $WIN_HOME/.gitkeep
+  cp $DOTFILES_PATH/git/.gitconfig $WIN_HOME/.gitconfig
+  cp $DOTFILES_PATH/git/.gitalias $WIN_HOME/.gitalias
+  cp $DOTFILES_PATH/git/.gitignore $WIN_HOME/.gitignore
+  cp $DOTFILES_PATH/git/.gitkeep $WIN_HOME/.gitkeep
 
   # Nvm env
   export NVM_DIR="$HOME/.nvm"
@@ -86,9 +95,6 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
-
-  # Paths
-  export HOME="/Users/david"
 
   # No longer maintained, use SDKMAN instead (see sdk list java)
   # export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/corretto-17.0.6/Contents/Home"
@@ -156,7 +162,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Apps (also as workaround for loading env variables from zsh / dotly)
   alias sublime="open $OS_DRIVE/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
-  alias vscode="open $OS_DRIVE/Applications/Visual\ Studio\ Code.app"
+  alias code="open $OS_DRIVE/Applications/Visual\ Studio\ Code.app"
   alias intellij="open -a $HOME/Applications/IntelliJ\ IDEA\ Ultimate.app"
   alias webstorm="open -a $HOME/Applications/WebStorm.app"
   alias rustrover="open -a $HOME/Applications/RustRover.app"

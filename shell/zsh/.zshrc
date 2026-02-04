@@ -101,5 +101,10 @@ fi
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
-# bun completions
-[ -s "/home/david/.bun/_bun" ] && source "/home/david/.bun/_bun"
+# bun completions (compinit already loaded by zim)
+if [ -s "/home/david/.bun/_bun" ]; then
+    # Mock compinit to prevent bun from calling it
+    compinit() { : }
+    source "/home/david/.bun/_bun"
+    unfunction compinit
+fi

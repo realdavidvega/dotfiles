@@ -99,7 +99,6 @@ function zed {
 Set-Alias vim "C:\Program Files\Vim\vim91\vim.exe"
 Set-Alias gvim "C:\Program Files\Vim\vim91\gvim.exe"
 
-############################################################################################################################
 # Modules
 ###################################################
 
@@ -124,3 +123,162 @@ if (Test-Path($ChocolateyProfile)) {
   Import-Module "$ChocolateyProfile"
 }
 
+# Custom scripts
+###################################################
+
+function Clean-PathVariable {
+    <#
+    .SYNOPSIS
+        Removes duplicate entries and invalid paths from Windows PATH environment variable.
+    
+    .DESCRIPTION
+        Cleans up both User and System PATH by removing:
+        - Duplicate entries
+        - Empty entries
+        - Optionally specified patterns (like poppler)
+        - Optionally non-existent paths
+    
+    .PARAMETER RemoveNonExistent
+        Remove paths that don't exist on the filesystem
+    
+    .PARAMETER RemovePattern
+        Remove paths matching this pattern (e.g., "*poppler*")
+    
+    .PARAMETER WhatIf
+        Show what would be changed without actually changing it
+    
+    .EXAMPLE
+        Clean-PathVariable -WhatIf
+        Shows what would be cleaned without making changes
+    
+    .EXAMPLE
+        Clean-PathVariable -RemovePattern "*poppler*"
+        Removes duplicates and any paths containing "poppler"
+    
+    .EXAMPLE
+        Clean-PathVariable -RemoveNonExistent
+        Removes duplicates and paths that don't exist
+    #>
+    
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [switch]$RemoveNonExistent,
+        [string]$RemovePattern
+    )
+    
+    function Clean-Path {
+        param(
+            [string]$PathString,
+            [string]$Scope
+        )
+        
+        Write-Host "`n=== Cleaning $Scope PATH ===" -ForegroundColor Cyan
+        
+        # Split and get initial count
+        $paths = $PathString -split ';'
+        $initialCount = $paths.Count
+        $initialLength = $PathString.Length
+        
+        Write-Host "Initial: $initialCount entries, $initialLength characters" -ForegroundColor Yellow
+        
+        # Remove empty entries
+        $paths = $paths | Where-Object { $_ }
+        
+        # Remove pattern if specified
+        if ($RemovePattern) {
+            $beforePatternCount = $paths.Count
+            $paths = $paths | Where-Object { $_ -notlike $RemovePattern }
+            $patternRemoved = $beforePatternCount - $paths.Count
+            if ($patternRemoved -gt 0) {
+                Write-Host "  Removed $patternRemoved entries matching '$RemovePattern'" -ForegroundColor Green
+            }
+        }
+        
+        # Remove non-existent paths if requested
+        if ($RemoveNonExistent) {
+            $beforeExistCount = $paths.Count
+            $paths = $paths | Where-Object { Test-Path $_ }
+            $nonExistentRemoved = $beforeExistCount - $paths.Count
+            if ($nonExistentRemoved -gt 0) {
+                Write-Host "  Removed $nonExistentRemoved non-existent paths" -ForegroundColor Green
+            }
+        }
+        
+        # Remove duplicates (case-insensitive)
+        $uniquePaths = @()
+        $seen = @{}
+        foreach ($path in $paths) {
+            $lowerPath = $path.ToLower()
+            if (-not $seen.ContainsKey($lowerPath)) {
+                $uniquePaths += $path
+                $seen[$lowerPath] = $true
+            }
+        }
+        
+        $duplicatesRemoved = $paths.Count - $uniquePaths.Count
+        if ($duplicatesRemoved -gt 0) {
+            Write-Host "  Removed $duplicatesRemoved duplicate entries" -ForegroundColor Green
+        }
+        
+        # Join back together
+        $cleanedPath = $uniquePaths -join ';'
+        $finalCount = $uniquePaths.Count
+        $finalLength = $cleanedPath.Length
+        
+        Write-Host "Final: $finalCount entries, $finalLength characters" -ForegroundColor Yellow
+        Write-Host "Saved: $(($initialCount - $finalCount)) entries, $(($initialLength - $finalLength)) characters" -ForegroundColor Green
+        
+        return @{
+            Original = $PathString
+            Cleaned = $cleanedPath
+            Changed = $PathString -ne $cleanedPath
+        }
+    }
+    
+    # Clean User PATH
+    try {
+        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        $userResult = Clean-Path -PathString $userPath -Scope "User"
+        
+        if ($userResult.Changed) {
+            if ($PSCmdlet.ShouldProcess("User PATH", "Update environment variable")) {
+                [Environment]::SetEnvironmentVariable('Path', $userResult.Cleaned, 'User')
+                Write-Host "✓ User PATH updated successfully`n" -ForegroundColor Green
+            }
+        } else {
+            Write-Host "✓ User PATH is already clean`n" -ForegroundColor Green
+        }
+    } catch {
+        Write-Error "Failed to clean User PATH: $_"
+    }
+    
+    # Clean System PATH (requires admin)
+    try {
+        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        
+        if ($isAdmin) {
+            $systemPath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+            $systemResult = Clean-Path -PathString $systemPath -Scope "System"
+            
+            if ($systemResult.Changed) {
+                if ($PSCmdlet.ShouldProcess("System PATH", "Update environment variable")) {
+                    [Environment]::SetEnvironmentVariable('Path', $systemResult.Cleaned, 'Machine')
+                    Write-Host "✓ System PATH updated successfully`n" -ForegroundColor Green
+                }
+            } else {
+                Write-Host "✓ System PATH is already clean`n" -ForegroundColor Green
+            }
+        } else {
+            Write-Host "`n⚠ Skipping System PATH (requires Administrator privileges)" -ForegroundColor Yellow
+            Write-Host "  Run PowerShell as Administrator to clean System PATH`n" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Error "Failed to clean System PATH: $_"
+    }
+    
+    Write-Host "=== Cleanup Complete ===" -ForegroundColor Cyan
+    Write-Host "Note: Restart terminals/WSL for changes to take effect" -ForegroundColor Yellow
+    Write-Host "      Run 'wsl --shutdown' in a new PowerShell window`n" -ForegroundColor Yellow
+}
+
+Set-Alias -Name cleanpath -Value Clean-PathVariable
