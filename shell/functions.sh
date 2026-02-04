@@ -30,15 +30,15 @@ function ws() {
   case $1 in
   	# Main repos
     "repos") cd $REPOS ;;
-    "github") cd $GITHUB ;;
+    "github") cd $GITHUB_REPOS ;;
     "external") cd $EXTERNAL ;;
     "work") cd $WORK ;;
+    "projects") cd $PROJECTS ;;
 	# Work-specific repos
 	## @xebia-functional
     "xebia") cd $XEBIA ;;
-    "cortex") cd $CORTEX ;;
 	## Projects
-    "xef") cd "$XEBIA/ai/xef" ;;
+    "bt") cd "$PROJECTS/black-trading" ;;
 	# Tools repos
     "tools") cd $TOOLS ;;
 	# Language repos
