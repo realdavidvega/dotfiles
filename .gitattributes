@@ -1,1 +1,2 @@
+config/opencode/** filter=git-crypt diff=git-crypt
 git/work/.gitconfig filter=git-crypt diff=git-crypt
