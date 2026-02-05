@@ -83,7 +83,7 @@ source ~/.youtube-dl-aliases
 
 # Apps
 alias subl="sublime"
-alias vsc="vscode"
+alias code="vscode"
 alias mcpjam="npx @mcpjam/inspector@latest"
 
 # Fuck aliases
@@ -128,6 +128,22 @@ alias nvu="nvm use"
 
 # Build aliases
 alias m="make"
+
+# Opencode
+## Session aliases
+alias oc="opencode"
+alias occ="opencode --continue"
+alias ocs="opencode --session"
+alias ocsl="opencode session list"
+alias ocsr="opencode session read"
+
+## Agent aliases
+alias ocao="opencode --agent oracle"
+alias ocae="opencode --agent explore"
+
+## Quick commands
+alias ocgit="opencode /git-master"
+alias ocfe="opencode /frontend-ui-ux"
 
 # ---------------------------
 #      Directory Aliases

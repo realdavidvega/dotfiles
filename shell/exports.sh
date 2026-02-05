@@ -55,7 +55,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Apps
   alias open="$C_DRIVE/Windows/SysWOW64/explorer.exe"
   alias sublime="$C_DRIVE/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias code="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
+  alias vscode="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
 
   # Powershell
   alias pshcfg="vim $DOTFILES_PATH/shell/posh/Microsoft.PowerShell_profile.ps1"
@@ -162,7 +162,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Apps (also as workaround for loading env variables from zsh / dotly)
   alias sublime="open $OS_DRIVE/Applications/Sublime\ Text.app/Contents/SharedSupport/bin/subl"
-  alias code="open $OS_DRIVE/Applications/Visual\ Studio\ Code.app"
+  alias vscode="open $OS_DRIVE/Applications/Visual\ Studio\ Code.app"
   alias intellij="open -a $HOME/Applications/IntelliJ\ IDEA\ Ultimate.app"
   alias webstorm="open -a $HOME/Applications/WebStorm.app"
   alias rustrover="open -a $HOME/Applications/RustRover.app"
