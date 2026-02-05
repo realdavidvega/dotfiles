@@ -18,3 +18,12 @@
     ~/.zshrc: shell/zsh/.zshrc
     ~/.inputrc: shell/.inputrc
     ~/.p10k.zsh: shell/zsh/themes/.p10k.zsh
+    ~/.config/opencode/opencode.json: config/opencode/opencode.json
+    ~/.config/opencode/oh-my-opencode.json: config/opencode/oh-my-opencode.json
+    ~/.config/opencode/ocx.jsonc: config/opencode/ocx.jsonc
+    ~/.config/opencode/agent: config/opencode/agent
+    ~/.config/opencode/agents: config/opencode/agents
+    ~/.config/opencode/command: config/opencode/command
+    ~/.config/opencode/philosophy: config/opencode/philosophy
+    ~/.config/opencode/skills: config/opencode/skills
+    ~/.config/opencode/antigravity-accounts.json: secrets/opencode/antigravity-accounts.json
