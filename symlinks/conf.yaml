@@ -17,3 +17,4 @@
     ~/.zshenv: shell/zsh/.zshenv
     ~/.zshrc: shell/zsh/.zshrc
     ~/.inputrc: shell/.inputrc
+    ~/.p10k.zsh: shell/zsh/themes/.p10k.zsh
