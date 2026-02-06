@@ -45,6 +45,7 @@ fi
 echo "Encrypted sources detected:"
 echo " - config/opencode/** (OpenCode agent configs)"
 echo " - doc/opencode/** (Agent architecture docs)"
+echo " - secrets/opencode/** (OpenCode secrets)"
 echo " - git/work/.gitconfig (Work git config)"
 echo
 
@@ -94,6 +95,24 @@ if [ -f "doc/opencode/agent-architecture.md" ]; then
         echo "doc/opencode/agent-architecture.md"
     else
         echo "doc/opencode/agent-architecture.md - may still be encrypted"
+        VERIFICATION_FAILED=1
+    fi
+fi
+
+if [ -f "secrets/opencode/antigravity-accounts.json" ]; then
+    if jq empty secrets/opencode/antigravity-accounts.json 2>/dev/null; then
+        echo "secrets/opencode/antigravity-accounts.json"
+    else
+        echo "secrets/opencode/antigravity-accounts.json - may still be encrypted"
+        VERIFICATION_FAILED=1
+    fi
+fi
+
+if [ -f "secrets/opencode/perplexity-auth.json" ]; then
+    if jq empty secrets/opencode/perplexity-auth.json 2>/dev/null; then
+        echo "secrets/opencode/perplexity-auth.json"
+    else
+        echo "secrets/opencode/perplexity-auth.json - may still be encrypted"
         VERIFICATION_FAILED=1
     fi
 fi

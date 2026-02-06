@@ -27,3 +27,5 @@
     ~/.config/opencode/philosophy: config/opencode/philosophy
     ~/.config/opencode/skills: config/opencode/skills
     ~/.config/opencode/antigravity-accounts.json: secrets/opencode/antigravity-accounts.json
+    ~/.config/opencode/perplexity-auth.json: secrets/opencode/perplexity-auth.json
+    ~/.config/opencode/perplexity.json: config/opencode/perplexity.json

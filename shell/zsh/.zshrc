@@ -5,7 +5,6 @@ if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
-#!/usr/bin/env zsh
 # Uncomment for debuf with `zprof`
 # zmodload zsh/zprof
 
@@ -69,16 +68,12 @@ source "$DOTFILES_PATH/shell/zsh/key-bindings.zsh"
 # Rust Shell
 source $HOME/.cargo/env
 
-# sdkman
-source "$HOME/.sdkman/bin/sdkman-init.sh"
-
 # Python certs
 export REQUESTS_CA_BUNDLE=$DOTFILES_SECRETS/certs/requests-ca-bundle.pem
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f $HOME/.p10k.zsh ]] || source $HOME/.p10k.zsh
 
-#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
 

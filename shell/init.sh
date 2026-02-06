@@ -7,11 +7,9 @@
 # Source if exists
 function sourceif() {
 	file_path="$1"
-	if test -f "$file_path"; then
-		source "$file_path"
-	else
-		echo "Warning: $file_path does not exist."
-	fi
+  if test -f "$file_path"; then
+    source "$file_path"
+  fi
 }
 
 # Symlink if not exists
