@@ -81,6 +81,9 @@ source ~/.docker-aliases
 # youtube-dl aliases
 source ~/.youtube-dl-aliases
 
+# kubectl aliases
+source ~/.kubectl_aliases
+
 # Apps
 alias subl="sublime"
 alias code="vscode"
