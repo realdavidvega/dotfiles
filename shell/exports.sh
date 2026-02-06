@@ -48,6 +48,16 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   export path
 
+  # CUDA (if installed)
+  if [ -d "/usr/local/cuda" ]; then
+    # Find the most recent CUDA version
+    CUDA_PATH=$(ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -n 1)
+    if [ -n "$CUDA_PATH" ]; then
+      export PATH="$CUDA_PATH/bin${PATH:+:${PATH}}"
+      export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    fi
+  fi
+
   # Exports
   export WIN_HOME="$C_DRIVE/Users/david"
   export DOWNLOADS="$C_DRIVE/Users/david/Downloads"
