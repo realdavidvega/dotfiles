@@ -76,13 +76,16 @@ alias ytcfg="vim $DOTFILES/aliases/.youtube-dl-aliases"
 alias dockercfg="vim $DOTFILES/aliases/.docker-aliases"
 
 # docker aliases
-source ~/.docker-aliases
+sourceif "$DOTFILES_PATH/aliases/.docker-aliases"
 
 # youtube-dl aliases
-source ~/.youtube-dl-aliases
+sourceif "$DOTFILES_PATH/aliases/.youtube-dl-aliases"
 
 # kubectl aliases
-source ~/.kubectl_aliases
+sourceif "$DOTFILES_PATH/aliases/.kubectl_aliases"
+
+# terraform aliases
+sourceif "$DOTFILES_PATH/aliases/.terraform-aliases"
 
 # Apps
 alias subl="sublime"
