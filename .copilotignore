@@ -1,0 +1,13 @@
+# Secrets and credentials
+secrets/
+secrets.sh
+*secrets*
+*-auth.json
+*-accounts.json
+*.key
+*.pem
+
+# Git configuration files
+.gitkeep
+.gitignore
+.gitattributes
