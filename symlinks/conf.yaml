@@ -21,10 +21,10 @@
     ~/.config/opencode/opencode.json: config/opencode/opencode.json
     ~/.config/opencode/oh-my-opencode.json: config/opencode/oh-my-opencode.json
     ~/.config/opencode/ocx.jsonc: config/opencode/ocx.jsonc
-    ~/.config/opencode/agents: config/opencode/agents
     ~/.config/opencode/commands: config/opencode/commands
     ~/.config/opencode/philosophy: config/opencode/philosophy
     ~/.config/opencode/skills: config/opencode/skills
     ~/.config/opencode/antigravity-accounts.json: secrets/opencode/antigravity-accounts.json
     ~/.config/opencode/perplexity-auth.json: secrets/opencode/perplexity-auth.json
     ~/.config/opencode/perplexity.json: config/opencode/perplexity.json
+    ~/.config/opencode/rate-limit-fallback.json: config/opencode/rate-limit-fallback.json
