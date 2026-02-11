@@ -103,3 +103,41 @@ if [ -s "/home/david/.bun/_bun" ]; then
     source "/home/david/.bun/_bun"
     unfunction compinit
 fi
+
+# Auto-activate Python virtual environments
+# Priority: .venv-wsl (WSL-specific) > .venv > venv
+python_venv() {
+  local dir="$PWD"
+  local venv_path=""
+
+  # Search for venv in current and parent directories
+  while [[ "$dir" != "/" ]]; do
+    if [[ -d "$dir/.venv-wsl" && -f "$dir/.venv-wsl/bin/activate" ]]; then
+      venv_path="$dir/.venv-wsl"
+      break
+    elif [[ -d "$dir/.venv" && -f "$dir/.venv/bin/activate" ]]; then
+      venv_path="$dir/.venv"
+      break
+    elif [[ -d "$dir/venv" && -f "$dir/venv/bin/activate" ]]; then
+      venv_path="$dir/venv"
+      break
+    fi
+    dir="$(dirname "$dir")"
+  done
+
+  # Activate if found and not already active
+  if [[ -n "$venv_path" ]]; then
+    if [[ "${VIRTUAL_ENV:-}" != "$venv_path" ]]; then
+      [[ -n "${VIRTUAL_ENV:-}" ]] && deactivate 2>/dev/null
+      source "$venv_path/bin/activate"
+    fi
+  else
+    # Deactivate if no venv found and one is active
+    [[ -n "${VIRTUAL_ENV:-}" ]] && deactivate 2>/dev/null
+  fi
+}
+
+# Hook to run on directory change and on shell initialization
+autoload -U add-zsh-hook
+add-zsh-hook chpwd python_venv
+python_venv

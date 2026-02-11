@@ -61,14 +61,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Exports
   export WIN_HOME="$C_DRIVE/Users/david"
   export DOWNLOADS="$C_DRIVE/Users/david/Downloads"
-  
-  # Apps
-  alias open="$C_DRIVE/Windows/SysWOW64/explorer.exe"
-  alias sublime="$C_DRIVE/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias vscode="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
 
-  # Powershell
-  alias pshcfg="vim $DOTFILES_PATH/shell/posh/Microsoft.PowerShell_profile.ps1"
 
   # Smart git wrapper - use Linux git for native paths, Windows git for /mnt/c
   git() {
@@ -89,10 +82,13 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   cp $DOTFILES_PATH/git/.gitignore $WIN_HOME/.gitignore
   cp $DOTFILES_PATH/git/.gitkeep $WIN_HOME/.gitkeep
 
-  # Nvm env
+  # NVM environment
   export NVM_DIR="$HOME/.nvm"
   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
   [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+  # Python environment
+  export UV_PROJECT_ENVIRONMENT=".venv-wsl"
 
   # Workaround for invalid java location (No longer maintained, use SDKMAN instead)
   # alias java="$JAVA_HOME/bin/java"
@@ -100,8 +96,16 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Linux brew
   eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
-  # Emacs
-  alias emacs="emacs"
+  # Apps
+  alias open="$C_DRIVE/Windows/SysWOW64/explorer.exe"
+  alias sublime="$C_DRIVE/Program\ Files/Sublime\ Text/sublime_text.exe"
+  alias vscode="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
+
+  # Python on WSL
+  alias pyenv="python -m venv .venv-wsl"
+
+  # Powershell
+  alias pshcfg="vim $DOTFILES_PATH/shell/posh/Microsoft.PowerShell_profile.ps1"
 
 # MacOS
 elif [[ "$OSTYPE" =~ ^darwin ]]; then
