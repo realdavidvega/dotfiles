@@ -127,6 +127,9 @@ alias nv="nvm"
 alias nvl="nvm list"
 alias nvu="nvm use"
 
+# Python aliases
+alias py="python"
+
 # Build aliases
 alias m="make"
 

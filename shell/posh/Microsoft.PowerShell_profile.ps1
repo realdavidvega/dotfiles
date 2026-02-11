@@ -38,13 +38,13 @@ function dotfiles {
 
 # Re-open shell
 function pshcfg {
-  notepad $PROFILE
+    notepad $PROFILE
 }
 
 # Alias to Explorer
 function open {
-   param(
-        [Parameter(Mandatory=$true)]
+    param(
+        [Parameter(Mandatory = $true)]
         [string]$dest
     )
     explorer $dest
@@ -52,8 +52,8 @@ function open {
 
 # Alias to Explorer short version
 function o {
-   param(
-        [Parameter(Mandatory=$true)]
+    param(
+        [Parameter(Mandatory = $true)]
         [string]$dest
     )
     explorer $dest
@@ -64,13 +64,19 @@ function c {
     clear
 }
 
+function Restart-WSL {
+    wsl --shutdown
+    Write-Host "WSL shut down. It will restart automatically when you launch a distro." -ForegroundColor Green
+}
+Set-Alias -Name rwsl -Value Restart-WSL
+
 # Cmd aliases
 ###################################################
 
 # Download MP3
 function yta-mp3 {
     param(
-        [Parameter(Mandatory=$true)]
+        [Parameter(Mandatory = $true)]
         [string]$url
     )
     yt-dlp --extract-audio --audio-format mp3 --audio-quality 0 $url
@@ -79,7 +85,7 @@ function yta-mp3 {
 # Download MP4
 function yt-mp4 {
     param(
-        [Parameter(Mandatory=$true)]
+        [Parameter(Mandatory = $true)]
         [string]$url
     )
     yt-dlp -f bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4 --merge-output-format mp4 $url
@@ -120,7 +126,7 @@ Import-Module z
 
 $ChocolateyProfile = "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
 if (Test-Path($ChocolateyProfile)) {
-  Import-Module "$ChocolateyProfile"
+    Import-Module "$ChocolateyProfile"
 }
 
 # Custom scripts
@@ -174,17 +180,14 @@ function Clean-PathVariable {
         
         Write-Host "`n=== Cleaning $Scope PATH ===" -ForegroundColor Cyan
         
-        # Split and get initial count
         $paths = $PathString -split ';'
         $initialCount = $paths.Count
         $initialLength = $PathString.Length
         
         Write-Host "Initial: $initialCount entries, $initialLength characters" -ForegroundColor Yellow
         
-        # Remove empty entries
         $paths = $paths | Where-Object { $_ }
         
-        # Remove pattern if specified
         if ($RemovePattern) {
             $beforePatternCount = $paths.Count
             $paths = $paths | Where-Object { $_ -notlike $RemovePattern }
@@ -194,7 +197,6 @@ function Clean-PathVariable {
             }
         }
         
-        # Remove non-existent paths if requested
         if ($RemoveNonExistent) {
             $beforeExistCount = $paths.Count
             $paths = $paths | Where-Object { Test-Path $_ }
@@ -204,7 +206,6 @@ function Clean-PathVariable {
             }
         }
         
-        # Remove duplicates (case-insensitive)
         $uniquePaths = @()
         $seen = @{}
         foreach ($path in $paths) {
@@ -220,7 +221,6 @@ function Clean-PathVariable {
             Write-Host "  Removed $duplicatesRemoved duplicate entries" -ForegroundColor Green
         }
         
-        # Join back together
         $cleanedPath = $uniquePaths -join ';'
         $finalCount = $uniquePaths.Count
         $finalLength = $cleanedPath.Length
@@ -233,9 +233,8 @@ function Clean-PathVariable {
             Cleaned = $cleanedPath
             Changed = $PathString -ne $cleanedPath
         }
-    }
+    } # End of Clean-Path function
     
-    # Clean User PATH
     try {
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
         $userResult = Clean-Path -PathString $userPath -Scope "User"
@@ -245,14 +244,15 @@ function Clean-PathVariable {
                 [Environment]::SetEnvironmentVariable('Path', $userResult.Cleaned, 'User')
                 Write-Host "✓ User PATH updated successfully`n" -ForegroundColor Green
             }
-        } else {
+        }
+        else {
             Write-Host "✓ User PATH is already clean`n" -ForegroundColor Green
         }
-    } catch {
+    }
+    catch {
         Write-Error "Failed to clean User PATH: $_"
     }
     
-    # Clean System PATH (requires admin)
     try {
         $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         
@@ -265,20 +265,24 @@ function Clean-PathVariable {
                     [Environment]::SetEnvironmentVariable('Path', $systemResult.Cleaned, 'Machine')
                     Write-Host "✓ System PATH updated successfully`n" -ForegroundColor Green
                 }
-            } else {
+            }
+            else {
                 Write-Host "✓ System PATH is already clean`n" -ForegroundColor Green
             }
-        } else {
+        }
+        else {
             Write-Host "`n⚠ Skipping System PATH (requires Administrator privileges)" -ForegroundColor Yellow
             Write-Host "  Run PowerShell as Administrator to clean System PATH`n" -ForegroundColor Yellow
         }
-    } catch {
+    }
+    catch {
         Write-Error "Failed to clean System PATH: $_"
     }
     
     Write-Host "=== Cleanup Complete ===" -ForegroundColor Cyan
     Write-Host "Note: Restart terminals/WSL for changes to take effect" -ForegroundColor Yellow
     Write-Host "      Run 'wsl --shutdown' in a new PowerShell window`n" -ForegroundColor Yellow
-}
+} # End of Clean-PathVariable function
 
 Set-Alias -Name cleanpath -Value Clean-PathVariable
+
