@@ -75,17 +75,12 @@ alias aliascfg="vim $DOTFILES/shell/aliases.sh"
 alias ytcfg="vim $DOTFILES/aliases/.youtube-dl-aliases"
 alias dockercfg="vim $DOTFILES/aliases/.docker-aliases"
 
-# docker aliases
+# External aliases
 sourceif "$DOTFILES_PATH/aliases/.docker-aliases"
-
-# youtube-dl aliases
 sourceif "$DOTFILES_PATH/aliases/.youtube-dl-aliases"
-
-# kubectl aliases
-sourceif "$DOTFILES_PATH/aliases/.kubectl_aliases"
-
-# terraform aliases
+sourceif "$DOTFILES_PATH/aliases/.kubectl-aliases"
 sourceif "$DOTFILES_PATH/aliases/.terraform-aliases"
+sourceif "$DOTFILES_PATH/aliases/.opencode-aliases"
 
 # Apps
 alias subl="sublime"
@@ -134,22 +129,6 @@ alias nvu="nvm use"
 
 # Build aliases
 alias m="make"
-
-# Opencode
-## Session aliases
-alias oc="opencode"
-alias occ="opencode --continue"
-alias ocs="opencode --session"
-alias ocsl="opencode session list"
-alias ocsr="opencode session read"
-
-## Agent aliases
-alias ocao="opencode --agent oracle"
-alias ocae="opencode --agent explore"
-
-## Quick commands
-alias ocgit="opencode /git-master"
-alias ocfe="opencode /frontend-ui-ux"
 
 # ---------------------------
 #      Directory Aliases

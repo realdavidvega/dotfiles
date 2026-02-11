@@ -1,0 +1,63 @@
+######################################
+# Opencode
+######################################
+
+## Core commands
+#################
+
+alias oc="opencode"
+alias ocw="opencode web"
+alias ocl="opencode --print-logs --log-level DEBUG"
+
+## Session aliases
+#################
+alias occ="opencode --continue"
+alias ocs="opencode --session"
+alias ocsl="opencode session list"
+alias ocsr="opencode session read"
+
+## Agent aliases
+#################
+alias ocao="opencode --agent oracle"
+alias ocae="opencode --agent explore"
+alias ocal="opencode agent list"
+alias ocac="opencode agent create"
+
+## Debug commands
+#################
+alias ocd="opencode debug"
+alias ocdc="opencode debug config"
+alias ocds="opencode debug skill"
+alias ocdp="opencode debug paths"
+
+## Development tools
+#################
+alias ocrun="opencode run"
+alias ocatt="opencode attach"
+alias ocse="opencode serve"
+alias ocacp="opencode acp"
+alias ocmcp="opencode mcp"
+alias ocml="opencode models"
+alias ocst="opencode stats"
+alias ocau="opencode auth"
+alias ocaul="opencode auth login"
+
+## Import/Export
+#################
+alias ocexp="opencode export"
+alias ocimp="opencode import"
+
+## GitHub tools
+#################
+alias ocgh="opencode github"
+alias ocpr="opencode pr"
+
+## Quick commands
+#################
+alias ocgit="opencode /git-master"
+alias ocfe="opencode /frontend-ui-ux"
+
+## Maintenance
+#################
+alias ocup="opencode upgrade"
+alias occomp="opencode completion"
