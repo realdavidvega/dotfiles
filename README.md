@@ -106,11 +106,11 @@ git-crypt unlock /path/to/dotfiles-key.bin
 ## What's Encrypted?
 
 **In this repo:**
-* `config/opencode/**` - OpenCode agent configurations (API keys, model strategies)
+* `config/opencode/**` - OpenCode agent configurations (model strategies, fallbacks)
 * `doc/opencode/**` - Agent architecture documentation
 * `git/work/.gitconfig` - Work git configuration
 
-**Separate encrypted repos:**
+**Separate encrypted sources:**
 * `ai/` - AI-related configurations and secrets
 * `hax/` - Development tools and configurations  
 * `secrets/` - Sensitive credentials and keys
