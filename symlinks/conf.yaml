@@ -28,3 +28,5 @@
     ~/.config/opencode/perplexity-auth.json: secrets/opencode/perplexity-auth.json
     ~/.config/opencode/perplexity.json: config/opencode/perplexity.json
     ~/.config/opencode/rate-limit-fallback.json: config/opencode/rate-limit-fallback.json
+    ~/.opencode/rate-limit-fallback.json: config/opencode/rate-limit-fallback.json
+    ~/.config/rate-limit-fallback.json: config/opencode/rate-limit-fallback.json
