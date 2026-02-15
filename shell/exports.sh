@@ -12,7 +12,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   C_DRIVE="$OS_DRIVE/c"
   OS_WORKSPACE="$HOME/workspace"
 
-  BREW_PATH="/home/linuxbrew/.linuxbrew/bin"
+  BREW_PATH="/home/linuxbrew/.linuxbrew"
 
   # No longer maintained, use DOCKER/PODMAN instead
   # DOCKER_PATH="$OS_DRIVE/c/Program Files/Rancher Desktop/resources/resources/linux"
@@ -34,9 +34,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     "$GEM_HOME/bin"
     "$GOPATH/bin"
     "$HOME/.cargo/bin"
+    "$BREW_PATH/bin"
     "/usr/local/opt/ruby/bin"
     "/usr/local/opt/python/libexec/bin"
-    "$BREW_PATH"
     "/usr/local/bin"
     "/usr/local/sbin"
     "/bin"
@@ -115,7 +115,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   OS_DRIVE="/Volumes/Macintosh\ HD"
   OS_WORKSPACE="$HOME/Workspace"
-  BREW_PATH="/opt/homebrew/bin"
+  BREW_PATH="/opt/homebrew"
 
   # No longer maintained, use DOCKER/PODMAN instead
   # DOCKER_PATH="~/.rd/bin"
@@ -136,11 +136,11 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
     "$JAVA_HOME/bin"
     "$GEM_HOME/bin"
     "$GOPATH/bin"
+    "$BREW_PATH/bin"
     "$HOME/.cargo/bin"
     "$HOME/Library/Application Support/Coursier/bin"
     "/usr/local/opt/ruby/bin"
     "/usr/local/opt/python/libexec/bin"
-    "$BREW_PATH"
     "/usr/local/bin"
     "/usr/local/sbin"
     "/bin"

@@ -132,3 +132,87 @@ gpg --symmetric --armor ~/secrets-key.bin
 ```
 
 Keep these keys safe - you'll need them to restore on new machines!
+
+---
+
+## Package Management
+
+Your dotfiles track installed packages across multiple package managers, making it easy to restore your development environment on new machines.
+
+### Supported Package Managers
+
+**Linux:**
+- **Homebrew** → `os/linux/brew/Brewfile`
+- **Apt** → `os/linux/apt/packages.txt`
+- **Snap** → `os/linux/snap/packages.txt`
+- **Pacman** → `os/linux/pacman/packages.txt`
+
+**Cross-platform:**
+- **Python/pip** → `langs/python/requirements.txt`
+- **NPM** → `langs/js/global_modules.txt`
+- **Volta** → `langs/js/volta_dependencies.txt`
+- **VSCode** → `editors/code/extensions.txt`
+
+**macOS:**
+- **Homebrew** → `os/mac/brew/Brewfile`
+
+### Tracking Newly Installed Packages
+
+After installing new tools, update your tracked package lists:
+
+```bash
+# Dump all currently installed packages to manifest files
+dot package dump
+
+# Commit the changes
+git add os/
+git commit -m "Update package manifests"
+```
+
+**Example workflow for Linux:**
+
+```bash
+# Install a new tool via snap
+sudo snap install ngrok
+
+# Track it in your dotfiles
+dot package dump
+
+# Verify it's tracked
+cat ~/.dotfiles/os/linux/snap/packages.txt
+
+# Commit
+git add os/linux/snap/packages.txt
+git commit -m "Add ngrok to snap packages"
+```
+
+### Restoring Packages on New Machine
+
+During initial setup, packages are automatically imported via `dot package import` (step 5 above).
+
+To manually import packages later:
+
+```bash
+dot package import
+```
+
+This will:
+- Install all Homebrew packages from Brewfile
+- Install all apt packages (Linux)
+- Install all snap packages (Linux)
+- Install all Python packages
+- Install all NPM packages
+- Install all VSCode extensions
+
+### Best Practices
+
+**For Linux tools:**
+1. **Prefer snap/apt** for GUI apps and system tools (auto-tracked)
+2. **Use Homebrew** for development tools (auto-tracked via Brewfile)
+3. **For manual installs** (curl downloads to `~/.local/bin`), add install scripts to `restoration_scripts/`
+
+**Update regularly:**
+```bash
+# After installing new packages
+dot package dump && git add os/ langs/ editors/ && git commit -m "Update packages"
+```
