@@ -21,6 +21,7 @@
     ~/.config/opencode/opencode.json: config/opencode/opencode.json
     ~/.config/opencode/oh-my-opencode.json: config/opencode/oh-my-opencode.json
     ~/.config/opencode/ocx.jsonc: config/opencode/ocx.jsonc
+    ~/.config/opencode/package.json: config/opencode/package.json
     ~/.config/opencode/commands: config/opencode/commands
     ~/.config/opencode/philosophy: config/opencode/philosophy
     ~/.config/opencode/skills: config/opencode/skills
