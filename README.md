@@ -19,7 +19,7 @@ sudo apt update && sudo apt install git-crypt
 brew install git-crypt
 ```
 
-2. **Have your git-crypt key file ready** (e.g., `dotfiles-key.bin`)
+1. **Have your git-crypt key file ready** (e.g., `dotfiles-key.bin`)
 
 **Important for WSL users**: Clone to native Linux filesystem (`~/.dotfiles`), not Windows mount paths (`/mnt/c/`).
 
@@ -55,6 +55,7 @@ DOTFILES_PATH="$HOME/.dotfiles" DOTLY_PATH="$DOTFILES_PATH/modules/dotly" "$DOTL
 ```
 
 This will:
+
 - Automatically unlock encrypted sources using your key
 - Install all dotfiles
 - Run custom restoration scripts
@@ -106,14 +107,16 @@ git-crypt unlock /path/to/dotfiles-key.bin
 ## What's Encrypted?
 
 **In this repo:**
-* `config/opencode/**` - OpenCode agent configurations (model strategies, fallbacks)
-* `doc/opencode/**` - Agent architecture documentation
-* `git/work/.gitconfig` - Work git configuration
+
+- `config/opencode/**` - OpenCode agent configurations (model strategies, fallbacks)
+- `doc/opencode/**` - Agent architecture documentation
+- `git/work/.gitconfig` - Work git configuration
 
 **Separate encrypted sources:**
-* `ai/` - AI-related configurations and secrets
-* `hax/` - Development tools and configurations  
-* `secrets/` - Sensitive credentials and keys
+
+- `ai/` - AI-related configurations and secrets
+- `hax/` - Development tools and configurations  
+- `secrets/` - Sensitive credentials and keys
 
 ---
 
@@ -142,18 +145,21 @@ Your dotfiles track installed packages across multiple package managers, making 
 ### Supported Package Managers
 
 **Linux:**
+
 - **Homebrew** → `os/linux/brew/Brewfile`
 - **Apt** → `os/linux/apt/packages.txt`
 - **Snap** → `os/linux/snap/packages.txt`
 - **Pacman** → `os/linux/pacman/packages.txt`
 
 **Cross-platform:**
+
 - **Python/pip** → `langs/python/requirements.txt`
 - **NPM** → `langs/js/global_modules.txt`
 - **Volta** → `langs/js/volta_dependencies.txt`
 - **VSCode** → `editors/code/extensions.txt`
 
 **macOS:**
+
 - **Homebrew** → `os/mac/brew/Brewfile`
 
 ### Tracking Newly Installed Packages
@@ -197,6 +203,7 @@ dot package import
 ```
 
 This will:
+
 - Install all Homebrew packages from Brewfile
 - Install all apt packages (Linux)
 - Install all snap packages (Linux)
@@ -207,11 +214,13 @@ This will:
 ### Best Practices
 
 **For Linux tools:**
+
 1. **Prefer snap/apt** for GUI apps and system tools (auto-tracked)
 2. **Use Homebrew** for development tools (auto-tracked via Brewfile)
 3. **For manual installs** (curl downloads to `~/.local/bin`), add install scripts to `restoration_scripts/`
 
 **Update regularly:**
+
 ```bash
 # After installing new packages
 dot package dump && git add os/ langs/ editors/ && git commit -m "Update packages"
