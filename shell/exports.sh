@@ -20,8 +20,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # bun path
   export BUN_INSTALL="$HOME/.bun"
 
-  # Opencode path
+  # Opencode
   export OPENCODE_PATH=$HOME/.opencode
+  export OCX_PROFILE=black
 
   path=(
     "$HOME/bin"
