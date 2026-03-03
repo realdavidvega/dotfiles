@@ -141,3 +141,12 @@ python_venv() {
 autoload -U add-zsh-hook
 add-zsh-hook chpwd python_venv
 python_venv
+
+
+# ---------------------------
+# Zoxide (must be at end of file)
+# ---------------------------
+if command -v zoxide &>/dev/null; then
+  eval "$(zoxide init zsh --cmd cd)"
+  alias zl='zoxide query -l'
+fi
