@@ -14,7 +14,79 @@ alias yta-aac="yt-dlp --extract-audio --audio-format aac --audio-quality 0"
 alias yta-best="yt-dlp --extract-audio --audio-format best --audio-quality 0"
 alias yta-flac="yt-dlp --extract-audio --audio-format flac --audio-quality 0"
 alias yta-m4a="yt-dlp --extract-audio --audio-format m4a --audio-quality 0"
-alias yta-mp3="yt-dlp --extract-audio --audio-format mp3 --audio-quality 0"
+
+function yta-mp3 {
+    local url="${1:?missing URL}"
+    shift || true
+
+    local -a base_args=(--extract-audio --audio-format mp3 --audio-quality 0)
+
+    if [ -n "${YT_DLP_COOKIES:-}" ] && [ -f "${YT_DLP_COOKIES}" ]; then
+        yt-dlp --cookies "${YT_DLP_COOKIES}" "${base_args[@]}" "$url" "$@"
+        return $?
+    fi
+
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        local -a win_ytdlp_candidates=(
+            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python312/Scripts/yt-dlp.exe"
+            "/mnt/c/Users/david/AppData/Roaming/Python/Python312/Scripts/yt-dlp.exe"
+            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python313/Scripts/yt-dlp.exe"
+            "/mnt/c/Users/david/AppData/Roaming/Python/Python313/Scripts/yt-dlp.exe"
+            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python310/Scripts/yt-dlp.exe"
+            "/mnt/c/Users/david/AppData/Roaming/Python/Python310/Scripts/yt-dlp.exe"
+            "/mnt/c/Users/david/scoop/shims/yt-dlp.exe"
+        )
+        local -a win_python_candidates=(
+            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python313/python.exe"
+            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python310/python.exe"
+        )
+        local -a chrome_profiles=("Profile 1" "Default")
+        local win_ytdlp
+        local output_path
+        output_path="$(wslpath -w "$PWD")"
+
+        if [ -n "${YT_DLP_CHROME_PROFILE:-}" ]; then
+            chrome_profiles=("${YT_DLP_CHROME_PROFILE}" "${chrome_profiles[@]}")
+        fi
+
+        if command -v yt-dlp.exe >/dev/null 2>&1; then
+            win_ytdlp="$(command -v yt-dlp.exe)"
+        else
+            for candidate in "${win_ytdlp_candidates[@]}"; do
+                if [ -f "$candidate" ]; then
+                    win_ytdlp="$candidate"
+                    break
+                fi
+            done
+        fi
+
+        if [ -n "${win_ytdlp:-}" ]; then
+            local profile
+            for profile in "${chrome_profiles[@]}"; do
+                "$win_ytdlp" --cookies-from-browser "chrome:${profile}" -P "$output_path" "${base_args[@]}" "$url" "$@" && return 0
+            done
+        fi
+
+        local win_py
+        for win_py in "${win_python_candidates[@]}"; do
+            if [ -f "$win_py" ] && "$win_py" -c "import yt_dlp" >/dev/null 2>&1; then
+                local profile
+                for profile in "${chrome_profiles[@]}"; do
+                    "$win_py" -m yt_dlp --cookies-from-browser "chrome:${profile}" -P "$output_path" "${base_args[@]}" "$url" "$@" && return 0
+                done
+            fi
+        done
+    fi
+
+    if [ -d "$HOME/.mozilla/firefox" ]; then
+        yt-dlp --cookies-from-browser firefox "${base_args[@]}" "$url" "$@"
+        return $?
+    fi
+
+    echo "yta-mp3: no automated cookie source available. Set YT_DLP_COOKIES, install Windows yt-dlp.exe, or configure Firefox profile." >&2
+    return 1
+}
+
 alias yta-opus="yt-dlp --extract-audio --audio-format opus --audio-quality 0"
 alias yta-vorbis="yt-dlp --extract-audio --audio-format vorbis --audio-quality 0"
 alias yta-wav="yt-dlp --extract-audio --audio-format wav --audio-quality 0"
