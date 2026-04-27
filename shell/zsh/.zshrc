@@ -151,3 +151,6 @@ if command -v zoxide &>/dev/null; then
   eval "$(zoxide init zsh --cmd cd)"
   alias zl='zoxide query -l'
 fi
+
+# OpenClaw Completion
+source "/home/david/.openclaw/completions/openclaw.zsh"
