@@ -154,3 +154,8 @@ fi
 
 # OpenClaw Completion
 source "/home/david/.openclaw/completions/openclaw.zsh"
+
+ocv() {
+  local vault_root="/mnt/c/Users/david/iCloudDrive/iCloud~md~obsidian/Black Vault"
+  bash "$vault_root/99 - Meta/Scripts/opencode-session.sh" --with-postgres "$@"
+}

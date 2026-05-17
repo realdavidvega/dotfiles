@@ -1,9 +1,14 @@
 .idea
+.membrane
 .DS_Store
 shell/zsh/.zim
 shell/zsh/.oh-my-zsh
 
-# custom folders 
+# python
+__pycache__
+
+# custom folders
+bin/
 ai/
 hax/
 secrets/

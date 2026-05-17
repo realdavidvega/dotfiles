@@ -109,6 +109,7 @@ git-crypt unlock /path/to/dotfiles-key.bin
 **In this repo:**
 
 - `config/opencode/**` - OpenCode agent configurations (model strategies, fallbacks)
+- `config/opencode/global/AGENTS.md` - Global OpenCode user rules, including git attribution policy
 - `doc/opencode/**` - Agent architecture documentation
 - `git/work/.gitconfig` - Work git configuration
 
