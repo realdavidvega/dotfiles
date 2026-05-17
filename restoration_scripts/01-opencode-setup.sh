@@ -5,6 +5,7 @@ echo
 
 # Create necessary directories
 mkdir -p "$HOME/.config/opencode"
+mkdir -p "$HOME/.agents"
 
 echo "OpenCode directories created"
 echo "Symlinks will be created by dotly/dotbot automatically"
@@ -12,6 +13,7 @@ echo
 echo "OpenCode configuration files location:"
 echo "- Config: $DOTFILES_PATH/config/opencode/"
 echo "- Secrets: $DOTFILES_PATH/secrets/opencode/"
+echo "- Global OpenCode rules: $DOTFILES_PATH/config/opencode/global/AGENTS.md"
 echo
 
 # Check if OpenCode is installed

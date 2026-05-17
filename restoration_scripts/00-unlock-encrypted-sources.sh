@@ -44,6 +44,7 @@ fi
 
 echo "Encrypted sources detected:"
 echo " - config/opencode/** (OpenCode agent configs)"
+echo " - config/opencode/global/AGENTS.md (Global OpenCode rules)"
 echo " - doc/opencode/** (Agent architecture docs)"
 echo " - secrets/opencode/** (OpenCode secrets)"
 echo " - git/work/.gitconfig (Work git config)"
@@ -86,6 +87,15 @@ if [ -f "config/opencode/opencode.json" ]; then
         echo "config/opencode/opencode.json"
     else
         echo "config/opencode/opencode.json - may still be encrypted"
+        VERIFICATION_FAILED=1
+    fi
+fi
+
+if [ -f "config/opencode/global/AGENTS.md" ]; then
+    if head -n 1 config/opencode/global/AGENTS.md >/dev/null 2>&1; then
+        echo "config/opencode/global/AGENTS.md"
+    else
+        echo "config/opencode/global/AGENTS.md - may still be encrypted"
         VERIFICATION_FAILED=1
     fi
 fi
