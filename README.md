@@ -156,7 +156,7 @@ Your dotfiles track installed packages across multiple package managers, making 
 
 - **Python/pip** → `langs/python/requirements.txt`
 - **uv tools** → `langs/python/uv_tools.txt` (installed by `restoration_scripts/02-uv-tools.sh` during `dot self install`)
-- **NPM** → `langs/js/global_modules.txt`
+- **NPM global** → `langs/js/global_modules.txt` (installed via `npm install -g` by `dot package import`)
 - **Volta** → `langs/js/volta_dependencies.txt`
 - **VSCode** → `editors/code/extensions.txt`
 
@@ -222,9 +222,11 @@ This will:
 **For Linux tools:**
 
 1. **Prefer snap/apt** for GUI apps and system tools (auto-tracked)
-2. **Use Homebrew** for development tools (auto-tracked via Brewfile)
-3. **Use uv tools** for Python CLI tools (e.g., `uv tool install basedpyright`) — tracked in `langs/python/uv_tools.txt` and restored by `restoration_scripts/02-uv-tools.sh`
-4. **For manual installs** (curl downloads to `~/.local/bin`), add install scripts to `restoration_scripts/`
+2. **Use Homebrew** for development tools and LSP servers (auto-tracked via Brewfile)
+   - Examples: `bash-language-server`, `yaml-language-server`
+3. **Use uv tools** for Python CLI tools and LSP servers (e.g., `uv tool install basedpyright`) — tracked in `langs/python/uv_tools.txt` and restored by `restoration_scripts/02-uv-tools.sh`
+4. **Use NPM global** for Node.js CLI tools not available on Homebrew — tracked in `langs/js/global_modules.txt`
+5. **For manual installs** (curl downloads to `~/.local/bin`), add install scripts to `restoration_scripts/`
 
 **Update regularly:**
 
