@@ -155,6 +155,7 @@ Your dotfiles track installed packages across multiple package managers, making 
 **Cross-platform:**
 
 - **Python/pip** → `langs/python/requirements.txt`
+- **uv tools** → `langs/python/uv_tools.txt` (installed by `restoration_scripts/02-uv-tools.sh` during `dot self install`)
 - **NPM** → `langs/js/global_modules.txt`
 - **Volta** → `langs/js/volta_dependencies.txt`
 - **VSCode** → `editors/code/extensions.txt`
@@ -195,9 +196,11 @@ git commit -m "Add ngrok to snap packages"
 
 ### Restoring Packages on New Machine
 
-During initial setup, packages are automatically imported via `dot package import` (step 5 above).
+During initial setup:
+- **Standard packages** are imported via `dot package import` (step 5 above)
+- **uv tools** are installed automatically by `restoration_scripts/02-uv-tools.sh` during `dot self install`
 
-To manually import packages later:
+To manually import standard packages later:
 
 ```bash
 dot package import
@@ -208,9 +211,11 @@ This will:
 - Install all Homebrew packages from Brewfile
 - Install all apt packages (Linux)
 - Install all snap packages (Linux)
-- Install all Python packages
+- Install all Python packages (via pip)
 - Install all NPM packages
 - Install all VSCode extensions
+
+**Note:** `dot package import` does NOT handle uv tools. Those are managed separately by the restoration script.
 
 ### Best Practices
 
@@ -218,7 +223,8 @@ This will:
 
 1. **Prefer snap/apt** for GUI apps and system tools (auto-tracked)
 2. **Use Homebrew** for development tools (auto-tracked via Brewfile)
-3. **For manual installs** (curl downloads to `~/.local/bin`), add install scripts to `restoration_scripts/`
+3. **Use uv tools** for Python CLI tools (e.g., `uv tool install basedpyright`) — tracked in `langs/python/uv_tools.txt` and restored by `restoration_scripts/02-uv-tools.sh`
+4. **For manual installs** (curl downloads to `~/.local/bin`), add install scripts to `restoration_scripts/`
 
 **Update regularly:**
 
