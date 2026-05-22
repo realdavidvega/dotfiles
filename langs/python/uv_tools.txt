@@ -1,0 +1,5 @@
+# uv tools installed via `uv tool install`
+# These are restored by restoration_scripts/02-uv-tools.sh during dotly self install
+# Format: one tool per line. Version specifiers are supported.
+
+basedpyright
