@@ -11,6 +11,7 @@ binutils-avr
 bridge-utils
 build-essential
 ca-certificates
+chafa
 clang-format
 cloud-init
 cloudflared

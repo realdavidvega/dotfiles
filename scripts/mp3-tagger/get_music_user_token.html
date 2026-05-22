@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apple Music Token Helper</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 { color: #fa243c; }
+        .step {
+            background: #f8f8f8;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin: 16px 0;
+        }
+        .step h3 { margin-top: 0; }
+        code {
+            background: #eee;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.9em;
+        }
+        pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 0.85em;
+        }
+        button {
+            background: #fa243c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 1em;
+            cursor: pointer;
+        }
+        button:hover { background: #d61f33; }
+        .token-box {
+            background: #e8f5e9;
+            border: 1px solid #4caf50;
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 12px;
+            word-break: break-all;
+            display: none;
+        }
+        .warning {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 12px;
+            margin: 16px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Apple Music Token Helper</h1>
+    <p>This page helps you get your <strong>Music User Token</strong> so you can export playlists via the Apple Music API.</p>
+
+    <div class="warning">
+        <strong>Note:</strong> You need an Apple Developer account (free) and a MusicKit private key for the full setup.
+        If you do not have these yet, follow the setup guide in the export script first.
+    </div>
+
+    <div class="step">
+        <h3>Step 1: Authorize</h3>
+        <p>Click the button below to sign in with Apple Music. This will request permission to read your library.</p>
+        <button id="auth-btn" onclick="authorize()">Sign In with Apple Music</button>
+        <p id="auth-status" style="margin-top:8px; color:#666;"></p>
+    </div>
+
+    <div class="step">
+        <h3>Step 2: Copy Your Token</h3>
+        <p>After signing in, your Music User Token will appear below. Copy it and use it with the export script.</p>
+        <div id="token-box" class="token-box"></div>
+    </div>
+
+    <div class="step">
+        <h3>Save for Reuse</h3>
+        <p>Save the token to your config so you do not need to do this every time:</p>
+        <pre>python3 ~/.dotfiles/scripts/mp3-tagger/export_apple_music_api.py \
+  --dev-token "YOUR_DEV_TOKEN" \
+  --user-token "YOUR_USER_TOKEN" \
+  --save-config</pre>
+    </div>
+
+    <script>
+        // You need a MusicKit Developer Token for this to work.
+        // Generate it first, then paste it here before opening this page.
+        const DEVELOPER_TOKEN = ''; // <-- Paste your dev token here
+
+        let music = null;
+
+        document.addEventListener('musickitloaded', function() {
+            if (!DEVELOPER_TOKEN) {
+                document.getElementById('auth-status').textContent =
+                    'Paste your Developer Token into the DEVELOPER_TOKEN variable in this HTML file first.';
+                document.getElementById('auth-btn').disabled = true;
+                return;
+            }
+
+            MusicKit.configure({
+                developerToken: DEVELOPER_TOKEN,
+                app: { name: 'Playlist Sync', build: '1.0.0' }
+            });
+            music = MusicKit.getInstance();
+            document.getElementById('auth-status').textContent = 'MusicKit ready. Click Sign In.';
+        });
+
+        async function authorize() {
+            if (!music) {
+                alert('MusicKit not loaded. Make sure you pasted your Developer Token.');
+                return;
+            }
+            try {
+                const userToken = await music.authorize();
+                const box = document.getElementById('token-box');
+                box.textContent = userToken;
+                box.style.display = 'block';
+                document.getElementById('auth-status').textContent = 'Authorized! Token displayed above.';
+            } catch (err) {
+                document.getElementById('auth-status').textContent = 'Authorization failed: ' + err.message;
+            }
+        }
+    </script>
+    <script src="https://js-cdn.music.apple.com/musickit/v1/musickit.js"></script>
+</body>
+</html>

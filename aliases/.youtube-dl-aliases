@@ -1,92 +1,135 @@
-# yt video aliases
-alias yt="yt-dlp -S ext"
-alias yt-best="yt-dlp -f bestvideo+bestaudio"
-alias yt-mp4="yt-dlp -f mp4"
+# yt-dlp aliases with sensible defaults for videos, audio, and playlists.
+# Source: ~/.dotfiles/aliases/.youtube-dl-aliases
+
+sourceif "$DOTFILES_PATH/scripts/yt-dlp/yt-dlp-common.sh"
+
+function yt-mp4 {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(-f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4" --merge-output-format mp4)
+    _yt_dlp_append_args "$(_yt_dlp_video_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
+function yt-best {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(-f "bestvideo+bestaudio")
+    _yt_dlp_append_args "$(_yt_dlp_video_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
+function yt {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(-S ext)
+    _yt_dlp_append_args "$(_yt_dlp_video_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
 alias yt-mp4-alt="yt-dlp -f 22"
 alias yt-mkv="yt-dlp --recode-video mkv -f 22"
-
-# formatting
 alias ytf="yt-dlp -f"
 alias ytlf="yt-dlp --list-formats"
 
-# yt audio aliases
-alias yta-aac="yt-dlp --extract-audio --audio-format aac --audio-quality 0"
-alias yta-best="yt-dlp --extract-audio --audio-format best --audio-quality 0"
-alias yta-flac="yt-dlp --extract-audio --audio-format flac --audio-quality 0"
-alias yta-m4a="yt-dlp --extract-audio --audio-format m4a --audio-quality 0"
-
 function yta-mp3 {
+    if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+        printf '%s\n' "Usage: yta-mp3 URL [yt-dlp options]"
+        return 0
+    fi
+
     local url="${1:?missing URL}"
     shift || true
-
-    local -a base_args=(--extract-audio --audio-format mp3 --audio-quality 0)
-
-    if [ -n "${YT_DLP_COOKIES:-}" ] && [ -f "${YT_DLP_COOKIES}" ]; then
-        yt-dlp --cookies "${YT_DLP_COOKIES}" "${base_args[@]}" "$url" "$@"
-        return $?
-    fi
-
-    if grep -qi microsoft /proc/version 2>/dev/null; then
-        local -a win_ytdlp_candidates=(
-            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python312/Scripts/yt-dlp.exe"
-            "/mnt/c/Users/david/AppData/Roaming/Python/Python312/Scripts/yt-dlp.exe"
-            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python313/Scripts/yt-dlp.exe"
-            "/mnt/c/Users/david/AppData/Roaming/Python/Python313/Scripts/yt-dlp.exe"
-            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python310/Scripts/yt-dlp.exe"
-            "/mnt/c/Users/david/AppData/Roaming/Python/Python310/Scripts/yt-dlp.exe"
-            "/mnt/c/Users/david/scoop/shims/yt-dlp.exe"
-        )
-        local -a win_python_candidates=(
-            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python313/python.exe"
-            "/mnt/c/Users/david/AppData/Local/Programs/Python/Python310/python.exe"
-        )
-        local -a chrome_profiles=("Profile 1" "Default")
-        local win_ytdlp
-        local output_path
-        output_path="$(wslpath -w "$PWD")"
-
-        if [ -n "${YT_DLP_CHROME_PROFILE:-}" ]; then
-            chrome_profiles=("${YT_DLP_CHROME_PROFILE}" "${chrome_profiles[@]}")
-        fi
-
-        if command -v yt-dlp.exe >/dev/null 2>&1; then
-            win_ytdlp="$(command -v yt-dlp.exe)"
-        else
-            for candidate in "${win_ytdlp_candidates[@]}"; do
-                if [ -f "$candidate" ]; then
-                    win_ytdlp="$candidate"
-                    break
-                fi
-            done
-        fi
-
-        if [ -n "${win_ytdlp:-}" ]; then
-            local profile
-            for profile in "${chrome_profiles[@]}"; do
-                "$win_ytdlp" --cookies-from-browser "chrome:${profile}" -P "$output_path" "${base_args[@]}" "$url" "$@" && return 0
-            done
-        fi
-
-        local win_py
-        for win_py in "${win_python_candidates[@]}"; do
-            if [ -f "$win_py" ] && "$win_py" -c "import yt_dlp" >/dev/null 2>&1; then
-                local profile
-                for profile in "${chrome_profiles[@]}"; do
-                    "$win_py" -m yt_dlp --cookies-from-browser "chrome:${profile}" -P "$output_path" "${base_args[@]}" "$url" "$@" && return 0
-                done
-            fi
-        done
-    fi
-
-    if [ -d "$HOME/.mozilla/firefox" ]; then
-        yt-dlp --cookies-from-browser firefox "${base_args[@]}" "$url" "$@"
-        return $?
-    fi
-
-    echo "yta-mp3: no automated cookie source available. Set YT_DLP_COOKIES, install Windows yt-dlp.exe, or configure Firefox profile." >&2
-    return 1
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(--audio-format mp3 --audio-quality 0)
+    _yt_dlp_append_args "$(_yt_dlp_audio_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
 }
 
-alias yta-opus="yt-dlp --extract-audio --audio-format opus --audio-quality 0"
-alias yta-vorbis="yt-dlp --extract-audio --audio-format vorbis --audio-quality 0"
-alias yta-wav="yt-dlp --extract-audio --audio-format wav --audio-quality 0"
+function yta-aac {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(--audio-format aac --audio-quality 0)
+    _yt_dlp_append_args "$(_yt_dlp_audio_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
+function yta-flac {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(--audio-format flac --audio-quality 0)
+    _yt_dlp_append_args "$(_yt_dlp_audio_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
+function yta-m4a {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(--audio-format m4a --audio-quality 0)
+    _yt_dlp_append_args "$(_yt_dlp_audio_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
+function yta-opus {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(--audio-format opus --audio-quality 0)
+    _yt_dlp_append_args "$(_yt_dlp_audio_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
+function yta-vorbis {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(--audio-format vorbis --audio-quality 0)
+    _yt_dlp_append_args "$(_yt_dlp_audio_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
+function yta-wav {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(--audio-format wav --audio-quality 0)
+    _yt_dlp_append_args "$(_yt_dlp_audio_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
+
+function yta-best {
+    local url="${1:?missing URL}"
+    shift || true
+    local ytdlp
+    ytdlp="$(_yt_dlp_cmd)" || return 1
+    local -a args=(--audio-format best --audio-quality 0)
+    _yt_dlp_append_args "$(_yt_dlp_audio_args)"
+    _yt_dlp_append_args "$(_yt_dlp_cookies "$ytdlp")"
+    "$ytdlp" "${args[@]}" "$@" -- "$url"
+}
