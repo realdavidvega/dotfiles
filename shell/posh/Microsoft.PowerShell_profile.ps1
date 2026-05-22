@@ -73,22 +73,58 @@ Set-Alias -Name rwsl -Value Restart-WSL
 # Cmd aliases
 ###################################################
 
-# Download MP3
+# Download MP3 (enhanced with metadata and thumbnail embedding)
 function yta-mp3 {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$url
+        [string]$url,
+        [Parameter(ValueFromRemainingArguments = $true)]
+        $remainingArgs
     )
-    yt-dlp --extract-audio --audio-format mp3 --audio-quality 0 $url
+    $baseArgs = @(
+        '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0',
+        '--embed-metadata', '--embed-thumbnail',
+        '--continue', '--no-overwrites',
+        '--output', '%(title)s [%(id)s].%(ext)s'
+    )
+    yt-dlp @baseArgs @remainingArgs $url
 }
 
-# Download MP4
+# Download MP4 (enhanced with metadata, thumbnail, and subtitle embedding)
 function yt-mp4 {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$url
+        [string]$url,
+        [Parameter(ValueFromRemainingArguments = $true)]
+        $remainingArgs
     )
-    yt-dlp -f bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4 --merge-output-format mp4 $url
+    $baseArgs = @(
+        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
+        '--merge-output-format', 'mp4',
+        '--embed-metadata', '--embed-thumbnail', '--embed-subs',
+        '--sub-langs', 'all,-live_chat',
+        '--continue', '--no-overwrites',
+        '--output', '%(title)s [%(id)s].%(ext)s'
+    )
+    yt-dlp @baseArgs @remainingArgs $url
+}
+
+# Download best quality regardless of container
+function yt-best {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$url,
+        [Parameter(ValueFromRemainingArguments = $true)]
+        $remainingArgs
+    )
+    $baseArgs = @(
+        '-f', 'bestvideo+bestaudio',
+        '--embed-metadata', '--embed-thumbnail', '--embed-subs',
+        '--sub-langs', 'all,-live_chat',
+        '--continue', '--no-overwrites',
+        '--output', '%(title)s [%(id)s].%(ext)s'
+    )
+    yt-dlp @baseArgs @remainingArgs $url
 }
 
 # App aliases

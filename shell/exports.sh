@@ -24,10 +24,14 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   export OPENCODE_PATH=$HOME/.opencode
   export OCX_PROFILE=black
 
+  # Global Python venv for dotfiles packages
+  export DOTFILES_PYTHON_VENV="$HOME/.local/share/dotfiles/python-venv"
+
   path=(
     "$HOME/bin"
     "$DOTLY_PATH/bin"
     "$DOTFILES_PATH/bin"
+    "$DOTFILES_PYTHON_VENV/bin"
     "$DOCKER_PATH/bin"
     "$BUN_INSTALL/bin"
     "$OPENCODE_PATH/bin"
@@ -97,6 +101,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Linux brew
   eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
+  # Ensure dotfiles bin (including pip3 shim) and venv bin take precedence over brew
+  export PATH="$DOTFILES_PATH/bin:$DOTFILES_PYTHON_VENV/bin:$PATH"
+
   # Apps
   alias open="$C_DRIVE/Windows/SysWOW64/explorer.exe"
   alias sublime="$C_DRIVE/Program\ Files/Sublime\ Text/sublime_text.exe"
@@ -127,10 +134,14 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Opencode path
   export OPENCODE_PATH=$HOME/.opencode
 
+  # Global Python venv for dotfiles packages
+  export DOTFILES_PYTHON_VENV="$HOME/.local/share/dotfiles/python-venv"
+
   path=(
     "$HOME/bin"
     "$DOTLY_PATH/bin"
     "$DOTFILES_PATH/bin"
+    "$DOTFILES_PYTHON_VENV/bin"
     "$BUN_INSTALL/bin"
     "$OPENCODE_PATH/bin"
     "$DOCKER_PATH/bin"

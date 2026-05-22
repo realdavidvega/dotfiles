@@ -1,1 +1,12 @@
+certifi==2026.5.20
+charset-normalizer==3.4.7
+greenlet==3.5.1
+idna==3.16
+packaging==26.2
+playwright==1.60.0
+pyee==13.0.1
+pyjwt==2.13.0
+requests==2.34.2
+typing-extensions==4.15.0
+urllib3==2.7.0
 wheel==0.46.3
