@@ -26,7 +26,7 @@ from difflib import SequenceMatcher
 
 DEFAULT_LIBRARY_DIR = Path("/mnt/c/Users/david/iCloudDrive/1-Storage/1-Libraries/3-Music")
 DEFAULT_DOWNLOAD_DIR = Path("/mnt/c/Users/david/iCloudDrive/1-Storage/1-Libraries/3-Music/0-To Check")
-DEFAULT_PLAYLIST_DIR = Path.home() / "playlists"
+DEFAULT_PLAYLIST_DIR = Path.home() / "workspace" / "resources" / "playlists"
 
 MATCH_THRESHOLD = 0.60
 YT_DLP_BIN = "yt-dlp"
@@ -358,7 +358,7 @@ def main():
             print(f"Playlist directory not found: {args.playlist_dir}")
             print("Create it and add .txt or .m3u files, or use --playlist for a single file.")
             sys.exit(1)
-        playlist_files = sorted(args.playlist_dir.glob("*.txt")) + sorted(args.playlist_dir.glob("*.m3u"))
+        playlist_files = sorted(args.playlist_dir.rglob("*.txt")) + sorted(args.playlist_dir.rglob("*.m3u"))
         if not playlist_files:
             print(f"No .txt or .m3u files found in: {args.playlist_dir}")
             sys.exit(0)
