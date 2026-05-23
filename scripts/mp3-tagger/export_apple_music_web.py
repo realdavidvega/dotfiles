@@ -31,6 +31,16 @@ except ImportError:
 DEFAULT_OUTPUT = Path.home() / "workspace" / "resources" / "playlists"
 APPLE_MUSIC_URL = "https://music.apple.com"
 STATE_FILE = Path.home() / ".config" / "playlist-sync" / "apple-music-state.json"
+PERSISTENT_PROFILE_DIR = Path.home() / ".config" / "playlist-sync" / "chromium-profile"
+
+
+def sanitize_name(name: str) -> str:
+    safe = "".join(c if c.isalnum() or c in " -_" else "-" for c in name)
+    safe = re.sub(r"\s+", " ", safe).strip()
+    safe = re.sub(r"\s*-+\s*$", "", safe)
+    safe = re.sub(r"-+", "-", safe)
+    safe = safe.lstrip(".- ")
+    return safe.strip(". ")
 
 
 def wait_for_login(page, timeout_ms: int = 300000) -> bool:
@@ -222,6 +232,18 @@ def fallback_extract_tracks_dom(page) -> list:
                 title = title_el.inner_text().strip() if title_el else ""
                 artist = artist_el.inner_text().strip() if artist_el else ""
 
+                if not artist:
+                    row_lines = [x.strip() for x in row.inner_text().splitlines() if x.strip()]
+                    if title:
+                        for line in row_lines:
+                            if line != title:
+                                artist = line
+                                break
+                    elif row_lines:
+                        title = row_lines[0]
+                        if len(row_lines) > 1:
+                            artist = row_lines[1]
+
                 if title:
                     tracks.append({"title": title, "artist": artist})
             except Exception:
@@ -234,10 +256,10 @@ def fallback_extract_tracks_dom(page) -> list:
 
 
 def save_playlist_txt(playlist_name: str, tracks: list, output_dir: Path, folder: str = "") -> Path:
-    safe_name = "".join(c if c.isalnum() or c in " -_" else "-" for c in playlist_name).strip()
+    safe_name = sanitize_name(playlist_name)
 
     if folder:
-        safe_folder = "".join(c if c.isalnum() or c in " -_" else "-" for c in folder).strip()
+        safe_folder = sanitize_name(folder)
         target_dir = output_dir / safe_folder
     else:
         target_dir = output_dir
@@ -273,9 +295,14 @@ def main():
     print(f"  Output: {args.output}")
     print(f"{'='*70}\n")
 
-    if args.clear_state and STATE_FILE.exists():
-        STATE_FILE.unlink()
-        print(f"  Cleared saved session state: {STATE_FILE}")
+    if args.clear_state:
+        if STATE_FILE.exists():
+            STATE_FILE.unlink()
+            print(f"  Cleared saved session state: {STATE_FILE}")
+        if PERSISTENT_PROFILE_DIR.exists():
+            import shutil
+            shutil.rmtree(PERSISTENT_PROFILE_DIR, ignore_errors=True)
+            print(f"  Cleared persistent profile: {PERSISTENT_PROFILE_DIR}")
 
     with sync_playwright() as p:
         browser = None
@@ -298,39 +325,22 @@ def main():
                 print(f"  Could not connect via CDP: {e}")
                 state_loaded = False
         else:
-            browser = p.chromium.launch(headless=args.headless)
-            state_loaded = False
-
-            if STATE_FILE.exists():
-                print(f"  Restoring session state from {STATE_FILE}")
-                context = browser.new_context(
-                    viewport={"width": 1400, "height": 900},
-                    storage_state=str(STATE_FILE),
-                )
-            page = context.new_page()
+            PERSISTENT_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=str(PERSISTENT_PROFILE_DIR),
+                headless=args.headless,
+                viewport={"width": 1400, "height": 900},
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            print(f"  Using persistent profile: {PERSISTENT_PROFILE_DIR}")
             print(f"  Opening {APPLE_MUSIC_URL}...")
             page.goto(APPLE_MUSIC_URL, wait_until="domcontentloaded", timeout=15000)
 
-            if page.query_selector('[data-testid="library-sidebar"] , [data-testid="your-library"] , [aria-label*="Library"]') is not None:
-                print("  Session restored. Already logged in.")
-                state_loaded = True
-            else:
-                print("  Saved session expired. Re-authentication required.")
-                context.close()
-
-        if not state_loaded:
-            context = browser.new_context(viewport={"width": 1400, "height": 900})
-            page = context.new_page()
-            print(f"  Opening {APPLE_MUSIC_URL}...")
-            page.goto(APPLE_MUSIC_URL, wait_until="domcontentloaded", timeout=15000)
-
-            if not wait_for_login(page):
-                browser.close()
-                sys.exit(1)
-
-            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            context.storage_state(path=str(STATE_FILE))
-            print(f"  Session state saved to {STATE_FILE}")
+            if page.query_selector('[data-testid="library-sidebar"] , [data-testid="your-library"] , [aria-label*="Library"]') is None:
+                if not wait_for_login(page):
+                    context.close()
+                    sys.exit(1)
+                print("  Login established in persistent profile.")
 
         if not navigate_to_playlists(page):
             print("  Could not navigate to playlists.")
@@ -360,9 +370,9 @@ def main():
             folder = playlist.get("folder", "")
 
             if args.resume:
-                safe_name = "".join(c if c.isalnum() or c in " -_" else "-" for c in name).strip()
+                safe_name = sanitize_name(name)
                 if folder:
-                    safe_folder = "".join(c if c.isalnum() or c in " -_" else "-" for c in folder).strip()
+                    safe_folder = sanitize_name(folder)
                     existing = args.output / safe_folder / f"{safe_name}.txt"
                 else:
                     existing = args.output / f"{safe_name}.txt"
@@ -383,8 +393,8 @@ def main():
             else:
                 print(f"  ⚠ No tracks found, skipping")
 
-        if not args.cdp and browser:
-            browser.close()
+        if not args.cdp and context:
+            context.close()
 
     print(f"\n{'='*70}")
     print(f"  Exported: {exported} playlists ({total_tracks} tracks)")
