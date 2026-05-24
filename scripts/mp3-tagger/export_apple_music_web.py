@@ -17,8 +17,10 @@ Usage:
 import re
 import sys
 import json
+import csv
 import argparse
 from pathlib import Path
+from typing import Any
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -41,6 +43,39 @@ def sanitize_name(name: str) -> str:
     safe = re.sub(r"-+", "-", safe)
     safe = safe.lstrip(".- ")
     return safe.strip(". ")
+
+
+def is_duration_token(value: str) -> bool:
+    return bool(re.match(r"^\d{1,2}:\d{2}(?::\d{2})?(?:\s*[-|]\s*)?$", value.strip()))
+
+
+def clean_artist_value(value: str) -> str:
+    v = (value or "").strip()
+    if is_duration_token(v):
+        return ""
+    return v
+
+
+def strip_duration_prefix(value: str) -> str:
+    v = (value or "").strip()
+    return re.sub(r"^\d{1,2}:\d{2}(?::\d{2})?\s*-\s*", "", v, count=1)
+
+
+def deep_get_first_str(obj: Any, paths: list[tuple[str, ...]]) -> str:
+    for path in paths:
+        cur = obj
+        ok = True
+        for key in path:
+            if isinstance(cur, dict) and key in cur:
+                cur = cur[key]
+            else:
+                ok = False
+                break
+        if ok and cur is not None:
+            text = str(cur).strip()
+            if text:
+                return text
+    return ""
 
 
 def wait_for_login(page, timeout_ms: int = 300000) -> bool:
@@ -78,12 +113,61 @@ def navigate_to_playlists(page) -> bool:
     except Exception:
         pass
 
-    page.goto(f"{APPLE_MUSIC_URL}/us/library/playlists", wait_until="domcontentloaded", timeout=15000)
-    page.wait_for_timeout(3000)
-    return True
+    targets = [
+        f"{APPLE_MUSIC_URL}/us/library/playlists",
+        f"{APPLE_MUSIC_URL}/library/playlists",
+    ]
+
+    for target in targets:
+        try:
+            page.goto(target, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(2500)
+        except Exception:
+            continue
+
+        if playlists_visible(page):
+            return True
+
+    return False
 
 
-def extract_serialized_data(page) -> dict:
+def playlists_visible(page) -> bool:
+    """Return True only when playlist/folder nodes are actually visible."""
+    selectors = [
+        'li[data-testid="navigation-item__folder"]',
+        'a[href*="/library/playlist/"]',
+        'li.navigation-item__folder--has-children',
+    ]
+    for sel in selectors:
+        try:
+            if page.query_selector(sel) is not None:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def ensure_playlists_ready(page) -> bool:
+    """Open playlists directly; if redirected/logged out, perform login and retry."""
+    for attempt in range(2):
+        if navigate_to_playlists(page):
+            return True
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=20000)
+            page.wait_for_timeout(1500)
+        except Exception:
+            pass
+        print(f"  Playlist view not visible (attempt {attempt + 1}/2).")
+
+    print("  Existing session not ready, login required.")
+    if not wait_for_login(page):
+        return False
+
+    print("  Login confirmed, retrying playlist navigation...")
+    return navigate_to_playlists(page)
+
+
+def extract_serialized_data(page) -> dict[str, Any]:
     try:
         script = page.query_selector('script#serialized-server-data')
         if script:
@@ -116,7 +200,7 @@ def expand_all_folders(page) -> None:
             break
 
 
-def extract_playlists(page) -> list:
+def extract_playlists(page) -> list[dict[str, str]]:
     print("  Extracting playlists from sidebar...")
     playlists = []
 
@@ -164,7 +248,7 @@ def extract_playlists(page) -> list:
     return playlists
 
 
-def extract_playlist_tracks(page, playlist_url: str, timeout_ms: int = 30000) -> list:
+def extract_playlist_tracks(page, playlist_url: str, timeout_ms: int = 30000) -> list[dict[str, str]]:
     print(f"  Opening playlist...")
     url = f"{APPLE_MUSIC_URL}{playlist_url}"
     try:
@@ -182,10 +266,37 @@ def extract_playlist_tracks(page, playlist_url: str, timeout_ms: int = 30000) ->
             if section.get("itemKind") == "trackLockup":
                 for item in section.get("items", []):
                     try:
-                        title = item.get("title", "")
-                        artist = item.get("artistName", "")
+                        title = strip_duration_prefix(item.get("title", ""))
+                        artist = clean_artist_value(item.get("artistName", ""))
+                        album = item.get("albumName", "")
+                        play_params = item.get("playParams", {}) if isinstance(item.get("playParams", {}), dict) else {}
+                        isrc = deep_get_first_str(item, [
+                            ("isrc",),
+                            ("isrcCode",),
+                            ("attributes", "isrc"),
+                            ("meta", "isrc"),
+                            ("playParams", "isrc"),
+                        ])
+                        apple_id = deep_get_first_str(item, [
+                            ("id",),
+                            ("contentId",),
+                            ("playParams", "id"),
+                            ("attributes", "playParams", "id"),
+                        ])
+                        if not album:
+                            album = deep_get_first_str(item, [
+                                ("albumName",),
+                                ("attributes", "albumName"),
+                                ("meta", "album"),
+                            ])
                         if title:
-                            tracks.append({"title": title, "artist": artist})
+                            tracks.append({
+                                "title": title,
+                                "artist": artist,
+                                "album": album,
+                                "isrc": isrc,
+                                "apple_id": apple_id,
+                            })
                     except Exception:
                         pass
 
@@ -193,10 +304,19 @@ def extract_playlist_tracks(page, playlist_url: str, timeout_ms: int = 30000) ->
             og = data.get("seoData", {}).get("ogSongs", [])
             for song in og:
                 try:
-                    title = song.get("title", "")
-                    artist = song.get("artist", "")
+                    title = strip_duration_prefix(song.get("title", ""))
+                    artist = clean_artist_value(song.get("artist", ""))
+                    album = song.get("album", "")
+                    isrc = str(song.get("isrc", "") or "")
+                    apple_id = str(song.get("id", "") or song.get("appleId", "") or "")
                     if title:
-                        tracks.append({"title": title, "artist": artist})
+                        tracks.append({
+                            "title": title,
+                            "artist": artist,
+                            "album": album,
+                            "isrc": isrc,
+                            "apple_id": apple_id,
+                        })
                 except Exception:
                     pass
 
@@ -210,7 +330,7 @@ def extract_playlist_tracks(page, playlist_url: str, timeout_ms: int = 30000) ->
     return tracks
 
 
-def fallback_extract_tracks_dom(page) -> list:
+def fallback_extract_tracks_dom(page) -> list[dict[str, str]]:
     selectors = [
         '[data-testid="track-list-row"]',
         '[data-testid="songs-list-row"]',
@@ -228,24 +348,42 @@ def fallback_extract_tracks_dom(page) -> list:
             try:
                 title_el = row.query_selector('[class*="title"], [data-testid*="title"], [id*="title"]')
                 artist_el = row.query_selector('[class*="artist"], [data-testid*="artist"]')
+                album_el = row.query_selector('[class*="album"], [data-testid*="album"]')
 
-                title = title_el.inner_text().strip() if title_el else ""
-                artist = artist_el.inner_text().strip() if artist_el else ""
+                title = strip_duration_prefix(title_el.inner_text().strip() if title_el else "")
+                artist = clean_artist_value(artist_el.inner_text().strip() if artist_el else "")
+                album = album_el.inner_text().strip() if album_el else ""
+                isrc = ""
+                apple_id = ""
 
-                if not artist:
-                    row_lines = [x.strip() for x in row.inner_text().splitlines() if x.strip()]
-                    if title:
-                        for line in row_lines:
-                            if line != title:
-                                artist = line
+                song_link = row.query_selector('a[href*="/song/"]')
+                if song_link:
+                    href = song_link.get_attribute("href") or ""
+                    m = re.search(r"/song/(\d+)", href)
+                    if m:
+                        apple_id = m.group(1)
+
+                row_lines = [x.strip() for x in row.inner_text().splitlines() if x.strip()]
+                filtered_lines = [x for x in row_lines if not is_duration_token(x)]
+
+                if not title and filtered_lines:
+                    title = strip_duration_prefix(filtered_lines[0])
+
+                if not artist and title:
+                    for line in filtered_lines:
+                        if line != title:
+                            artist = clean_artist_value(line)
+                            if artist:
                                 break
-                    elif row_lines:
-                        title = row_lines[0]
-                        if len(row_lines) > 1:
-                            artist = row_lines[1]
+
+                if not album and title:
+                    for line in filtered_lines:
+                        if line != title and line != artist:
+                            album = line
+                            break
 
                 if title:
-                    tracks.append({"title": title, "artist": artist})
+                    tracks.append({"title": title, "artist": artist, "album": album, "isrc": isrc, "apple_id": apple_id})
             except Exception:
                 pass
 
@@ -255,7 +393,7 @@ def fallback_extract_tracks_dom(page) -> list:
     return []
 
 
-def save_playlist_txt(playlist_name: str, tracks: list, output_dir: Path, folder: str = "") -> Path:
+def save_playlist_txt(playlist_name: str, tracks: list[dict[str, str]], output_dir: Path, folder: str = "") -> Path:
     safe_name = sanitize_name(playlist_name)
 
     if folder:
@@ -271,22 +409,50 @@ def save_playlist_txt(playlist_name: str, tracks: list, output_dir: Path, folder
         for track in tracks:
             artist = track.get("artist", "")
             title = track.get("title", "")
+            album = track.get("album", "")
             if artist and title:
-                f.write(f"{artist} - {title}\n")
+                if album:
+                    f.write(f"{artist} - {title} || Album: {album}\n")
+                else:
+                    f.write(f"{artist} - {title}\n")
             elif title:
                 f.write(f"{title}\n")
 
     return path
 
 
+def save_all_playlists_csv(rows: list[dict[str, str]], output_dir: Path, csv_filename: str) -> Path:
+    target_dir = output_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / csv_filename
+
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Track name", "Artist name", "Album", "Playlist name", "Type", "ISRC", "Apple - id"])
+        for track in rows:
+            writer.writerow([
+                track.get("title", ""),
+                track.get("artist", ""),
+                track.get("album", ""),
+                track.get("playlist_name", ""),
+                track.get("type", "Playlist") or "Playlist",
+                track.get("isrc", ""),
+                track.get("apple_id", ""),
+            ])
+
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description="Export Apple Music playlists via web scraping")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Directory for playlist text files")
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Directory for exported playlist files")
+    parser.add_argument("--format", choices=["csv", "txt"], default="csv", help="Export format (default: csv)")
+    parser.add_argument("--csv-filename", type=str, default="My Apple Music Library.csv", help="Filename for consolidated CSV export")
     parser.add_argument("--headless", action="store_true", help="Run browser headless (not recommended for first login)")
     parser.add_argument("--name-filter", type=str, default="^\\d+-", help="Regex to filter playlists by name (default: '^\\d+-' for digit+dash prefix)")
     parser.add_argument("--clear-state", action="store_true", help="Clear saved session state and force re-login")
     parser.add_argument("--timeout", type=int, default=60, help="Page load timeout in seconds (default: 60)")
-    parser.add_argument("--resume", action="store_true", help="Skip playlists that already have exported .txt files")
+    parser.add_argument("--resume", action="store_true", help="Skip playlists that already have exported files for selected --format")
     parser.add_argument("--cdp", type=str, default="", help="Connect to existing browser via CDP (e.g., http://localhost:9222)")
     args = parser.parse_args()
 
@@ -342,16 +508,18 @@ def main():
                     sys.exit(1)
                 print("  Login established in persistent profile.")
 
-        if not navigate_to_playlists(page):
+        if not ensure_playlists_ready(page):
             print("  Could not navigate to playlists.")
-            browser.close()
+            if browser:
+                browser.close()
             sys.exit(1)
 
         expand_all_folders(page)
         playlists = extract_playlists(page)
         if not playlists:
             print("  No playlists found.")
-            browser.close()
+            if browser:
+                browser.close()
             sys.exit(0)
 
         if args.name_filter:
@@ -363,6 +531,7 @@ def main():
         exported = 0
         total_tracks = 0
         skipped = 0
+        csv_rows: list[dict[str, str]] = []
 
         for i, playlist in enumerate(playlists):
             name = playlist["name"]
@@ -373,9 +542,9 @@ def main():
                 safe_name = sanitize_name(name)
                 if folder:
                     safe_folder = sanitize_name(folder)
-                    existing = args.output / safe_folder / f"{safe_name}.txt"
+                    existing = args.output / safe_folder / f"{safe_name}.{args.format}"
                 else:
-                    existing = args.output / f"{safe_name}.txt"
+                    existing = args.output / f"{safe_name}.{args.format}"
                 if existing.exists():
                     skipped += 1
                     continue
@@ -386,12 +555,24 @@ def main():
 
             tracks = extract_playlist_tracks(page, href, timeout_ms=args.timeout * 1000)
             if tracks:
-                path = save_playlist_txt(name, tracks, args.output, folder)
+                if args.format == "csv":
+                    for track in tracks:
+                        row = dict(track)
+                        row["playlist_name"] = name
+                        row["type"] = "Playlist"
+                        csv_rows.append(row)
+                    path = args.output / args.csv_filename
+                else:
+                    path = save_playlist_txt(name, tracks, args.output, folder)
                 print(f"  Saved: {path}")
                 exported += 1
                 total_tracks += len(tracks)
             else:
                 print(f"  ⚠ No tracks found, skipping")
+
+        if args.format == "csv":
+            final_csv = save_all_playlists_csv(csv_rows, args.output, args.csv_filename)
+            print(f"\n  Wrote consolidated CSV: {final_csv} ({len(csv_rows)} rows)")
 
         if not args.cdp and context:
             context.close()

@@ -18,13 +18,18 @@ import shutil
 import argparse
 import subprocess
 import json
+import csv
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict
 from difflib import SequenceMatcher
+from collections import defaultdict
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
-DEFAULT_LIBRARY_DIR = Path("/mnt/c/Users/david/iCloudDrive/1-Storage/1-Libraries/3-Music")
+DEFAULT_LIBRARY_DIRS = [
+    Path("/mnt/c/Users/david/iCloudDrive/1-Storage/1-Libraries/3-Music"),
+    Path("/mnt/c/Users/david/Music/iTunes/iTunes Media/Music"),
+]
 DEFAULT_DOWNLOAD_DIR = Path("/mnt/c/Users/david/iCloudDrive/1-Storage/1-Libraries/3-Music/0-To Check")
 DEFAULT_PLAYLIST_DIR = Path.home() / "workspace" / "resources" / "playlists"
 
@@ -32,6 +37,26 @@ MATCH_THRESHOLD = 0.60
 TITLE_STRICT_MIN = 0.72
 ARTIST_STRICT_MIN = 0.45
 YT_DLP_BIN = "yt-dlp"
+
+
+def make_track_record(
+    artist: str = "",
+    title: str = "",
+    album: str = "",
+    playlist_name: str = "",
+    track_type: str = "Playlist",
+    isrc: str = "",
+    apple_id: str = "",
+) -> dict[str, str]:
+    return {
+        "artist": artist.strip(),
+        "title": title.strip(),
+        "album": album.strip(),
+        "playlist_name": playlist_name.strip(),
+        "type": track_type.strip() or "Playlist",
+        "isrc": isrc.strip(),
+        "apple_id": apple_id.strip(),
+    }
 
 # ── Playlist Categorization ──────────────────────────────────────────────────
 
@@ -92,12 +117,23 @@ def fuzzy_ratio(a: str, b: str) -> float:
 
 def normalize_for_match(text: str) -> str:
     text = text.lower()
-    text = re.sub(r"\([^)]*\)", " ", text)
-    text = re.sub(r"\[[^\]]*\]", " ", text)
-    text = re.sub(r"\b(remaster(ed)?|live|radio edit|edit|version|feat\.?|ft\.?)\b", " ", text)
+    text = re.sub(r"\b(feat\.?|ft\.?)\b", " ", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def extract_modifiers(text: str) -> set[str]:
+    lowered = (text or "").lower()
+    known = {
+        "remix", "slowed", "instrumental", "nightcore", "extended", "trap",
+        "piano", "guitar", "acoustic", "cover", "version", "reverb",
+    }
+    found = set()
+    for k in known:
+        if re.search(rf"\b{re.escape(k)}\b", lowered):
+            found.add(k)
+    return found
 
 
 def split_stem_artist_title(stem: str) -> Tuple[str, str]:
@@ -107,12 +143,22 @@ def split_stem_artist_title(stem: str) -> Tuple[str, str]:
     return "", stem.strip()
 
 
-def build_library_index(library_dir: Path) -> List[Tuple[str, Path]]:
-    """Index all MP3 files in the library for fast matching."""
-    print(f"  Indexing library: {library_dir}")
+def build_library_index(library_dirs: List[Path]) -> List[Tuple[str, Path]]:
+    """Index all audio files across one or more library roots."""
     files = []
-    for ext in ("*.mp3", "*.m4a", "*.flac", "*.ogg", "*.wma"):
-        files.extend(library_dir.rglob(ext))
+    seen: set[str] = set()
+    for library_dir in library_dirs:
+        if not library_dir.exists():
+            print(f"  Skipping missing library dir: {library_dir}")
+            continue
+        print(f"  Indexing library: {library_dir}")
+        for ext in ("*.mp3", "*.m4a", "*.flac", "*.ogg", "*.wma"):
+            for f in library_dir.rglob(ext):
+                f_str = str(f)
+                if f_str in seen:
+                    continue
+                seen.add(f_str)
+                files.append(f)
     
     index = []
     for f in files:
@@ -125,6 +171,52 @@ def build_library_index(library_dir: Path) -> List[Tuple[str, Path]]:
     return index
 
 
+def extract_isrc_tag(file_path: Path) -> str:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format_tags=isrc,ISRC",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(file_path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
+        if result.returncode != 0:
+            return ""
+        value = (result.stdout or "").strip().splitlines()
+        if not value:
+            return ""
+        return value[0].strip().upper()
+    except Exception:
+        return ""
+
+
+def build_isrc_index(index: List[Tuple[str, Path]], wanted_isrcs: set[str]) -> Dict[str, Path]:
+    """Build exact ISRC -> path map for required ISRCs only."""
+    if not wanted_isrcs:
+        return {}
+
+    print(f"  Building ISRC index for {len(wanted_isrcs)} requested codes")
+    remaining = set(x.strip().upper() for x in wanted_isrcs if x.strip())
+    by_isrc: Dict[str, Path] = {}
+
+    for _, path in index:
+        if not remaining:
+            break
+        code = extract_isrc_tag(path)
+        if not code:
+            continue
+        if code in remaining and code not in by_isrc:
+            by_isrc[code] = path
+            remaining.remove(code)
+
+    print(f"  ISRC exact matches in library: {len(by_isrc)}")
+    return by_isrc
+
+
 def find_best_match(artist: str, title: str, index: List[Tuple[str, Path]]) -> Optional[Path]:
     """Find the best matching audio file by comparing against filenames."""
     if not title.strip():
@@ -132,6 +224,7 @@ def find_best_match(artist: str, title: str, index: List[Tuple[str, Path]]) -> O
 
     title_norm = normalize_for_match(title)
     artist_norm = normalize_for_match(artist)
+    wanted_mods = extract_modifiers(title)
 
     best_path = None
     best_score = 0.0
@@ -141,8 +234,21 @@ def find_best_match(artist: str, title: str, index: List[Tuple[str, Path]]) -> O
         cand_title_norm = normalize_for_match(cand_title)
         cand_artist_norm = normalize_for_match(cand_artist)
         stem_norm = normalize_for_match(stem)
+        stem_mods = extract_modifiers(stem)
 
-        title_score = fuzzy_ratio(title_norm, cand_title_norm or stem_norm) if title_norm else 0.0
+        if wanted_mods and not wanted_mods.issubset(stem_mods):
+            continue
+
+        if title_norm:
+            if artist_norm:
+                title_score = fuzzy_ratio(title_norm, cand_title_norm or stem_norm)
+            else:
+                title_score = max(
+                    fuzzy_ratio(title_norm, cand_title_norm or stem_norm),
+                    fuzzy_ratio(title_norm, stem_norm),
+                )
+        else:
+            title_score = 0.0
         if title_score < TITLE_STRICT_MIN:
             continue
 
@@ -167,9 +273,18 @@ def find_best_match(artist: str, title: str, index: List[Tuple[str, Path]]) -> O
 
 # ── YouTube Download ─────────────────────────────────────────────────────────
 
-def download_from_youtube(artist: str, title: str, download_dir: Path) -> Optional[Path]:
+def download_from_youtube(
+    artist: str,
+    title: str,
+    download_dir: Path,
+    album: str = "",
+    isrc: str = "",
+) -> Optional[Path]:
     """Search YouTube and download the best audio-first match as MP3."""
-    query = f"{artist} {title}".strip()
+    query_parts = [artist.strip(), title.strip()]
+    if album.strip():
+        query_parts.append(album.strip())
+    query = " ".join([p for p in query_parts if p]).strip()
     search_query = f"ytsearch12:{query} audio"
 
     safe_name = sanitize_filename(query)
@@ -197,6 +312,7 @@ def download_from_youtube(artist: str, title: str, download_dir: Path) -> Option
             title_norm = normalize_for_match(title)
             artist_norm = normalize_for_match(artist)
             target_norm = normalize_for_match(query)
+            album_norm = normalize_for_match(album)
 
             def score_entry(entry: dict) -> float:
                 e_title = str(entry.get("title") or "")
@@ -214,6 +330,8 @@ def download_from_youtube(artist: str, title: str, download_dir: Path) -> Option
                     score += fuzzy_ratio(artist_norm, u_norm) * 0.10
                     if artist_norm in t_norm:
                         score += 0.08
+                if album_norm and album_norm in t_norm:
+                    score += 0.10
 
                 lowered = f"{e_title} {e_uploader} {e_channel}".lower()
 
@@ -303,8 +421,8 @@ def download_from_youtube(artist: str, title: str, download_dir: Path) -> Option
 
 # ── Playlist Parsing ──────────────────────────────────────────────────────────
 
-def parse_txt_playlist(path: Path) -> List[Tuple[str, str]]:
-    """Parse a simple text playlist: one 'Artist - Title' per line."""
+def parse_txt_playlist(path: Path) -> List[dict[str, str]]:
+    """Parse text playlist lines as: Artist - Title || Album: Name (album optional)."""
     tracks = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -315,6 +433,11 @@ def parse_txt_playlist(path: Path) -> List[Tuple[str, str]]:
             if re.match(r"^\d{1,2}:\d{2}\s+-\s+", line):
                 line = re.sub(r"^\d{1,2}:\d{2}\s+-\s+", "", line, count=1)
 
+            album = ""
+            if " || Album: " in line:
+                line, album = line.split(" || Album: ", 1)
+                album = album.strip()
+
             if " - " in line:
                 artist, title = line.split(" - ", 1)
                 artist = artist.strip()
@@ -323,12 +446,12 @@ def parse_txt_playlist(path: Path) -> List[Tuple[str, str]]:
                 artist = ""
                 title = line.strip()
             
-            tracks.append((artist, title))
+            tracks.append(make_track_record(artist=artist, title=title, album=album))
     return tracks
 
 
-def parse_m3u_playlist(path: Path) -> List[Tuple[str, str]]:
-    """Parse an M3U playlist and return (artist, title) tuples."""
+def parse_m3u_playlist(path: Path) -> List[dict[str, str]]:
+    """Parse an M3U playlist and return (artist, title, album) tuples."""
     tracks = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
@@ -342,16 +465,49 @@ def parse_m3u_playlist(path: Path) -> List[Tuple[str, str]]:
             track_info = meta[1].strip()
             if " - " in track_info:
                 artist, title = track_info.split(" - ", 1)
-                tracks.append((artist.strip(), title.strip()))
+                tracks.append(make_track_record(artist=artist, title=title))
             else:
-                tracks.append(("", track_info))
+                tracks.append(make_track_record(title=track_info))
     return tracks
 
 
-def parse_playlist(path: Path) -> List[Tuple[str, str]]:
+def parse_csv_playlist(path: Path) -> List[dict[str, str]]:
+    """Parse Apple-style CSV and return track records with all fields."""
+    tracks: List[dict[str, str]] = []
+    with open(path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if not row:
+                continue
+            title = (row.get("Track name") or "").strip()
+            artist = (row.get("Artist name") or "").strip()
+            album = (row.get("Album") or "").strip()
+            playlist_name = (row.get("Playlist name") or "").strip()
+            track_type = (row.get("Type") or "Playlist").strip()
+            isrc = (row.get("ISRC") or "").strip()
+            apple_id = (row.get("Apple - id") or "").strip()
+            if title:
+                tracks.append(
+                    make_track_record(
+                        artist=artist,
+                        title=title,
+                        album=album,
+                        playlist_name=playlist_name,
+                        track_type=track_type,
+                        isrc=isrc,
+                        apple_id=apple_id,
+                    )
+                )
+    return tracks
+
+
+def parse_playlist(path: Path) -> List[dict[str, str]]:
     """Auto-detect format and parse playlist."""
-    if path.suffix.lower() == ".m3u":
+    suffix = path.suffix.lower()
+    if suffix == ".m3u":
         return parse_m3u_playlist(path)
+    if suffix == ".csv":
+        return parse_csv_playlist(path)
     else:
         return parse_txt_playlist(path)
 
@@ -369,7 +525,24 @@ def sanitize_filename(name: str) -> str:
     return name.strip(". ")
 
 
-def enforce_mp3_metadata(file_path: Path, artist: str, title: str) -> None:
+def clean_title_for_filename(title: str) -> str:
+    """Ensure filename is only track title (never artist/album metadata)."""
+    t = title.strip()
+    if " || Album: " in t:
+        t = t.split(" || Album: ", 1)[0].strip()
+    return sanitize_filename(t)
+
+
+def enforce_mp3_metadata(
+    file_path: Path,
+    artist: str,
+    title: str,
+    album: str = "",
+    playlist_name: str = "",
+    track_type: str = "",
+    isrc: str = "",
+    apple_id: str = "",
+) -> None:
     if not file_path.exists() or file_path.suffix.lower() != ".mp3":
         return
     cmd = [
@@ -386,6 +559,14 @@ def enforce_mp3_metadata(file_path: Path, artist: str, title: str) -> None:
         f"artist={artist}",
         "-metadata",
         f"album_artist={artist}",
+        "-metadata",
+        f"album={album}",
+        "-metadata",
+        f"isrc={isrc}",
+        "-metadata",
+        f"grouping={playlist_name}",
+        "-metadata",
+        f"comment=Playlist={playlist_name}; Type={track_type}; AppleID={apple_id}; ISRC={isrc}",
         str(file_path.with_suffix(".tagging.tmp.mp3")),
     ]
     try:
@@ -404,12 +585,14 @@ def format_track_number(i: int) -> str:
 
 def sync_playlist(
     playlist_name: str,
-    tracks: List[Tuple[str, str]],
+    tracks: List[dict[str, str]],
     index: List[Tuple[str, Path]],
-    library_dir: Path,
+    isrc_index: Dict[str, Path],
+    library_dirs: List[Path],
     target_dir: Path,
     download_dir: Path,
     dry_run: bool,
+    number_prefix: bool,
 ) -> dict:
     """Sync a single playlist: find or download tracks, copy to categorized folder."""
     category = categorize_playlist(playlist_name)
@@ -434,13 +617,25 @@ def sync_playlist(
 
     new_files: set = set()
 
-    for i, (artist, title) in enumerate(tracks, start=1):
+    for i, track in enumerate(tracks, start=1):
+        artist = track.get("artist", "")
+        title = track.get("title", "")
+        album = track.get("album", "")
+        track_playlist_name = track.get("playlist_name", playlist_name) or playlist_name
+        track_type = track.get("type", "Playlist")
+        isrc = track.get("isrc", "")
+        apple_id = track.get("apple_id", "")
         num = format_track_number(i)
         downloaded_now = False
-        match_path = find_best_match(artist, title, index)
+        match_path = None
+        if isrc:
+            match_path = isrc_index.get(isrc.strip().upper())
+
+        if not match_path:
+            match_path = find_best_match(artist, title, index)
         
         if not match_path and not dry_run:
-            match_path = download_from_youtube(artist, title, download_dir)
+            match_path = download_from_youtube(artist, title, download_dir, album=album, isrc=isrc)
             if match_path:
                 report["downloaded"] += 1
                 downloaded_now = True
@@ -448,8 +643,11 @@ def sync_playlist(
         
         if match_path:
             ext = match_path.suffix
-            safe_title = sanitize_filename(title) or "Unknown"
-            new_name = f"{num}-{safe_title}{ext}"
+            safe_title = clean_title_for_filename(title) or "Unknown"
+            if number_prefix:
+                new_name = f"{num}-{safe_title}{ext}"
+            else:
+                new_name = f"{safe_title}{ext}"
             new_files.add(new_name)
 
             dest_path = playlist_dir / new_name
@@ -469,12 +667,24 @@ def sync_playlist(
                 if not dest_path.exists():
                     shutil.copyfile(str(match_path), str(dest_path))
                     if downloaded_now and artist and title:
-                        enforce_mp3_metadata(dest_path, artist=artist, title=title)
+                        enforce_mp3_metadata(
+                            dest_path,
+                            artist=artist,
+                            title=title,
+                            album=album,
+                            playlist_name=track_playlist_name,
+                            track_type=track_type,
+                            isrc=isrc,
+                            apple_id=apple_id,
+                        )
                     report["created"] += 1
 
             report["matched"] += 1
         else:
-            report["unmatched"].append(f"{num}- {artist} - {title}")
+            if album:
+                report["unmatched"].append(f"{num}- {artist} - {title} || Album: {album}")
+            else:
+                report["unmatched"].append(f"{num}- {artist} - {title}")
 
     for old_name, old_path in current_files.items():
         if old_name not in new_files:
@@ -496,18 +706,27 @@ def main():
     parser = argparse.ArgumentParser(
         description="Sync playlists with YouTube download fallback (no iTunes needed)"
     )
-    parser.add_argument("--playlist", type=Path, help="Path to a single playlist file (.txt or .m3u)")
+    parser.add_argument("--playlist", type=Path, help="Path to a single playlist file (.txt, .m3u, .csv)")
     parser.add_argument("--playlist-dir", type=Path, default=DEFAULT_PLAYLIST_DIR, help="Directory with playlist files")
-    parser.add_argument("--library-dir", type=Path, default=DEFAULT_LIBRARY_DIR, help="Root of your music library")
+    parser.add_argument(
+        "--library-dir",
+        type=Path,
+        action="append",
+        default=None,
+        help="Music library root. Repeat to include multiple roots. Defaults to iCloud + iTunes paths.",
+    )
     parser.add_argument("--target-dir", type=Path, default=None, help="Destination root for generated playlist folders (defaults to --library-dir)")
     parser.add_argument("--download-dir", type=Path, default=DEFAULT_DOWNLOAD_DIR, help="Where to save downloaded tracks")
     parser.add_argument("--apply", action="store_true", help="Actually create/update folders (default: dry-run)")
+    parser.add_argument("--no-number-prefix", action="store_true", help="Do not prefix output filenames with track numbers")
     args = parser.parse_args()
 
-    target_dir = args.target_dir or args.library_dir
+    library_dirs = args.library_dir if args.library_dir else list(DEFAULT_LIBRARY_DIRS)
+    target_dir = args.target_dir or library_dirs[0]
 
     dry_run = not args.apply
     mode = "DRY RUN" if dry_run else "APPLY"
+    number_prefix = not args.no_number_prefix
 
     playlist_files = []
     if args.playlist:
@@ -518,9 +737,13 @@ def main():
     else:
         if not args.playlist_dir.exists():
             print(f"Playlist directory not found: {args.playlist_dir}")
-            print("Create it and add .txt or .m3u files, or use --playlist for a single file.")
+            print("Create it and add .txt, .m3u, or .csv files, or use --playlist for a single file.")
             sys.exit(1)
-        raw_files = sorted(args.playlist_dir.rglob("*.txt")) + sorted(args.playlist_dir.rglob("*.m3u"))
+        raw_files = (
+            sorted(args.playlist_dir.rglob("*.txt"))
+            + sorted(args.playlist_dir.rglob("*.m3u"))
+            + sorted(args.playlist_dir.rglob("*.csv"))
+        )
         dedup: Dict[str, Path] = {}
         for p in raw_files:
             key = p.stem.strip().lower()
@@ -534,18 +757,18 @@ def main():
                 dedup[key] = p
         playlist_files = sorted(dedup.values())
         if not playlist_files:
-            print(f"No .txt or .m3u files found in: {args.playlist_dir}")
+            print(f"No .txt, .m3u, or .csv files found in: {args.playlist_dir}")
             sys.exit(0)
 
     print(f"\n{'='*70}")
     print(f"  Playlist Sync with YouTube Download — {mode}")
-    print(f"  Library:    {args.library_dir}")
+    print(f"  Library:    {', '.join(str(x) for x in library_dirs)}")
     print(f"  Target:     {target_dir}")
     print(f"  Downloads:  {args.download_dir}")
     print(f"  Playlists:  {len(playlist_files)}")
     print(f"{'='*70}\n")
 
-    index = build_library_index(args.library_dir)
+    index = build_library_index(library_dirs)
 
     total_matched = 0
     total_downloaded = 0
@@ -553,9 +776,38 @@ def main():
     total_created = 0
     total_removed = 0
 
+    parsed_playlists: List[Tuple[Path, str, List[dict[str, str]]]] = []
+    wanted_isrcs: set[str] = set()
     for playlist_path in playlist_files:
         playlist_name = playlist_path.stem
         tracks = parse_playlist(playlist_path)
+        if playlist_path.suffix.lower() == ".csv":
+            grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
+            for t in tracks:
+                grouped_name = (t.get("playlist_name", "") or "").strip() or playlist_name
+                grouped[grouped_name].append(t)
+            if grouped:
+                for g_name, g_tracks in grouped.items():
+                    for t in g_tracks:
+                        code = (t.get("isrc", "") or "").strip().upper()
+                        if code:
+                            wanted_isrcs.add(code)
+                    parsed_playlists.append((playlist_path, g_name, g_tracks))
+                continue
+
+        if tracks:
+            csv_playlist_name = tracks[0].get("playlist_name", "")
+            if csv_playlist_name:
+                playlist_name = csv_playlist_name
+            for t in tracks:
+                code = (t.get("isrc", "") or "").strip().upper()
+                if code:
+                    wanted_isrcs.add(code)
+        parsed_playlists.append((playlist_path, playlist_name, tracks))
+
+    isrc_index = build_isrc_index(index, wanted_isrcs)
+
+    for playlist_path, playlist_name, tracks in parsed_playlists:
         category = categorize_playlist(playlist_name)
         print(f"  [{category}] {playlist_name}  ({len(tracks)} tracks)")
 
@@ -563,10 +815,12 @@ def main():
             playlist_name=playlist_name,
             tracks=tracks,
             index=index,
-            library_dir=args.library_dir,
+            isrc_index=isrc_index,
+            library_dirs=library_dirs,
             target_dir=target_dir,
             download_dir=args.download_dir,
             dry_run=dry_run,
+            number_prefix=number_prefix,
         )
 
         total_matched += report["matched"]
