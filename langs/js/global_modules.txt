@@ -1,1 +1,5 @@
-@biomejs/biome
+@biomejs
+corepack
+openclaw
+ts-node
+typescript

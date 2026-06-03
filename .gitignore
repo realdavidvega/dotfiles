@@ -4,6 +4,9 @@
 shell/zsh/.zim
 shell/zsh/.oh-my-zsh
 
+# AI
+.omo/
+
 # python
 __pycache__
 
