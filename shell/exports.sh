@@ -112,6 +112,10 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Python on WSL
   alias pyenv="python -m venv .venv-wsl"
 
+  export BLACK_VAULT="/mnt/c/Users/david/iCloudDrive/iCloud~md~obsidian/Black Vault"
+  export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
+  export SKILLS_REGISTRY_REPO="/mnt/c/Users/david/Workspace/repos/github/tools/skills-registry"
+
   # Powershell
   alias pshcfg="vim $DOTFILES_PATH/shell/posh/Microsoft.PowerShell_profile.ps1"
 
@@ -205,6 +209,10 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
+
+  export BLACK_VAULT="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Black Vault"
+  export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/tools/black-vault"
+  export SKILLS_REGISTRY_REPO="$OS_WORKSPACE/repos/github/tools/skills-registry"
 fi
 
 # ---------------------------

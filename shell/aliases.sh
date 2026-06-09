@@ -142,6 +142,9 @@ alias root="cd /"
 alias home="cd $HOME"
 alias downloads="cd $DOWNLOADS"
 alias dw="downloads"
+alias bv='cd "$BLACK_VAULT"'
+alias vg='bash "$BLACK_VAULT/99 - Meta/Scripts/vault-git.sh"'
+alias vge='bash "$BLACK_VAULT/99 - Meta/Scripts/vault-git.sh" --env'
 
 # Workspace
 alias workspace="ws"
@@ -161,6 +164,7 @@ alias wspj="ws projects"
 
 # Tools repos
 alias wsto="ws tools"
+alias bvrepo="cd $BLACK_VAULT_REPO"
 
 # Tech repos
 alias wsru="ws rust"

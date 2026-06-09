@@ -148,7 +148,6 @@ python_venv
 # ---------------------------
 if command -v zoxide &>/dev/null; then
   eval "$(zoxide init zsh)"
-  eval "$(zoxide init zsh --cmd cd)"
   alias zl='zoxide query -l'
 fi
 
@@ -156,8 +155,7 @@ fi
 source "/home/david/.openclaw/completions/openclaw.zsh"
 
 ocv() {
-  local vault_root="/mnt/c/Users/david/iCloudDrive/iCloud~md~obsidian/Black Vault"
-  bash "$vault_root/99 - Meta/Scripts/opencode-session.sh" --with-postgres "$@"
+  bash "$BLACK_VAULT/99 - Meta/Scripts/opencode-session.sh" --with-postgres "$@"
 }
 
 # bun completions
