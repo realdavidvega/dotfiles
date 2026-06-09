@@ -60,6 +60,8 @@ This will:
 - Install all dotfiles
 - Run custom restoration scripts
 - Set up symlinks
+- Clone the private `skills-registry` repo and link its skills into Claude/OpenCode setup
+- Install Claude Code and wire global Claude config/skills on supported machines
 
 5. **Restart your terminal and import packages:**
 

@@ -24,5 +24,6 @@
     ~/.gitconfig: git/.gitconfig
     ~/.gitignore: git/.gitignore
     ~/.gitkeep: git/.gitkeep
+    ~/Library/Application Support/Claude/claude_desktop_config.json: secrets/claude/claude_desktop_config.json
     
     

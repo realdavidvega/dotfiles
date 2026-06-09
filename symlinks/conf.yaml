@@ -18,6 +18,8 @@
     ~/.zshrc: shell/zsh/.zshrc
     ~/.inputrc: shell/.inputrc
     ~/.p10k.zsh: shell/zsh/themes/.p10k.zsh
+    ~/.claude/CLAUDE.md: config/claude/CLAUDE.md
+    ~/.claude/settings.json: config/claude/settings.json
     ~/.config/opencode/opencode.json: config/opencode/opencode.json
     ~/.config/opencode/oh-my-openagent.json: config/opencode/oh-my-openagent.json
     ~/.config/opencode/ocx.jsonc: config/opencode/ocx.jsonc
