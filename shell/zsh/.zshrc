@@ -97,10 +97,10 @@ fi
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 # bun completions (compinit already loaded by zim)
-if [ -s "/home/david/.bun/_bun" ]; then
+if [ -s "$HOME/.bun/_bun" ]; then
     # Mock compinit to prevent bun from calling it
     compinit() { : }
-    source "/home/david/.bun/_bun"
+    source "$HOME/.bun/_bun"
     unfunction compinit
 fi
 
@@ -152,7 +152,7 @@ if command -v zoxide &>/dev/null; then
 fi
 
 # OpenClaw Completion
-source "/home/david/.openclaw/completions/openclaw.zsh"
+[[ -f "$HOME/.openclaw/completions/openclaw.zsh" ]] && source "$HOME/.openclaw/completions/openclaw.zsh"
 
 ocv() {
   bash "$BLACK_VAULT/99 - Meta/Scripts/opencode-session.sh" --with-postgres "$@"
