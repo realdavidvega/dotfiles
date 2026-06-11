@@ -253,6 +253,7 @@ export WORKSPACE="$OS_WORKSPACE"
 export DOTFILES_AI="$DOTFILES_PATH/ai"
 export DOTFILES_SECRETS="$DOTFILES_PATH/secrets"
 export DOTFILES_CONFIG="$DOTFILES_PATH/config"
+export HINDSIGHT_API_URL="http://localhost:8888"
 
 # Zsh
 export ZSHRC="$HOME/.zshrc"

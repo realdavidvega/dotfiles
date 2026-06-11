@@ -56,6 +56,7 @@ alias ocpr="opencode pr"
 #################
 alias ocgit="opencode /git-master"
 alias ocfe="opencode /frontend-ui-ux"
+alias ochl='bash "$DOTFILES_PATH/scripts/hindsight-local.sh"'
 
 ## Maintenance
 #################
