@@ -14,6 +14,8 @@ Options:
 EOF
 }
 
+hindsight_url="${HINDSIGHT_API_URL:-http://localhost:8888}"
+
 start_postgres=false
 opencode_args=()
 
@@ -87,6 +89,51 @@ maybe_start_postgres() {
   printf 'No docker compose file with postgres setup found in %s; continuing without starting postgres.\n' "$workspace" >&2
 }
 
+hindsight_healthcheck() {
+  curl -fsS --max-time 2 "$hindsight_url/health" >/dev/null 2>&1
+}
+
+maybe_start_hindsight() {
+  local launcher
+  local startup_wait_seconds=45
+
+  case "$hindsight_url" in
+    http://localhost:8888|http://127.0.0.1:8888) ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  if hindsight_healthcheck; then
+    return 0
+  fi
+
+  launcher="${DOTFILES_PATH:-}/scripts/hindsight-local.sh"
+  if [[ -z "$launcher" ]] || [[ ! -x "$launcher" ]]; then
+    printf 'Hindsight launcher not found at %s; continuing without auto-start.\n' "$launcher" >&2
+    return 0
+  fi
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    printf 'tmux not found; continuing without Hindsight auto-start.\n' >&2
+    return 0
+  fi
+
+  if ! tmux has-session -t hindsight-backend 2>/dev/null; then
+    printf 'Starting local Hindsight backend via %s...\n' "$launcher" >&2
+    tmux new-session -d -s hindsight-backend "$launcher"
+  fi
+
+  for _ in $(seq 1 "$startup_wait_seconds"); do
+    if hindsight_healthcheck; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  printf 'Hindsight backend did not become healthy at %s within %ss; continuing anyway.\n' "$hindsight_url" "$startup_wait_seconds" >&2
+}
+
 if ! command -v opencode >/dev/null 2>&1; then
   printf 'opencode is not installed or not on PATH.\n' >&2
   exit 1
@@ -94,6 +141,7 @@ fi
 
 workspace="$(resolve_workspace)"
 maybe_start_postgres "$workspace"
+maybe_start_hindsight
 
 cd "$workspace"
 exec opencode "${opencode_args[@]}"
