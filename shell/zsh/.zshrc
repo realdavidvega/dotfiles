@@ -155,8 +155,15 @@ fi
 [[ -f "$HOME/.openclaw/completions/openclaw.zsh" ]] && source "$HOME/.openclaw/completions/openclaw.zsh"
 
 ocv() {
-  bash "$BLACK_VAULT/99 - Meta/Scripts/opencode-session.sh" --with-postgres "$@"
+  bash "$DOTFILES_PATH/scripts/opencode-session.sh" "$@"
 }
+
+ocvp() {
+  bash "$DOTFILES_PATH/scripts/opencode-session.sh" --with-postgres "$@"
+}
+
+# Ollama commit helper (bypasses OpenCode overhead for simple tasks)
+alias ollama-commit="bash $DOTFILES_PATH/scripts/ollama-commit.sh"
 
 # bun completions
 [ -s "/Users/david/.bun/_bun" ] && source "/Users/david/.bun/_bun"
