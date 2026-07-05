@@ -19,8 +19,10 @@ import argparse
 import subprocess
 import json
 import csv
+import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, TypedDict
 from difflib import SequenceMatcher
 from collections import defaultdict
 
@@ -37,6 +39,7 @@ MATCH_THRESHOLD = 0.60
 TITLE_STRICT_MIN = 0.72
 ARTIST_STRICT_MIN = 0.45
 YT_DLP_BIN = "yt-dlp"
+MAX_DOWNLOAD_STEM = 96
 
 
 def make_track_record(
@@ -57,6 +60,17 @@ def make_track_record(
         "isrc": isrc.strip(),
         "apple_id": apple_id.strip(),
     }
+
+
+class SyncReport(TypedDict):
+    playlist: str
+    category: str
+    dir: str
+    matched: int
+    downloaded: int
+    unmatched: list[str]
+    removed: int
+    created: int
 
 # ── Playlist Categorization ──────────────────────────────────────────────────
 
@@ -154,6 +168,8 @@ def build_library_index(library_dirs: List[Path]) -> List[Tuple[str, Path]]:
         print(f"  Indexing library: {library_dir}")
         for ext in ("*.mp3", "*.m4a", "*.flac", "*.ogg", "*.wma"):
             for f in library_dir.rglob(ext):
+                if f.name.endswith(".temp.mp3"):
+                    continue
                 f_str = str(f)
                 if f_str in seen:
                     continue
@@ -163,7 +179,10 @@ def build_library_index(library_dirs: List[Path]) -> List[Tuple[str, Path]]:
     index = []
     for f in files:
         stem = f.stem
+        stem = re.sub(r"\.temp$", "", stem, flags=re.IGNORECASE)
         stem = re.sub(r'\s*\[[A-Za-z0-9_-]{11}\]$', '', stem)
+        stem = re.sub(r'\s*-[0-9a-f]{8}$', '', stem, flags=re.IGNORECASE)
+        stem = re.sub(r'\s+\d+$', '', stem)
         stem = re.sub(r'\s+', ' ', stem).strip()
         index.append((stem, f))
     
@@ -241,7 +260,10 @@ def find_best_match(artist: str, title: str, index: List[Tuple[str, Path]]) -> O
 
         if title_norm:
             if artist_norm:
-                title_score = fuzzy_ratio(title_norm, cand_title_norm or stem_norm)
+                title_score = max(
+                    fuzzy_ratio(title_norm, cand_title_norm or stem_norm),
+                    fuzzy_ratio(title_norm, stem_norm),
+                )
             else:
                 title_score = max(
                     fuzzy_ratio(title_norm, cand_title_norm or stem_norm),
@@ -250,7 +272,10 @@ def find_best_match(artist: str, title: str, index: List[Tuple[str, Path]]) -> O
         else:
             title_score = 0.0
         if title_score < TITLE_STRICT_MIN:
-            continue
+            if title_norm and title_norm in stem_norm:
+                title_score = TITLE_STRICT_MIN
+            else:
+                continue
 
         artist_score = 1.0
         if artist_norm:
@@ -287,7 +312,7 @@ def download_from_youtube(
     query = " ".join([p for p in query_parts if p]).strip()
     search_query = f"ytsearch12:{query} audio"
 
-    safe_name = sanitize_filename(query)
+    safe_name = build_download_stem(artist=artist, title=title, album=album)
     output_template = str(download_dir / f"{safe_name}.%(ext)s")
 
     print(f"    🔍 Searching YouTube: {query}")
@@ -314,7 +339,7 @@ def download_from_youtube(
             target_norm = normalize_for_match(query)
             album_norm = normalize_for_match(album)
 
-            def score_entry(entry: dict) -> float:
+            def score_entry(entry: dict[str, object]) -> float:
                 e_title = str(entry.get("title") or "")
                 e_uploader = str(entry.get("uploader") or "")
                 e_channel = str(entry.get("channel") or "")
@@ -533,6 +558,24 @@ def clean_title_for_filename(title: str) -> str:
     return sanitize_filename(t)
 
 
+def build_download_stem(artist: str, title: str, album: str = "") -> str:
+    """Build short, stable download filename stems to avoid path/rename failures."""
+    base_title = clean_title_for_filename(title) or "track"
+    base_artist = sanitize_filename(artist).strip() if artist else ""
+    stem = f"{base_artist} - {base_title}" if base_artist else base_title
+    stem = sanitize_filename(stem)
+
+    identity = "|".join([(artist or "").strip(), (title or "").strip(), (album or "").strip()])
+    digest = hashlib.sha1(identity.encode("utf-8", errors="ignore")).hexdigest()[:8]
+    suffix = f"-{digest}"
+
+    max_main = max(20, MAX_DOWNLOAD_STEM - len(suffix))
+    if len(stem) > max_main:
+        stem = stem[:max_main].rstrip(" .-")
+
+    return f"{stem}{suffix}"
+
+
 def enforce_mp3_metadata(
     file_path: Path,
     artist: str,
@@ -593,12 +636,13 @@ def sync_playlist(
     download_dir: Path,
     dry_run: bool,
     number_prefix: bool,
-) -> dict:
+    download_jobs: int,
+) -> SyncReport:
     """Sync a single playlist: find or download tracks, copy to categorized folder."""
     category = categorize_playlist(playlist_name)
     playlist_dir = target_dir / category / sanitize_filename(playlist_name)
 
-    report = {
+    report: SyncReport = {
         "playlist": playlist_name,
         "category": category,
         "dir": str(playlist_dir),
@@ -615,32 +659,83 @@ def sync_playlist(
             if f.is_file() or f.is_symlink():
                 current_files[f.name] = f
 
-    new_files: set = set()
+    new_files: set[str] = set()
+
+    total_tracks = len(tracks)
+    resolved_matches: dict[int, Optional[Path]] = {}
+    downloaded_positions: set[int] = set()
+    pending_downloads: list[tuple[int, str, str, str, str]] = []
+    local_hits = 0
+    match_checks = 0
+
+    print(f"    → Resolve pass: scanning local matches for {total_tracks} tracks")
 
     for i, track in enumerate(tracks, start=1):
         artist = track.get("artist", "")
         title = track.get("title", "")
         album = track.get("album", "")
-        track_playlist_name = track.get("playlist_name", playlist_name) or playlist_name
-        track_type = track.get("type", "Playlist")
         isrc = track.get("isrc", "")
-        apple_id = track.get("apple_id", "")
-        num = format_track_number(i)
-        downloaded_now = False
         match_path = None
         if isrc:
             match_path = isrc_index.get(isrc.strip().upper())
 
         if not match_path:
             match_path = find_best_match(artist, title, index)
-        
-        if not match_path and not dry_run:
-            match_path = download_from_youtube(artist, title, download_dir, album=album, isrc=isrc)
-            if match_path:
-                report["downloaded"] += 1
-                downloaded_now = True
-                index.append((match_path.stem, match_path))
-        
+        match_checks += 1
+        if match_checks % 25 == 0 or match_checks == total_tracks:
+            print(f"      local match progress: {match_checks}/{total_tracks} (hits={local_hits}, pending_dl={len(pending_downloads)})")
+
+        if match_path:
+            resolved_matches[i] = match_path
+            local_hits += 1
+            continue
+
+        if dry_run:
+            resolved_matches[i] = None
+            continue
+
+        pending_downloads.append((i, artist, title, album, isrc))
+
+    if pending_downloads:
+        jobs = max(1, int(download_jobs))
+        print(f"    → Download pass: {len(pending_downloads)} missing tracks, jobs={jobs}")
+        finished = 0
+        downloaded_ok = 0
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            future_map = {
+                pool.submit(download_from_youtube, artist, title, download_dir, album, isrc): (i, artist, title)
+                for i, artist, title, album, isrc in pending_downloads
+            }
+            for fut in as_completed(future_map):
+                i, artist, title = future_map[fut]
+                try:
+                    got = fut.result()
+                except Exception:
+                    got = None
+                resolved_matches[i] = got
+                finished += 1
+                if got:
+                    report["downloaded"] += 1
+                    downloaded_positions.add(i)
+                    index.append((got.stem, got))
+                    downloaded_ok += 1
+                if finished % 5 == 0 or finished == len(pending_downloads):
+                    print(f"      download progress: {finished}/{len(pending_downloads)} (ok={downloaded_ok}, failed={finished-downloaded_ok})")
+
+    print(f"    → Finalize pass: writing playlist entries ({total_tracks} tracks)")
+
+    for i, track in enumerate(tracks, start=1):
+        artist = track.get("artist", "")
+        title = track.get("title", "")
+        album = track.get("album", "")
+        isrc = track.get("isrc", "")
+        track_playlist_name = track.get("playlist_name", playlist_name) or playlist_name
+        track_type = track.get("type", "Playlist")
+        apple_id = track.get("apple_id", "")
+        num = format_track_number(i)
+        downloaded_now = i in downloaded_positions
+        match_path = resolved_matches.get(i)
+
         if match_path:
             ext = match_path.suffix
             safe_title = clean_title_for_filename(title) or "Unknown"
@@ -686,6 +781,9 @@ def sync_playlist(
             else:
                 report["unmatched"].append(f"{num}- {artist} - {title}")
 
+        if i % 25 == 0 or i == total_tracks:
+            print(f"      finalize progress: {i}/{total_tracks} (matched={report['matched']}, unmatched={len(report['unmatched'])})")
+
     for old_name, old_path in current_files.items():
         if old_name not in new_files:
             if dry_run:
@@ -703,6 +801,13 @@ def sync_playlist(
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
+    try:
+        reconfigure = getattr(sys.stdout, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(
         description="Sync playlists with YouTube download fallback (no iTunes needed)"
     )
@@ -717,12 +822,20 @@ def main():
     )
     parser.add_argument("--target-dir", type=Path, default=None, help="Destination root for generated playlist folders (defaults to --library-dir)")
     parser.add_argument("--download-dir", type=Path, default=DEFAULT_DOWNLOAD_DIR, help="Where to save downloaded tracks")
+    parser.add_argument("--download-jobs", type=int, default=3, help="Parallel download workers for missing tracks (default: 3)")
+    parser.add_argument("--disable-isrc-scan", action="store_true", help="Skip expensive ffprobe ISRC indexing for faster runs")
+    parser.add_argument("--isrc-scan-limit", type=int, default=300, help="Auto-skip ISRC indexing when requested ISRC count exceeds this limit")
     parser.add_argument("--apply", action="store_true", help="Actually create/update folders (default: dry-run)")
     parser.add_argument("--no-number-prefix", action="store_true", help="Do not prefix output filenames with track numbers")
     args = parser.parse_args()
 
     library_dirs = args.library_dir if args.library_dir else list(DEFAULT_LIBRARY_DIRS)
     target_dir = args.target_dir or library_dirs[0]
+
+    # Always include download_dir in lookup index so previously downloaded tracks are reused.
+    download_dir_resolved = args.download_dir.resolve()
+    if all(d.resolve() != download_dir_resolved for d in library_dirs):
+        library_dirs.append(download_dir_resolved)
 
     dry_run = not args.apply
     mode = "DRY RUN" if dry_run else "APPLY"
@@ -805,7 +918,13 @@ def main():
                     wanted_isrcs.add(code)
         parsed_playlists.append((playlist_path, playlist_name, tracks))
 
-    isrc_index = build_isrc_index(index, wanted_isrcs)
+    isrc_index: Dict[str, Path] = {}
+    if args.disable_isrc_scan:
+        print("  ISRC scan disabled by flag")
+    elif args.isrc_scan_limit >= 0 and len(wanted_isrcs) > args.isrc_scan_limit:
+        print(f"  Skipping ISRC scan (requested {len(wanted_isrcs)} > limit {args.isrc_scan_limit})")
+    else:
+        isrc_index = build_isrc_index(index, wanted_isrcs)
 
     for playlist_path, playlist_name, tracks in parsed_playlists:
         category = categorize_playlist(playlist_name)
@@ -821,6 +940,7 @@ def main():
             download_dir=args.download_dir,
             dry_run=dry_run,
             number_prefix=number_prefix,
+            download_jobs=max(1, args.download_jobs),
         )
 
         total_matched += report["matched"]

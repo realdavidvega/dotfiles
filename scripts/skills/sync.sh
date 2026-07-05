@@ -106,7 +106,10 @@ with tempfile.TemporaryDirectory(prefix="skills-sync-") as td:
         src_checkout = temp_root / f"src-{source_id}"
         if pathlib.Path(repo).exists():
             repo_path = pathlib.Path(repo)
-            if (repo_path / ".git").exists():
+            if (repo_path / ".git").exists() and ref == "WORKTREE":
+                shutil.copytree(repo_path, src_checkout, dirs_exist_ok=True)
+                resolved_ref = "WORKTREE"
+            elif (repo_path / ".git").exists():
                 commit = run(["git", "-C", str(repo_path), "rev-parse", ref])
                 os.makedirs(src_checkout, exist_ok=True)
                 tar_cmd = f"git -C {shlex_quote(str(repo_path))} archive {shlex_quote(commit)} | tar -x -C {shlex_quote(str(src_checkout))}"
