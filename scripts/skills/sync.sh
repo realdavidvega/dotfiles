@@ -142,8 +142,16 @@ with tempfile.TemporaryDirectory(prefix="skills-sync-") as td:
                     shutil.rmtree(target_dir)
                 shutil.copytree(skill_dir, target_dir)
 
-            actual_path = target_dir if target_dir.exists() else skill_dir
-            content_sha = dir_hash(actual_path)
+            content_sha = dir_hash(skill_dir)
+            if check_mode:
+                if not target_dir.exists():
+                    raise RuntimeError(f"Synced skill missing: {target_dir}")
+                target_sha = dir_hash(target_dir)
+                if target_sha != content_sha:
+                    raise RuntimeError(
+                        f"Synced skill drift detected for {skill_name}. "
+                        "Run scripts/skills/sync.sh to refresh copied skills."
+                    )
 
             entries.append({
                 "sourceId": source_id,
