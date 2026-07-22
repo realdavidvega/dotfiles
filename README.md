@@ -127,7 +127,8 @@ git-crypt unlock /path/to/dotfiles-key.bin
 The dotfiles are the source of truth for the OpenCode setup:
 
 - `config/opencode/opencode.json` tracks providers, plugins, MCPs, and skill paths
-- OpenCode loads skills from both the linked `config/opencode/skills` directory and the external `skills-registry` productivity skills path
+- `restoration_scripts/04-skills-sync.sh` links dotfiles and registry skills into `~/.claude/skills`; Claude loads them directly and OpenCode auto-loads that same shared skill tree
+- Selected pinned OpenCode copies are reproducibly tracked through `skills.sources.json` and `scripts/skills/sync.sh`, without copying `project-wiki` into a second live discovery path
 - `scripts/opencode-session.sh` is the dotfiles-owned OpenCode launcher used by `ocv`
 - `scripts/hindsight-local.sh` is the dotfiles-owned launcher for the local Hindsight backend used by `ochl`
 - the Hindsight plugin is configured in `config/opencode/opencode.json` and defaults to `http://localhost:8888`
@@ -136,7 +137,7 @@ To restore the setup on a new machine:
 
 1. Restore dotfiles normally (`dot self install`)
 2. Make sure your OpenCode config is symlinked into `~/.config/opencode`
-3. Make sure the external skills-registry checkout is available if you want those productivity skills
+3. Make sure the external skills-registry checkout is available; `restoration_scripts/04-skills-sync.sh` links all registry skills for Claude and OpenCode, while `scripts/skills/sync.sh` refreshes the separately pinned OpenCode copies
 4. Make sure `ollama` is installed and pull the local Hindsight model: `ollama pull gemma4:12b`
 5. Start the local backend with `ochl` if you want Hindsight enabled
 6. Launch `ocv` or `opencode`
