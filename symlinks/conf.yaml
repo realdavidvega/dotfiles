@@ -17,6 +17,7 @@
     ~/.zshenv: shell/zsh/.zshenv
     ~/.zshrc: shell/zsh/.zshrc
     ~/.inputrc: shell/.inputrc
+    ~/.vimrc: editors/vim/.vimrc
     ~/.p10k.zsh: shell/zsh/themes/.p10k.zsh
     ~/.claude/CLAUDE.md: config/claude/CLAUDE.md
     ~/.claude/settings.json: config/claude/settings.json
