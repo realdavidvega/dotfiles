@@ -33,3 +33,4 @@
     ~/.config/opencode/perplexity.json: config/opencode/perplexity.json
     ~/.config/opencode/model-fallback.json: config/opencode/model-fallback.json
     ~/.agents/AGENTS.md: config/opencode/global/AGENTS.md
+    ~/.codex/AGENTS.md: config/opencode/global/AGENTS.md

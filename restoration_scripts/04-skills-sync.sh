@@ -20,31 +20,39 @@ else
   git clone git@github.com:realdavidvega/skills-registry.git "$SKILLS_REGISTRY_REPO"
 fi
 
-CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
-if [ -L "$CLAUDE_SKILLS_DIR" ]; then
-  rm "$CLAUDE_SKILLS_DIR"
-fi
-mkdir -p "$CLAUDE_SKILLS_DIR"
+sync_skill_links() {
+  local target_dir="$1"
+  local existing
+  local link_target
+  local skill_dir
+  local skill_name
 
-for existing in "$CLAUDE_SKILLS_DIR"/*; do
-  [ -L "$existing" ] && rm "$existing"
-done
+  mkdir -p "$target_dir"
 
-for skill_dir in "$DOTFILES_PATH/config/opencode/skills"/*; do
-  [ -d "$skill_dir" ] || continue
-  skill_name="$(basename "$skill_dir")"
-  case "$skill_name" in
-    playlist-sync|yt-dlp|podcast-extraction)
-      continue
-      ;;
-  esac
-  ln -sfn "$skill_dir" "$CLAUDE_SKILLS_DIR/$skill_name"
-done
+  for existing in "$target_dir"/*; do
+    [ -L "$existing" ] || continue
+    link_target="$(readlink "$existing")"
+    case "$link_target" in
+      "$DOTFILES_PATH/config/opencode/skills/"*|"$SKILLS_REGISTRY_REPO/skills/"*)
+        rm "$existing"
+        ;;
+    esac
+  done
 
-for skill_dir in "$SKILLS_REGISTRY_REPO"/skills/*/*; do
-  [ -d "$skill_dir" ] || continue
-  skill_name="$(basename "$skill_dir")"
-  ln -sfn "$skill_dir" "$CLAUDE_SKILLS_DIR/$skill_name"
-done
+  for skill_dir in "$DOTFILES_PATH/config/opencode/skills"/*; do
+    [ -d "$skill_dir" ] || continue
+    skill_name="$(basename "$skill_dir")"
+    ln -sfn "$skill_dir" "$target_dir/$skill_name"
+  done
+
+  for skill_dir in "$SKILLS_REGISTRY_REPO"/skills/*/*; do
+    [ -d "$skill_dir" ] || continue
+    skill_name="$(basename "$skill_dir")"
+    ln -sfn "$skill_dir" "$target_dir/$skill_name"
+  done
+}
+
+sync_skill_links "$HOME/.claude/skills"
+sync_skill_links "$HOME/.agents/skills"
 
 echo "Skills sync complete"

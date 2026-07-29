@@ -13,7 +13,7 @@ lifecycle. This repo contributes:
 1. Shell, git, editor and package configuration.
 2. A restoration pipeline in `restoration_scripts/` that runs during
    `dot self install`.
-3. An OpenCode + Claude Code toolchain: config, commands, skills, and a
+3. An OpenCode + Claude Code + Codex toolchain: config, commands, skills, and a
    skills-registry sync mechanism.
 4. Custom launchers (`ocv`, `ocvp`, `ochl`) and helper scripts under `scripts/`.
 
@@ -53,13 +53,12 @@ bootstrap.
 ### Skills sync (two separate paths, both important)
 
 1. **Runtime symlinks** into `~/.claude/skills` (used by Claude Code and
-   auto-loaded by OpenCode) are managed by
+   auto-loaded by OpenCode) and `~/.agents/skills` (used by Codex) are managed by
    `restoration_scripts/04-skills-sync.sh`. It hard-refreshes
    `$SKILLS_REGISTRY_REPO` (`~/Workspace/repos/github/tools/skills-registry` on
    macOS, `/mnt/c/Users/david/Workspace/repos/github/tools/skills-registry` on
-   WSL) and symlinks every skill directory into `~/.claude/skills/`. Skills
-   named `playlist-sync`, `yt-dlp`, or `podcast-extraction` are dotfiles-only
-   and are **excluded** from that symlink pass.
+   WSL) and symlinks every skill directory into both user skill trees. Existing
+   non-dotfiles skills in either tree are preserved.
 
 2. **Reproducible pinned copies** inside the repo live at
    `config/opencode/skills/`. They are produced by:
