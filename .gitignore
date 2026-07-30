@@ -6,6 +6,8 @@ shell/zsh/.oh-my-zsh
 
 # AI
 .omo/
+.claude/
+.agents/
 
 # python
 __pycache__
