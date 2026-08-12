@@ -37,6 +37,67 @@ NPM globals (`langs/js/global_modules.txt`), and VSCode extensions. It does
 **not** cover `langs/python/uv_tools.txt`. Those are only installed by
 `restoration_scripts/02-uv-tools.sh` during `dot self install`.
 
+### Updating externally-installed tools
+
+`dot package update_all` (`up`) only reaches what the package managers own.
+Several tools here are installed by self-updating vendor scripts, `bunx`
+installers, or a git checkout, and drift silently. `scripts/update-all.sh`
+covers those:
+
+```bash
+upall              # doctor + update everything (alias)
+upcheck            # doctor only, changes nothing (alias)
+
+bash scripts/update-all.sh --only codex,omo   # update a subset
+bash scripts/update-all.sh --skip brew        # everything but brew
+bash scripts/update-all.sh --list             # component names
+```
+
+Components: `brew casks ytdlp codex claude opencode omo uv npm skills`.
+Each step is independent — one failure is reported in the summary and does not
+abort the rest.
+
+Two non-obvious things it encodes:
+
+- **The doctor catches stale binaries shadowing current ones on `$PATH`.** This
+  is the failure mode that hides for years: `yt-dlp` was pinned at a 2023
+  root-owned binary in `/usr/local/bin` while an up-to-date Homebrew keg sat
+  unlinked, so `brew upgrade` could never fix it and downloads silently
+  produced only a thumbnail plus a storyboard `.mhtml`. Paths under version
+  managers (`~/.local/bin`, rbenv, sdkman, cargo, bun, conda, `$DOTFILES_PATH`)
+  are treated as intentional overrides; anything else is flagged. Extend
+  `shadow_is_intentional` when you add a deliberate override.
+- **`omo` must be updated through the upstream `bunx` installer.** Its Codex
+  marketplace entry is a local path pointing at its own cache, so
+  `codex plugin` cannot re-fetch it. The script runs
+  `--platform codex --no-codex-autonomous` deliberately: that leaves the
+  git-crypt encrypted, dotfiles-managed OpenCode config and your existing Codex
+  permission settings untouched. Do not add `--platform both`.
+
+### yt-dlp downloads (`yta-mp3`, `yt-mp4`, …)
+
+Defined in `aliases/.youtube-dl-aliases`, sharing `scripts/yt-dlp/yt-dlp-common.sh`.
+
+Two distinct failure modes look alike — both leave a `.webp` (and sometimes a
+storyboard `.mhtml`) in `~/Downloads` and no media:
+
+1. **Stale binary.** Metadata extraction fails outright. Check
+   `yt-dlp --version` against `command -v yt-dlp`; see the shadowing note above.
+2. **`HTTP Error 403` on the media URL** after formats resolve fine. YouTube is
+   gating that video behind a PO token, so it needs a logged-in cookie jar.
+
+`_yt_dlp_cookies` resolves cookies per-OS: `YT_DLP_COOKIES` (file) wins, then
+`YT_DLP_BROWSER` (explicit browser), then per-OS autodetection. On macOS,
+Chromium browsers need the "Chrome Safe Storage" keychain entry, which only
+resolves inside a **GUI login session** — from ssh or a headless shell yt-dlp
+warns `find-generic-password failed` and extracts 0 cookies, then 403s. Firefox
+needs no keychain and is preferred when installed. To force one:
+
+```bash
+YT_DLP_BROWSER=safari yta-mp3 <url>     # needs Full Disk Access for the terminal
+YT_DLP_COOKIES=~/cookies.txt yta-mp3 <url>
+```
+
 ### Restoration / bootstrap
 
 ```bash
@@ -209,6 +270,13 @@ both.
   `os/`, `langs/`, `editors/`.** For `uv tool install <foo>`, additionally add
   `foo` to `langs/python/uv_tools.txt` by hand. The dump command does not know
   about uv tools.
+- **When a CLI misbehaves, check `$PATH` resolution before assuming it needs an
+  upgrade.** Run `upcheck` (`scripts/update-all.sh --check`) and compare
+  `command -v <tool>` against `brew --prefix`. A tool installed by two routes
+  can report a stale version forever while the package manager insists it is
+  current. If you add a tool that is deliberately not the Homebrew copy, add its
+  prefix to `shadow_is_intentional` in `scripts/update-all.sh` so the doctor
+  stays signal-rich.
 - **New restoration steps go in `restoration_scripts/` with a numeric prefix.**
   They execute in lexical order during `dot self install`. Prefer idempotent
   scripts (check-before-install, or `if ! command -v foo`).

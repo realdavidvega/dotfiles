@@ -27,6 +27,13 @@ _yt_dlp_cookies() {
         return 0
     fi
 
+    # 1b. Explicit browser override, any OS: YT_DLP_BROWSER=safari, chrome, etc.
+    if [ -n "${YT_DLP_BROWSER:-}" ]; then
+        printf '%s\n' "--cookies-from-browser"
+        printf '%s\n' "${YT_DLP_BROWSER}"
+        return 0
+    fi
+
     # 2. WSL Windows path: try chrome profiles only when the selected downloader
     # is the Windows executable. Linux yt-dlp resolves "chrome:Profile 1" against
     # ~/.config/google-chrome/Profile 1, which fails on WSL machines without Linux Chrome.
@@ -72,7 +79,49 @@ _yt_dlp_cookies() {
         fi
     fi
 
-    # 3. Firefox on Linux/WSL
+    # 3. macOS: YouTube increasingly gates media URLs behind PO tokens, so a
+    # logged-in cookie jar is the difference between a real download and a 403
+    # that still leaves a thumbnail behind. Chromium browsers need the "Chrome
+    # Safe Storage" keychain entry to decrypt cookies, which only resolves in a
+    # GUI login session — from a headless/ssh shell yt-dlp warns
+    # "find-generic-password failed" and extracts 0 cookies. Firefox needs no
+    # keychain, so prefer it when present.
+    if [[ "$OSTYPE" =~ ^darwin ]]; then
+        if [ -d "$HOME/Library/Application Support/Firefox/Profiles" ]; then
+            printf '%s\n' "--cookies-from-browser"
+            printf '%s\n' "firefox"
+            return 0
+        fi
+
+        local -a mac_browsers=(
+            "Google Chrome:chrome"
+            "Brave Browser:brave"
+            "Microsoft Edge:edge"
+        )
+        local entry app browser
+        for entry in "${mac_browsers[@]}"; do
+            app="${entry%%:*}"
+            browser="${entry##*:}"
+            if [ -d "/Applications/${app}.app" ]; then
+                printf '%s\n' "--cookies-from-browser"
+                printf '%s\n' "$browser"
+                return 0
+            fi
+        done
+
+        # Safari stores cookies in a binary jar that needs Full Disk Access for
+        # the terminal, but it requires no keychain unlock.
+        if [ -f "$HOME/Library/Cookies/Cookies.binarycookies" ] ||
+            [ -f "$HOME/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies" ]; then
+            printf '%s\n' "--cookies-from-browser"
+            printf '%s\n' "safari"
+            return 0
+        fi
+
+        return 0
+    fi
+
+    # 4. Firefox on Linux/WSL
     if [ -d "$HOME/.mozilla/firefox" ]; then
         printf '%s\n' "--cookies-from-browser"
         printf '%s\n' "firefox"

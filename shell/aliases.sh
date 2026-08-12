@@ -45,6 +45,11 @@ alias c.="(code $PWD &>/dev/null &)"
 alias o.="open ."
 alias up="dot package update_all"
 
+# Update the tools dotly/brew do not own (codex, omo, uv, npm, skills) and
+# doctor for stale binaries shadowing current ones on $PATH.
+alias upall="bash $DOTFILES_PATH/scripts/update-all.sh"
+alias upcheck="bash $DOTFILES_PATH/scripts/update-all.sh --check"
+
 # ---------------------------
 #       App Aliases
 # ---------------------------
