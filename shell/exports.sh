@@ -71,14 +71,28 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   # Smart git wrapper - use Linux git for native paths, Windows git for /mnt/c
   git() {
     local current_path=$(pwd)
-    
-    # Use Linux git for native Linux filesystem (needed for git-crypt)
+
+    # Use Linux git for native Linux filesystem
     if [[ "$current_path" == /home/* ]] || [[ "$current_path" == /root/* ]] || [[ "$current_path" == $HOME* ]]; then
         command /usr/bin/git "$@"
-    else
-        # Use Windows git for /mnt/c paths
-        /mnt/c/Program\ Files/Git/bin/git.exe "$@"
+        return
     fi
+
+    # Use Linux for git-crypted repos
+    local repo_dir="$current_path"
+    while [ -n "$repo_dir" ] && [ "$repo_dir" != "/" ]; do
+        if [ -e "$repo_dir/.git" ]; then
+            if [ -f "$repo_dir/.gitattributes" ] && grep -qs 'git-crypt' "$repo_dir/.gitattributes"; then
+                command /usr/bin/git "$@"
+                return
+            fi
+            break
+        fi
+        repo_dir="${repo_dir%/*}"
+    done
+
+    # Use Windows git for rest of /mnt/c paths
+    /mnt/c/Program\ Files/Git/bin/git.exe "$@"
   }
 
   # Use git configuration from dotfiles with windows git
