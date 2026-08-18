@@ -270,10 +270,35 @@ update_skills() {
   fi
 }
 
+
+# Report what `dot self install` would change before it runs. Symlinks are applied
+# with `relink`, so a real file sitting where a link belongs is refused rather than
+# destroyed — but the link then never gets made, and silently, unless this says so.
+doctor_symlinks() {
+  section "Doctor: symlink conflicts"
+
+  local out count
+  out="$(python3 "$DOTFILES_PATH/scripts/symlink-doctor.py" "$DOTFILES_PATH" 2>&1)" || {
+    WARNINGS+=("symlinks: doctor failed to run")
+    printf '%s\n' "$out"
+    return 0
+  }
+
+  count="$(printf '%s' "$out" | sed -n 's/^__ISSUES__//p')"
+  printf '%s\n' "$out" | grep -v '^__ISSUES__' || true
+
+  if [ "${count:-0}" -eq 0 ]; then
+    ok "no symlink conflicts"
+  else
+    WARNINGS+=("symlinks: $count conflict(s) — dot self install will not fully apply")
+  fi
+}
+
 # --- main -------------------------------------------------------------------
 
 doctor_shadowing
 doctor_unlinked_kegs
+doctor_symlinks
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
   doctor_versions
