@@ -2,6 +2,14 @@
 
 set -e
 
+# dotly sources these scripts without changing directory, so cwd is wherever
+# `dot self install` was invoked from. Every git/git-crypt call below is
+# repo-relative — without this cd they would target the wrong repository, or no
+# repository at all. Sourcing happens inside a pipeline subshell, so this cd
+# cannot leak back to the caller.
+_REPO_ROOT="${DOTFILES_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$_REPO_ROOT" || { echo "Cannot enter dotfiles repo: $_REPO_ROOT"; exit 1; }
+
 # =============================================================================
 # CONFIGURATION: Edit this before restoring on a new machine
 # =============================================================================
@@ -32,14 +40,14 @@ if ! git rev-parse --git-dir > /dev/null 2>&1; then
     exit 1
 fi
 
-if git-crypt status &> /dev/null; then
-    ENCRYPTED_COUNT=$(git-crypt status | grep -c "encrypted" || true)
-    
-    if [ "$ENCRYPTED_COUNT" -eq 0 ]; then
-        echo "Repository is already unlocked!"
-        echo
-        exit 0
-    fi
+# Presence of the symmetric key is the canonical "this checkout is unlocked" signal.
+# Do NOT count `git-crypt status | grep encrypted` — that lists paths encrypted in the
+# repo regardless of unlock state, so it is never 0 and would send an already-unlocked
+# machine into `git-crypt unlock`, which errors out (and refuses on a dirty tree).
+if [ -f "$_REPO_ROOT/.git/git-crypt/keys/default" ]; then
+    echo "Repository is already unlocked!"
+    echo
+    exit 0
 fi
 
 echo "Encrypted sources detected:"
