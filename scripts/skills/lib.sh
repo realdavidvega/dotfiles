@@ -3,21 +3,20 @@
 # Shared skill resolution for the global sync (restoration_scripts/04-skills-sync.sh)
 # and the per-project materializer (scripts/skills/project.sh).
 #
-# A skill is a directory containing SKILL.md. It can come from three roots. The
-# index is built in precedence order, later roots winning on a name collision:
+# A skill is a directory containing SKILL.md. Both roots live in the skills
+# registry; the index is built in precedence order, later winning on collision:
 #
 #   1. $SKILLS_REGISTRY_REPO/external-skills/*/*  third-party, vendored at a
 #                                                 pinned SHA by that repo's
 #                                                 scripts/sync-external.sh
-#   2. config/opencode/skills/*                   dotfiles-native
-#   3. $SKILLS_REGISTRY_REPO/skills/*/*           registry-native
+#   2. $SKILLS_REGISTRY_REPO/skills/*/*           authored by you
 #
-# Third-party content sits lowest so your own work always wins. Registry-native
-# beating dotfiles-native is deliberate and pre-existing: playlist-sync and
-# yt-dlp live in both trees and have always resolved to the registry copy.
+# Third-party content sits lowest so your own work always wins a name clash.
 #
-# The registry's validate-skills.sh enforces that names are unique across its
-# two trees, which is what keeps this flat namespace honest.
+# There is deliberately no dotfiles-local root any more: every skill lives in
+# the registry, which is private, so nothing needs git-crypt to stay unpublished.
+# The registry's validate-skills.sh enforces name uniqueness across both trees,
+# which is what keeps this flat namespace honest.
 #
 # Deliberately avoids bash 4 associative arrays — macOS still ships bash 3.2.
 # The index is a TAB-separated "name<TAB>dir" string instead.
@@ -38,7 +37,7 @@ if [ -z "${SKILLS_REGISTRY_REPO:-}" ]; then
 fi
 
 SKILLS_EXTERNAL_DIR="$SKILLS_REGISTRY_REPO/external-skills"
-SKILLS_NATIVE_DIR="$DOTFILES_PATH/config/opencode/skills"
+SKILLS_NATIVE_DIR="$SKILLS_REGISTRY_REPO/skills"
 SKILLS_PROFILES="$DOTFILES_PATH/config/opencode/skills.profiles.json"
 
 # Roots whose symlinks this tooling owns and may therefore delete. Anything
@@ -46,7 +45,14 @@ SKILLS_PROFILES="$DOTFILES_PATH/config/opencode/skills.profiles.json"
 MANAGED_ROOTS=(
   "$SKILLS_EXTERNAL_DIR/"
   "$SKILLS_NATIVE_DIR/"
-  "$SKILLS_REGISTRY_REPO/skills/"
+)
+
+# Roots this tooling used to own. Prune still claims links pointing into them,
+# otherwise retiring a root strands every link it ever created: the target no
+# longer matches a managed root, so nothing is entitled to delete it, and a
+# dangling symlink survives every future sync. Only ever append here.
+LEGACY_ROOTS=(
+  "$DOTFILES_PATH/config/opencode/skills/"
 )
 
 SKILL_INDEX=""
@@ -66,10 +72,9 @@ skills_build_index() {
     SKILL_INDEX="${SKILL_INDEX}$(basename "$d")	${d}"$'\n'
   }
 
-  # external-skills is <domain>/<skill>, the same two-level shape as skills/.
+  # Both roots are <domain>/<skill>.
   for dir in "$SKILLS_EXTERNAL_DIR"/*/*; do _index_add "$dir"; done
-  for dir in "$SKILLS_NATIVE_DIR"/*; do _index_add "$dir"; done
-  for dir in "$SKILLS_REGISTRY_REPO"/skills/*/*; do _index_add "$dir"; done
+  for dir in "$SKILLS_NATIVE_DIR"/*/*; do _index_add "$dir"; done
 }
 
 # resolve_skill <name> -> prints the source directory, or fails.
@@ -99,7 +104,7 @@ skills_prune_managed() {
   for existing in "$target_dir"/*; do
     [ -L "$existing" ] || continue
     link_target="$(readlink "$existing")"
-    for root in "${MANAGED_ROOTS[@]}"; do
+    for root in "${MANAGED_ROOTS[@]}" "${LEGACY_ROOTS[@]}"; do
       case "$link_target" in
         "$root"*) rm "$existing"; break ;;
       esac
