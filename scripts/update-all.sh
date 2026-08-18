@@ -248,9 +248,26 @@ update_npm() {
 
 update_skills() {
   local script="$DOTFILES_PATH/restoration_scripts/04-skills-sync.sh"
+  local verify
   [ -f "$script" ] || { SKIPPED+=("skills: $script not found"); return 0; }
+
+  # lib.sh owns the OS branch for the registry checkout path; do not duplicate it.
+  # shellcheck source=./skills/lib.sh
+  source "$DOTFILES_PATH/scripts/skills/lib.sh"
+  verify="$SKILLS_REGISTRY_REPO/scripts/sync-external.sh"
+
   section "skills registry"
-  bash "$script"
+  bash "$script" || return 1
+
+  # Third-party skills live in the registry under external-skills/, vendored at
+  # a pinned SHA. Nothing here bumps that pin — that is a deliberate manual
+  # sync-external.sh run — but a hand-edit or a half-applied sync would diverge
+  # silently, so surface it.
+  if [ -f "$verify" ]; then
+    if ! bash "$verify" --verify; then
+      WARNINGS+=("skills: vendored skills do not match external-skills.lock.json — run scripts/sync-external.sh in skills-registry")
+    fi
+  fi
 }
 
 # --- main -------------------------------------------------------------------

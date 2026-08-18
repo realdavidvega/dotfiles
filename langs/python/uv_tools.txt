@@ -3,3 +3,4 @@
 # Format: one tool per line. Version specifiers are supported.
 
 basedpyright
+nano-pdf
