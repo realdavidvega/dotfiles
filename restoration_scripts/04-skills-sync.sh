@@ -58,7 +58,16 @@ elif [ -n "$(git -C "$SKILLS_REGISTRY_REPO" status --porcelain)" ]; then
   echo "Registry checkout has local changes; skipping fetch/reset and relinking as-is" >&2
 else
   git -C "$SKILLS_REGISTRY_REPO" fetch origin
-  git -C "$SKILLS_REGISTRY_REPO" reset --hard origin/main
+  # `git status --porcelain` sees uncommitted changes only. A checkout that is
+  # clean but holds unpushed commits would have them destroyed by a hard reset,
+  # so check that separately and fast-forward instead of resetting — ff-only
+  # refuses rather than discarding anything.
+  if [ -n "$(git -C "$SKILLS_REGISTRY_REPO" log --oneline origin/main..HEAD 2>/dev/null)" ]; then
+    echo "Registry has unpushed commits; skipping update and relinking as-is." >&2
+    echo "Push them (or reset deliberately) to resume automatic updates." >&2
+  elif ! git -C "$SKILLS_REGISTRY_REPO" merge --ff-only origin/main >/dev/null 2>&1; then
+    echo "Registry could not fast-forward to origin/main; relinking as-is." >&2
+  fi
 fi
 
 skills_build_index

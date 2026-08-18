@@ -1,9 +1,13 @@
 - clean: ['~']
 
+# relink, NOT force. `relink` deletes a destination only when it is a symlink;
+# `force` also rmtree/removes real files, which silently destroys live config on
+# an already-configured machine. With relink a real file blocking a link is a
+# loud failure instead — run `upcheck` to see them before they bite.
 - defaults:
     link:
       create: true
-      force: true
+      relink: true
 
 - create:
     - $DOTFILES_PATH/shell/bash/completions
@@ -20,11 +24,9 @@
     ~/.vimrc: editors/vim/.vimrc
     ~/.p10k.zsh: shell/zsh/themes/.p10k.zsh
     ~/.claude/CLAUDE.md: config/claude/CLAUDE.md
-    ~/.claude/settings.json: config/claude/settings.json
     ~/.config/opencode/opencode.json: config/opencode/opencode.json
     ~/.config/opencode/oh-my-openagent.json: config/opencode/oh-my-openagent.json
     ~/.config/opencode/ocx.jsonc: config/opencode/ocx.jsonc
-    ~/.config/opencode/package.json: config/opencode/package.json
     ~/.config/opencode/commands: config/opencode/commands
     ~/.config/opencode/philosophy: config/opencode/philosophy
     ~/.config/opencode/skills: config/opencode/skills
