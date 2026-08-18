@@ -224,8 +224,7 @@ cmd_status() {
 
   echo "skill roots:"
   printf '  %-14s %s\n' "external" "$SKILLS_EXTERNAL_DIR"
-  printf '  %-14s %s\n' "dotfiles" "$SKILLS_NATIVE_DIR"
-  printf '  %-14s %s\n' "registry" "$SKILLS_REGISTRY_REPO/skills"
+  printf '  %-14s %s\n' "authored" "$SKILLS_NATIVE_DIR"
   echo "  $(list_skills | wc -l | tr -d ' ') skill(s) resolvable, $(profiles_global | wc -l | tr -d ' ') global"
   echo
   echo "projects:"

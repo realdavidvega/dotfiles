@@ -137,16 +137,17 @@ bootstrap.
 `allowedSkills` and `deniedSkills` do not exist. Presence in a skills directory
 IS the switch, which is why everything below is symlinks rather than config.
 
-Skills come from three **roots**, resolved in this precedence order (later wins
-on a name collision — `playlist-sync` and `yt-dlp` live in two roots and have
-always resolved to the registry):
+Skills come from two **roots**, both in the skills-registry, resolved in this
+precedence order (later wins on a name collision):
 
 1. `$SKILLS_REGISTRY_REPO/external-skills/<domain>/<skill>` — third-party,
-   vendored in the registry at a pinned commit
-2. `config/opencode/skills/` — hand-maintained, native to this repo
-3. `$SKILLS_REGISTRY_REPO/skills/<domain>/<skill>` — registry-native
+   vendored at a pinned commit
+2. `$SKILLS_REGISTRY_REPO/skills/<domain>/<skill>` — authored by you
 
 Third-party content sits lowest so your own skills always win a name collision.
+
+**This repo holds no skill content.** It owns only `skills.profiles.json`, which
+decides where skills load. The registry owns what they are.
 
 They are activated in one of two **scopes**, both declared in
 `config/opencode/skills.profiles.json`:
@@ -333,11 +334,11 @@ both.
   If you see gibberish in a file that `.gitattributes` marks as
   `filter=git-crypt`, that is the encrypted form. Editing it corrupts the
   filter state.
-- **`config/opencode/skills/` is hand-maintained; third-party skills are not
-  kept here at all.** They are vendored in skills-registry under
-  `external-skills/`, which is generated — edit that repo's
-  `external-skills.sources.json` and re-run its `scripts/sync-external.sh`,
-  committing the vendored tree and `external-skills.lock.json` together.
+- **No skills live in this repo.** Author them in skills-registry under
+  `skills/<domain>/<skill>`; third-party ones are vendored there under
+  `external-skills/` (generated — edit `external-skills.sources.json` and re-run
+  `scripts/sync-external.sh`, committing the tree and lock together). This repo
+  only decides scope, via `config/opencode/skills.profiles.json`.
 - **A new skill is not global until it is listed.** Add it to the `global` array
   in `config/opencode/skills.profiles.json`, or leave it opt-in and attach it to
   projects with `skp add`. Then run `upall --only skills` (or
