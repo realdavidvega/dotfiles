@@ -167,3 +167,7 @@ alias ollama-commit="bash $DOTFILES_PATH/scripts/ollama-commit.sh"
 
 # bun completions
 [ -s "/Users/david/.bun/_bun" ] && source "/Users/david/.bun/_bun"
+
+# Drop GH_TOKEN secret workaround given it's coming from an unknown place
+unset GH_TOKEN
+
