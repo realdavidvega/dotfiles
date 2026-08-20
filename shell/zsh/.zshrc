@@ -66,7 +66,7 @@ source "$DOTLY_PATH/shell/zsh/bindings/reverse_search.zsh"
 source "$DOTFILES_PATH/shell/zsh/key-bindings.zsh"
 
 # Rust Shell
-source $HOME/.cargo/env
+[[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 
 # Python certs
 export REQUESTS_CA_BUNDLE=$DOTFILES_SECRETS/certs/requests-ca-bundle.pem

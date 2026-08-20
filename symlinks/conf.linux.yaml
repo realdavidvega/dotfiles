@@ -3,7 +3,11 @@
 - defaults:
     link:
       create: true
-      force: true
+      relink: true
 
 - link:
     ~/.dotly: os/linux/.dotly
+    ~/.gitalias: git/.gitalias
+    ~/.gitconfig: git/.gitconfig
+    ~/.gitignore: git/.gitignore
+    ~/.gitkeep: git/.gitkeep
