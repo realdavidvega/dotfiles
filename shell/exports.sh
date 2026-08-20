@@ -5,12 +5,22 @@
 # Linux
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
+  if grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null; then
+    IS_WSL=true
+  else
+    IS_WSL=false
+  fi
+
   # No longer maintained, use SDKMAN instead (see sdk list java)
   # export JAVA_HOME="/home/linuxbrew/.linuxbrew/opt/openjdk@20"
 
   OS_DRIVE="/mnt"
   C_DRIVE="$OS_DRIVE/c"
-  OS_WORKSPACE="$HOME/workspace"
+  if $IS_WSL; then
+    OS_WORKSPACE="$HOME/workspace"
+  else
+    OS_WORKSPACE="$HOME/Workspace"
+  fi
 
   BREW_PATH="/home/linuxbrew/.linuxbrew"
 
@@ -29,6 +39,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
   path=(
     "$HOME/bin"
+    "$HOME/.local/bin"
     "$DOTLY_PATH/bin"
     "$DOTFILES_PATH/bin"
     "$DOTFILES_PYTHON_VENV/bin"
@@ -59,17 +70,24 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     CUDA_PATH=$(ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -n 1)
     if [ -n "$CUDA_PATH" ]; then
       export PATH="$CUDA_PATH/bin${PATH:+:${PATH}}"
-      export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+      if $IS_WSL; then
+        export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+      fi
     fi
   fi
 
   # Exports
-  export WIN_HOME="$C_DRIVE/Users/david"
-  export DOWNLOADS="$C_DRIVE/Users/david/Downloads"
+  if $IS_WSL; then
+    export WIN_HOME="$C_DRIVE/Users/david"
+    export DOWNLOADS="$WIN_HOME/Downloads"
+  else
+    export DOWNLOADS="$HOME/Downloads"
+  fi
 
 
   # Smart git wrapper - use Linux git for native paths, Windows git for /mnt/c
-  git() {
+  if $IS_WSL; then
+    git() {
     local current_path=$(pwd)
 
     # Use Linux git for native Linux filesystem
@@ -93,13 +111,14 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 
     # Use Windows git for rest of /mnt/c paths
     /mnt/c/Program\ Files/Git/bin/git.exe "$@"
-  }
+    }
 
-  # Use git configuration from dotfiles with windows git
-  cp $DOTFILES_PATH/git/.gitconfig $WIN_HOME/.gitconfig
-  cp $DOTFILES_PATH/git/.gitalias $WIN_HOME/.gitalias
-  cp $DOTFILES_PATH/git/.gitignore $WIN_HOME/.gitignore
-  cp $DOTFILES_PATH/git/.gitkeep $WIN_HOME/.gitkeep
+    # Use git configuration from dotfiles with windows git
+    cp "$DOTFILES_PATH/git/.gitconfig" "$WIN_HOME/.gitconfig"
+    cp "$DOTFILES_PATH/git/.gitalias" "$WIN_HOME/.gitalias"
+    cp "$DOTFILES_PATH/git/.gitignore" "$WIN_HOME/.gitignore"
+    cp "$DOTFILES_PATH/git/.gitkeep" "$WIN_HOME/.gitkeep"
+  fi
 
   # NVM environment
   export NVM_DIR="$HOME/.nvm"
@@ -107,28 +126,50 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
   # Python environment
-  export UV_PROJECT_ENVIRONMENT=".venv-wsl"
+  if $IS_WSL; then
+    export UV_PROJECT_ENVIRONMENT=".venv-wsl"
+  else
+    export UV_PROJECT_ENVIRONMENT=".venv"
+  fi
 
   # Workaround for invalid java location (No longer maintained, use SDKMAN instead)
   # alias java="$JAVA_HOME/bin/java"
 
   # Linux brew
-  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+  if [ -x "$BREW_PATH/bin/brew" ]; then
+    eval "$("$BREW_PATH/bin/brew" shellenv)"
+  fi
 
   # Ensure dotfiles bin (including pip3 shim) and venv bin take precedence over brew
   export PATH="$DOTFILES_PATH/bin:$DOTFILES_PYTHON_VENV/bin:$PATH"
 
   # Apps
-  alias open="$C_DRIVE/Windows/SysWOW64/explorer.exe"
-  alias sublime="$C_DRIVE/Program\ Files/Sublime\ Text/sublime_text.exe"
-  alias vscode="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
+  if $IS_WSL; then
+    alias open="$C_DRIVE/Windows/SysWOW64/explorer.exe"
+    alias sublime="$C_DRIVE/Program\ Files/Sublime\ Text/sublime_text.exe"
+    alias vscode="$C_DRIVE/Users/david/AppData/Local/Programs/Microsoft\ VS\ Code/Code.exe"
+  else
+    alias open="xdg-open"
+    command -v subl >/dev/null 2>&1 && alias sublime="subl"
+    command -v code >/dev/null 2>&1 && alias vscode="code"
+  fi
 
   # Python on WSL
-  alias pyenv="python -m venv .venv-wsl"
+  if $IS_WSL; then
+    alias pyenv="python -m venv .venv-wsl"
+  else
+    alias pyenv="python3 -m venv .venv"
+  fi
 
-  export BLACK_VAULT="/mnt/c/Users/david/iCloudDrive/iCloud~md~obsidian/Black Vault"
-  export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
-  export SKILLS_REGISTRY_REPO="/mnt/c/Users/david/Workspace/repos/github/tools/skills-registry"
+  if $IS_WSL; then
+    export BLACK_VAULT="/mnt/c/Users/david/iCloudDrive/iCloud~md~obsidian/Black Vault"
+    export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
+    export SKILLS_REGISTRY_REPO="/mnt/c/Users/david/Workspace/repos/github/tools/skills-registry"
+  else
+    export BLACK_VAULT="$HOME/Documents/Black Vault"
+    export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
+    export SKILLS_REGISTRY_REPO="$OS_WORKSPACE/repos/github/tools/skills-registry"
+  fi
 
   # Powershell
   alias pshcfg="vim $DOTFILES_PATH/shell/posh/Microsoft.PowerShell_profile.ps1"
@@ -157,6 +198,7 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   path=(
     "$HOME/bin"
+    "$HOME/.local/bin"
     "$DOTLY_PATH/bin"
     "$DOTFILES_PATH/bin"
     "$DOTFILES_PYTHON_VENV/bin"

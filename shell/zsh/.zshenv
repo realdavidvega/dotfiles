@@ -5,4 +5,8 @@ export DOTFILES_PATH="$HOME/.dotfiles"
 export DOTLY_PATH="$DOTFILES_PATH/modules/dotly"
 export DOTLY_THEME="codely"
 
-export PATH="$PATH:/home/david/.nvm/versions/node/v22.22.0/bin"
+if [ -d "$HOME/.nvm/versions/node" ]; then
+  for node_bin in "$HOME"/.nvm/versions/node/*/bin(N); do
+    export PATH="$PATH:$node_bin"
+  done
+fi

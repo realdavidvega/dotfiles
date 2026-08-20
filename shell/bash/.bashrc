@@ -53,10 +53,16 @@ fi
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
 
-### MANAGED BY RANCHER DESKTOP START (DO NOT EDIT)
-export PATH="/Users/david/.rd/bin:$PATH"
-### MANAGED BY RANCHER DESKTOP END (DO NOT EDIT)
+if [[ "$OSTYPE" == darwin* ]]; then
+  ### MANAGED BY RANCHER DESKTOP START (DO NOT EDIT)
+  export PATH="/Users/david/.rd/bin:$PATH"
+  ### MANAGED BY RANCHER DESKTOP END (DO NOT EDIT)
+fi
 
-. "$HOME/.local/bin/env"
+[[ -f "$HOME/.local/bin/env" ]] && . "$HOME/.local/bin/env"
 
 [ -f ~/.fzf.bash ] && source ~/.fzf.bash
+
+# >>> Codex installer >>>
+export PATH="/home/black/.local/bin:$PATH"
+# <<< Codex installer <<<
