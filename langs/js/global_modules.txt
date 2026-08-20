@@ -1,4 +1,4 @@
-@biomejs
+@biomejs/biome
 corepack
 openclaw
 ts-node
