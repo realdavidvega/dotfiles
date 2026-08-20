@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Custom Resolution
+Exec=/home/black/.local/bin/set-resolution.sh
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

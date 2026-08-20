@@ -1,0 +1,341 @@
+# MacBook Pro 2015 Linux Mint Cinnamon Setup Guide
+
+This machine uses Linux Mint Cinnamon on X11 with a 2015 MacBook Pro, Intel Iris Graphics
+6100, a 3440 by 1440 external display on `DP-2`, a Corne keyboard, and a DP plus USB KVM.
+
+The active configuration is stored in this repository and linked into the home directory and
+`/etc`. The XDG autostart method is documented as a fallback and is not installed because
+`.xprofile` is active.
+
+## Architecture
+
+```mermaid
+flowchart TD
+  boot[Boot and login] --> power[Power layer]
+  boot --> keyboard[Keyboard layer]
+  boot --> display[Display layer]
+  power --> lid[logind ignores lid close]
+  power --> usb[GRUB disables USB autosuspend]
+  keyboard --> keyd[keyd swaps Ctrl and Super]
+  display --> xprofile[.xprofile applies 3440x1440]
+  hotplug[DRM hotplug event] --> udev[udev rule]
+  udev --> script[display-hotplug.sh]
+  script --> connected{DP-2 connected}
+  connected -->|yes| external[Apply external mode and disable eDP-1]
+  connected -->|no| internal[Enable eDP-1]
+```
+
+| Layer | Purpose | Managed files |
+|---|---|---|
+| Display | External resolution and KVM hotplug | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
+| Keyboard | Swap Ctrl and Super | `os/linux/system/etc/keyd/default.conf` |
+| Power | Clamshell mode and USB reconnect reliability | `os/linux/system/etc/systemd/logind.conf.d/lid.conf`, `os/linux/system/etc/default/grub` |
+
+## Restore
+
+The guarded `restoration_scripts/01-linux-mint-macbook.sh` links the user files:
+
+```text
+~/.xprofile -> ~/.dotfiles/os/linux/home/.xprofile
+~/.local/bin/display-hotplug.sh -> ~/.dotfiles/os/linux/home/display-hotplug.sh
+```
+
+The same installer links the system files:
+
+```text
+/etc/udev/rules.d/95-monitor-hotplug.rules -> ~/.dotfiles/os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules
+/etc/keyd/default.conf -> ~/.dotfiles/os/linux/system/etc/keyd/default.conf
+/etc/systemd/logind.conf.d/lid.conf -> ~/.dotfiles/os/linux/system/etc/systemd/logind.conf.d/lid.conf
+/etc/default/grub -> ~/.dotfiles/os/linux/system/etc/default/grub
+```
+
+The installer runs only on Linux Mint installed on `MacBookPro12,1`. It skips macOS, WSL, and
+other native Linux systems. It links an existing regular file only when it exactly matches the
+managed copy. It moves the original to `<target>.pre-dotfiles`. A different file or existing
+backup blocks installation for manual review.
+
+Apply the complete managed setup with:
+
+```bash
+DOTFILES_PATH="$HOME/.dotfiles" bash "$HOME/.dotfiles/restoration_scripts/01-linux-mint-macbook.sh"
+```
+
+Reboot after a GRUB or lid configuration change.
+
+## Display resolution
+
+The external monitor has no EDID readable by Linux, so X11 needs a custom modeline.
+
+Test it manually with:
+
+```bash
+xrandr --newmode "3440x1440R" 319.75 3440 3488 3520 3600 1440 1443 1453 1481 +hsync -vsync
+xrandr --addmode DP-2 "3440x1440R"
+xrandr --output DP-2 --mode "3440x1440R" --primary
+xrandr --output eDP-1 --off
+```
+
+### Login configuration
+
+Live path: `~/.xprofile`
+
+```bash
+#!/bin/bash
+# Wait for the external display to be ready
+sleep 3
+
+# Add and apply the custom resolution
+xrandr --newmode "3440x1440R" 319.75 3440 3488 3520 3600 1440 1443 1453 1481 +hsync -vsync
+xrandr --addmode DP-2 "3440x1440R"
+xrandr --output DP-2 --mode "3440x1440R" --primary
+xrandr --output eDP-1 --off
+```
+
+### XDG autostart alternative
+
+Use this only if Cinnamon ignores `.xprofile`. Do not enable both methods.
+The inactive templates are stored under `os/linux/home/alternatives/` and are not linked by
+the restoration script.
+
+`~/.config/autostart/xrandr-custom.desktop`:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Custom Resolution
+Exec=/home/black/.local/bin/set-resolution.sh
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+```
+
+`~/.local/bin/set-resolution.sh`:
+
+```bash
+#!/bin/bash
+sleep 3
+xrandr --newmode "3440x1440R" 319.75 3440 3488 3520 3600 1440 1443 1453 1481 +hsync -vsync
+xrandr --addmode DP-2 "3440x1440R"
+xrandr --output DP-2 --mode "3440x1440R" --primary
+xrandr --output eDP-1 --off
+```
+
+## Display hotplug
+
+When the KVM disconnects `DP-2`, Cinnamon enables `eDP-1`. The udev rule invokes the hotplug
+script when DRM state changes.
+
+Live path: `~/.local/bin/display-hotplug.sh`
+
+```bash
+#!/bin/bash
+export DISPLAY=:0
+export XAUTHORITY=/home/black/.Xauthority
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+
+# Give the kernel time to settle after the hotplug event
+sleep 2
+
+# Check if DP-2 is connected
+if xrandr | grep "DP-2 connected" > /dev/null 2>&1; then
+    # Re-add the custom mode when the external monitor returns
+    xrandr --newmode "3440x1440R" 319.75 3440 3488 3520 3600 1440 1443 1453 1481 +hsync -vsync 2>/dev/null
+    xrandr --addmode DP-2 "3440x1440R"
+    xrandr --output DP-2 --mode "3440x1440R" --primary
+    xrandr --output eDP-1 --off
+else
+    # Use the internal display while the external monitor is disconnected
+    xrandr --output eDP-1 --auto
+fi
+```
+
+Live path: `/etc/udev/rules.d/95-monitor-hotplug.rules`
+
+```udev
+ACTION=="change", SUBSYSTEM=="drm", RUN+="/usr/bin/su black -c '/home/black/.local/bin/display-hotplug.sh'"
+```
+
+Reload the rule with:
+
+```bash
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=drm
+```
+
+## Display and font scaling
+
+Cinnamon display scaling remains at 100 percent. Font scaling provides larger text without
+X11 framebuffer downscaling.
+
+```bash
+gsettings set org.cinnamon.desktop.interface text-scaling-factor 1.3
+```
+
+Font hinting is `Full`, sub-pixel rendering is `RGB`, and a panel height around 40 to 48 pixels
+fits the external display.
+
+## Keyboard remapping
+
+`keyd` swaps Ctrl and Super at the input layer, where Cinnamon cannot override it.
+
+Install `keyd` when it is absent:
+
+```bash
+sudo apt install git build-essential
+git clone https://github.com/rvaiya/keyd.git
+cd keyd
+make
+sudo make install
+sudo systemctl enable --now keyd
+```
+
+Live path: `/etc/keyd/default.conf`
+
+```ini
+[ids]
+*
+
+[main]
+leftmeta = leftcontrol
+leftcontrol = leftmeta
+```
+
+Apply and inspect the mapping with:
+
+```bash
+sudo keyd reload
+sudo keyd monitor
+```
+
+The wildcard applies to all keyboards. To scope the mapping to the Corne, find its device ID
+and replace `*` in `[ids]`:
+
+```bash
+cat /proc/bus/input/devices | grep -A 4 "Corne"
+sudo keyd list-keys
+```
+
+## Clamshell mode
+
+Live path: `/etc/systemd/logind.conf.d/lid.conf`
+
+```ini
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
+```
+
+Cinnamon Power Management also sets the lid-close action to `Nothing` on battery and external
+power. Apply the system setting with a reboot. A temporary inhibitor is available for testing:
+
+```bash
+systemd-inhibit --what=handle-lid-switch --why="Using external monitor" sleep infinity
+```
+
+## USB autosuspend
+
+The managed `/etc/default/grub` adds `usbcore.autosuspend=-1` to the kernel command line:
+
+```text
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash usbcore.autosuspend=-1"
+```
+
+Regenerate the boot configuration and reboot after changing it:
+
+```bash
+sudo update-grub
+sudo reboot
+```
+
+Live path: `/etc/default/grub`
+
+```bash
+# If you change this file, run 'update-grub' afterwards to update
+# /boot/grub/grub.cfg.
+# For full documentation of the options in this file, see:
+#   info -f grub -n 'Simple configuration'
+
+GRUB_DEFAULT=0
+GRUB_TIMEOUT_STYLE=hidden
+GRUB_TIMEOUT=0
+GRUB_DISTRIBUTOR=`( . /etc/os-release; echo ${NAME:-Ubuntu} ) 2>/dev/null || echo Ubuntu`
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash usbcore.autosuspend=-1"
+GRUB_CMDLINE_LINUX=""
+
+# If your computer has multiple operating systems installed, then you
+# probably want to run os-prober. However, if your computer is a host
+# for guest OSes installed via LVM or raw disk devices, running
+# os-prober can cause damage to those guest OSes as it mounts
+# filesystems to look for things.
+#GRUB_DISABLE_OS_PROBER=false
+
+# Uncomment to enable BadRAM filtering, modify to suit your needs
+# This works with Linux (no patch required) and with any kernel that obtains
+# the memory map information from GRUB (GNU Mach, kernel of FreeBSD ...)
+#GRUB_BADRAM="0x01234567,0xfefefefe,0x89abcdef,0xefefefef"
+
+# Uncomment to disable graphical terminal
+#GRUB_TERMINAL=console
+
+# The resolution used on graphical terminal
+# note that you can use only modes which your graphic card supports via VBE
+# you can see them in real GRUB with the command `vbeinfo'
+#GRUB_GFXMODE=640x480
+
+# Uncomment if you don't want GRUB to pass "root=UUID=xxx" parameter to Linux
+#GRUB_DISABLE_LINUX_UUID=true
+
+# Uncomment to disable generation of recovery mode menu entries
+#GRUB_DISABLE_RECOVERY="true"
+
+# Uncomment to get a beep at grub start
+#GRUB_INIT_TUNE="480 440 1"
+```
+
+## Verification
+
+```bash
+xrandr | grep -E 'DP-2|eDP-1'
+gsettings get org.cinnamon.desktop.interface text-scaling-factor
+sudo udevadm test /sys/class/drm/card1-DP-2
+sudo keyd monitor
+loginctl show-logind | grep -i lid
+cat /proc/cmdline | grep 'usbcore.autosuspend=-1'
+readlink -f ~/.xprofile ~/.local/bin/display-hotplug.sh
+readlink -f /etc/udev/rules.d/95-monitor-hotplug.rules
+readlink -f /etc/keyd/default.conf
+readlink -f /etc/systemd/logind.conf.d/lid.conf
+readlink -f /etc/default/grub
+```
+
+## Troubleshooting
+
+### Resolution does not apply at login
+
+- Increase the `.xprofile` delay from 3 to 5 seconds.
+- Confirm `DP-2` with `xrandr | grep DP-2`.
+- Use the XDG autostart alternative only if Cinnamon ignores `.xprofile`.
+
+### KVM hotplug does not trigger
+
+- Watch events with `udevadm monitor --subsystem-match=drm`.
+- Increase the hotplug delay from 2 to 4 seconds for a slow KVM handshake.
+- Add temporary logging to `/tmp/display-hotplug.log` while diagnosing.
+
+### Keyboard mapping does not apply
+
+- Check `sudo systemctl status keyd`.
+- Inspect Corne events with `sudo evtest`.
+- Reload with `sudo keyd reload`.
+
+### USB devices do not reconnect
+
+- Confirm the kernel option with `cat /proc/cmdline | grep autosuspend`.
+- Inspect devices with `lsusb`.
+- Reset a known device with `usbreset /dev/bus/usb/001/004`, replacing the example path.
+
+### Text is blurry
+
+- Keep Cinnamon display scaling at 100 percent.
+- Confirm `gsettings get org.cinnamon.desktop.interface text-scaling-factor` returns `1.3`.
+- Use full hinting and RGB or BGR sub-pixel rendering based on the panel.
