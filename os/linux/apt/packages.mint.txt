@@ -1,0 +1,29 @@
+# Core shell and repository tooling
+build-essential
+ca-certificates
+cargo
+cmake
+curl
+fzf
+gh
+git
+git-crypt
+jq
+neovim
+zoxide
+zsh
+
+# Portable CLI baseline
+aria2
+bat
+fd-find
+ffmpeg
+git-delta
+golang-go
+hyperfine
+mc
+ripgrep
+shellcheck
+shfmt
+tesseract-ocr
+tmux

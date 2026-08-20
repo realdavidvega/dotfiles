@@ -308,6 +308,31 @@ readlink -f /etc/systemd/logind.conf.d/lid.conf
 readlink -f /etc/default/grub
 ```
 
+## Development toolchain
+
+Native Linux Mint uses a curated apt manifest at `os/linux/apt/packages.mint.txt`. The older
+`os/linux/apt/packages.txt` belongs to WSL and is not imported on Mint.
+
+The Mint restore sequence is:
+
+1. `02-linux-mint-packages.sh` installs the apt baseline.
+2. `02-nvm-setup.sh` installs NVM `0.40.4` and the current Node LTS line.
+3. `02-npm-globals.sh` calls dotly's npm importer for `langs/js/global_modules.txt`.
+4. `02-uv-setup.sh` installs uv `0.12.5` into `~/.local/bin`.
+5. `02-uv-tools.sh` creates the shared Python environment and installs
+   `langs/python/uv_tools.txt`.
+
+These scripts require native Linux Mint. They skip macOS, WSL, and other Linux distributions.
+Install the baseline manually with:
+
+```bash
+bash "$HOME/.dotfiles/restoration_scripts/02-linux-mint-packages.sh"
+```
+
+The apt baseline includes shell and repository tools already expected by the dotfiles, plus
+`aria2`, `bat`, `fd`, FFmpeg, Git Delta, Go, Hyperfine, Midnight Commander, ripgrep,
+ShellCheck, shfmt, Tesseract, and tmux.
+
 ## Troubleshooting
 
 ### Resolution does not apply at login

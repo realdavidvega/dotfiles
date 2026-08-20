@@ -173,15 +173,16 @@ Your dotfiles track installed packages across multiple package managers, making 
 **Linux:**
 
 - **Homebrew** → `os/linux/brew/Brewfile`
-- **Apt** → `os/linux/apt/packages.txt`
+- **Apt on WSL** → `os/linux/apt/packages.txt`
+- **Apt on Linux Mint** → `os/linux/apt/packages.mint.txt`
 - **Snap** → `os/linux/snap/packages.txt`
 - **Pacman** → `os/linux/pacman/packages.txt`
 
 **Cross-platform:**
 
 - **Python/pip** → `langs/python/requirements.txt`
-- **uv tools** → `langs/python/uv_tools.txt` (installed by `restoration_scripts/02-uv-tools.sh` during `dot self install`)
-- **NPM global** → `langs/js/global_modules.txt` (installed via `npm install -g` by `dot package import`)
+- **uv tools** → `langs/python/uv_tools.txt` (uv and its tools are restored on Linux Mint during `dot self install`)
+- **NPM global** → `langs/js/global_modules.txt` (NVM, Node LTS, and globals are restored on Linux Mint during `dot self install`)
 - **Volta** → `langs/js/volta_dependencies.txt`
 - **VSCode** → `editors/code/extensions.txt`
 
@@ -191,7 +192,11 @@ Your dotfiles track installed packages across multiple package managers, making 
 
 ### Tracking Newly Installed Packages
 
-After installing new tools, update your tracked package lists:
+The generic `dot package dump` command rewrites the WSL apt manifest from `apt-mark`. Maintain
+`packages.mint.txt` as a curated list so Linux Mint desktop packages and WSL system packages
+remain separate.
+
+After installing new tools, update the applicable tracked package lists:
 
 ```bash
 # Dump all currently installed packages to manifest files
@@ -202,7 +207,7 @@ git add os/
 git commit -m "Update package manifests"
 ```
 
-**Example workflow for Linux:**
+**Example workflow for WSL with Snap:**
 
 ```bash
 # Install a new tool via snap
@@ -222,8 +227,12 @@ git commit -m "Add ngrok to snap packages"
 ### Restoring Packages on New Machine
 
 During initial setup:
-- **Standard packages** are imported via `dot package import` (step 5 above)
-- **uv tools** are installed automatically by `restoration_scripts/02-uv-tools.sh` during `dot self install`
+
+- **macOS and WSL package-manager state** is imported with `dot package import`
+- **Linux Mint apt packages** are installed by `restoration_scripts/02-linux-mint-packages.sh`
+- **NVM and Node LTS** are installed by `restoration_scripts/02-nvm-setup.sh`
+- **npm globals** are installed through dotly by `restoration_scripts/02-npm-globals.sh`
+- **uv and uv tools** are installed by `02-uv-setup.sh` and `02-uv-tools.sh`
 
 To manually import standard packages later:
 
@@ -231,7 +240,7 @@ To manually import standard packages later:
 dot package import
 ```
 
-This will:
+On macOS and WSL, this will:
 
 - Install all Homebrew packages from Brewfile
 - Install all apt packages (Linux)
@@ -240,18 +249,20 @@ This will:
 - Install all NPM packages
 - Install all VSCode extensions
 
-**Note:** `dot package import` does NOT handle uv tools. Those are managed separately by the restoration script.
+`dot package import` does not handle uv tools. Linux Mint uses the guarded restoration scripts
+instead of the WSL apt manifest.
 
 ### Best Practices
 
 **For Linux tools:**
 
-1. **Prefer snap/apt** for GUI apps and system tools (auto-tracked)
-2. **Use Homebrew** for development tools and LSP servers (auto-tracked via Brewfile)
-   - Examples: `bash-language-server`, `yaml-language-server`
-3. **Use uv tools** for Python CLI tools and LSP servers (e.g., `uv tool install basedpyright`) — tracked in `langs/python/uv_tools.txt` and restored by `restoration_scripts/02-uv-tools.sh`
-4. **Use NPM global** for Node.js CLI tools not available on Homebrew — tracked in `langs/js/global_modules.txt`
-5. **For manual installs** (curl downloads to `~/.local/bin`), add install scripts to `restoration_scripts/`
+1. **Use curated apt packages on Mint** through `os/linux/apt/packages.mint.txt`.
+2. **Use the WSL apt dump and Linuxbrew only on WSL**.
+3. **Use uv tools** for Python CLI tools and LSP servers. Track them in
+   `langs/python/uv_tools.txt` for restoration by `02-uv-tools.sh`.
+4. **Use npm globals** for Node.js CLI tools. Track them in `langs/js/global_modules.txt` for
+   restoration through dotly's npm importer.
+5. **Add a guarded restoration script** for tools installed manually into `~/.local/bin`.
 
 **Update regularly:**
 

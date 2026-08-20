@@ -51,10 +51,12 @@ dot package import      # Install everything from manifests
 dot package update_all  # Alias: up
 ```
 
-`dot package import` covers Brewfile, apt, snap, pip (`langs/python/requirements.txt`),
-NPM globals (`langs/js/global_modules.txt`), and VSCode extensions. It does
-**not** cover `langs/python/uv_tools.txt`. Those are only installed by
-`restoration_scripts/02-uv-tools.sh` during `dot self install`.
+`dot package import` covers Brewfile, the WSL apt manifest, snap, pip
+(`langs/python/requirements.txt`), NPM globals (`langs/js/global_modules.txt`), and VSCode
+extensions. Native Linux Mint uses `os/linux/apt/packages.mint.txt` through the guarded
+`02-linux-mint-packages.sh` restoration script. The following guarded steps install NVM with
+Node LTS, invoke dotly's npm importer for globals, then install uv and
+`langs/python/uv_tools.txt`.
 
 ### Updating externally-installed tools
 
