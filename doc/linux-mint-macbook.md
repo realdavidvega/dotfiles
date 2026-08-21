@@ -17,17 +17,21 @@ flowchart TD
   power --> lid[logind ignores lid close]
   power --> usb[GRUB disables USB autosuspend]
   keyboard --> keyd[keyd swaps Ctrl and Super]
-  display --> xprofile[.xprofile applies 3440x1440]
+  display --> xprofile[.xprofile invokes the display helper]
   hotplug[DRM hotplug event] --> udev[udev rule]
   udev --> script[display-hotplug.sh]
+  lidchange[Lid state change] --> watcher[Session lid watcher]
+  watcher --> script
   script --> connected{DP-2 connected}
-  connected -->|yes| external[Apply external mode and disable eDP-1]
+  connected -->|yes| lidstate{Lid closed}
+  lidstate -->|yes| external[Apply external mode and disable eDP-1]
+  lidstate -->|no| dual[Apply external mode and enable eDP-1]
   connected -->|no| internal[Enable eDP-1]
 ```
 
 | Layer | Purpose | Managed files |
 |---|---|---|
-| Display | External resolution and KVM hotplug | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
+| Display | External resolution, lid state, and KVM hotplug | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/home/display-lid-watch.desktop`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
 | Keyboard | Swap Ctrl and Super | `os/linux/system/etc/keyd/default.conf` |
 | Power | Clamshell mode and USB reconnect reliability | `os/linux/system/etc/systemd/logind.conf.d/lid.conf`, `os/linux/system/etc/default/grub` |
 
@@ -38,6 +42,7 @@ The guarded `restoration_scripts/01-linux-mint-macbook.sh` links the user files:
 ```text
 ~/.xprofile -> ~/.dotfiles/os/linux/home/.xprofile
 ~/.local/bin/display-hotplug.sh -> ~/.dotfiles/os/linux/home/display-hotplug.sh
+~/.config/autostart/display-lid-watch.desktop -> ~/.dotfiles/os/linux/home/display-lid-watch.desktop
 ```
 
 The same installer links the system files:
@@ -60,7 +65,8 @@ Apply the complete managed setup with:
 DOTFILES_PATH="$HOME/.dotfiles" bash "$HOME/.dotfiles/restoration_scripts/01-linux-mint-macbook.sh"
 ```
 
-Reboot after a GRUB or lid configuration change.
+The installer also enables and starts keyd, then reloads its mapping. Reboot after a GRUB or
+lid configuration change.
 
 ## Display resolution
 
@@ -81,15 +87,15 @@ Live path: `~/.xprofile`
 
 ```bash
 #!/bin/bash
-# Wait for the external display to be ready
-sleep 3
 
-# Add and apply the custom resolution
-xrandr --newmode "3440x1440R" 319.75 3440 3488 3520 3600 1440 1443 1453 1481 +hsync -vsync
-xrandr --addmode DP-2 "3440x1440R"
-xrandr --output DP-2 --mode "3440x1440R" --primary
-xrandr --output eDP-1 --off
+# Give Cinnamon and the external display time to initialize, then reuse the
+# idempotent hotplug path. Login must continue even if display setup fails.
+sleep 3
+DISPLAY_HOTPLUG_DELAY=0 "$HOME/.local/bin/display-hotplug.sh" >/dev/null 2>&1 || true
 ```
+
+The helper treats an existing modeline as success, so repeated login and hotplug runs do not
+raise an X profile error.
 
 ### XDG autostart alternative
 
@@ -113,39 +119,22 @@ X-GNOME-Autostart-enabled=true
 ```bash
 #!/bin/bash
 sleep 3
-xrandr --newmode "3440x1440R" 319.75 3440 3488 3520 3600 1440 1443 1453 1481 +hsync -vsync
-xrandr --addmode DP-2 "3440x1440R"
-xrandr --output DP-2 --mode "3440x1440R" --primary
-xrandr --output eDP-1 --off
+DISPLAY_HOTPLUG_DELAY=0 "$HOME/.local/bin/display-hotplug.sh" >/dev/null 2>&1 || true
 ```
 
 ## Display hotplug
 
-When the KVM disconnects `DP-2`, Cinnamon enables `eDP-1`. The udev rule invokes the hotplug
-script when DRM state changes.
+When the KVM disconnects `DP-2`, the helper enables `eDP-1`. When `DP-2` is connected, the
+helper reads `/proc/acpi/button/lid/*/state`. It disables the internal panel with the lid closed
+and enables it to the left of `DP-2` with the lid open. The udev rule invokes the helper when
+DRM state changes. The XDG session autostart entry runs the helper in watcher mode so opening
+or closing the lid applies the layout without requiring a display hotplug event.
 
 Live path: `~/.local/bin/display-hotplug.sh`
 
 ```bash
-#!/bin/bash
-export DISPLAY=:0
-export XAUTHORITY=/home/black/.Xauthority
-export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
-
-# Give the kernel time to settle after the hotplug event
-sleep 2
-
-# Check if DP-2 is connected
-if xrandr | grep "DP-2 connected" > /dev/null 2>&1; then
-    # Re-add the custom mode when the external monitor returns
-    xrandr --newmode "3440x1440R" 319.75 3440 3488 3520 3600 1440 1443 1453 1481 +hsync -vsync 2>/dev/null
-    xrandr --addmode DP-2 "3440x1440R"
-    xrandr --output DP-2 --mode "3440x1440R" --primary
-    xrandr --output eDP-1 --off
-else
-    # Use the internal display while the external monitor is disconnected
-    xrandr --output eDP-1 --auto
-fi
+# The tracked script is the executable reference.
+sed -n '1,240p' "$HOME/.local/bin/display-hotplug.sh"
 ```
 
 Live path: `/etc/udev/rules.d/95-monitor-hotplug.rules`
@@ -350,6 +339,7 @@ ShellCheck, shfmt, Tesseract, and tmux.
 ### Keyboard mapping does not apply
 
 - Check `sudo systemctl status keyd`.
+- Enable and start it with `sudo systemctl enable --now keyd`.
 - Inspect Corne events with `sudo evtest`.
 - Reload with `sudo keyd reload`.
 
