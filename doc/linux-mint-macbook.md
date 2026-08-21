@@ -184,9 +184,12 @@ Live path: `/etc/keyd/default.conf`
 *
 
 [main]
-leftmeta = leftcontrol
-leftcontrol = leftmeta
+leftmeta = layer(control)
+leftcontrol = layer(meta)
 ```
+
+Modifier keys use keyd layers. Directly assigning one modifier key to another is rejected by
+keyd 2.6.0 when the daemon loads the configuration.
 
 Apply and inspect the mapping with:
 
