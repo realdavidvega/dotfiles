@@ -23,8 +23,6 @@ fi
 HOME_ROOT="$DOTFILES_PATH/os/linux/home"
 SYSTEM_ROOT="$DOTFILES_PATH/os/linux/system"
 CHANGED_UDEV=0
-CHANGED_KEYD=0
-CHANGED_LOGIND=0
 CHANGED_GRUB=0
 FAILED=0
 
@@ -100,6 +98,8 @@ link_system_file() {
 
 link_user_file "$HOME_ROOT/.xprofile" "$HOME/.xprofile" || FAILED=1
 link_user_file "$HOME_ROOT/display-hotplug.sh" "$HOME/.local/bin/display-hotplug.sh" || FAILED=1
+link_user_file "$HOME_ROOT/display-lid-watch.desktop" \
+  "$HOME/.config/autostart/display-lid-watch.desktop" || FAILED=1
 
 link_system_file "$SYSTEM_ROOT/etc/udev/rules.d/95-monitor-hotplug.rules" \
   /etc/udev/rules.d/95-monitor-hotplug.rules CHANGED_UDEV || FAILED=1
@@ -114,7 +114,8 @@ if [ "$CHANGED_UDEV" -eq 1 ]; then
   sudo udevadm control --reload-rules
 fi
 
-if [ "$CHANGED_KEYD" -eq 1 ] && command -v keyd >/dev/null 2>&1; then
+if command -v keyd >/dev/null 2>&1; then
+  sudo systemctl enable --now keyd
   sudo keyd reload
 fi
 

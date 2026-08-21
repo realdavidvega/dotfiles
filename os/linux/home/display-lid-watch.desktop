@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=MacBook Lid Display Watcher
+Comment=Keep the internal display in sync with the MacBook lid
+Exec=/home/black/.local/bin/display-hotplug.sh --watch-lid
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
