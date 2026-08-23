@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Mac-style Command Shortcuts
+Comment=Apply macOS-style Command shortcuts per application
+Exec=/usr/local/bin/keyd-application-mapper -d
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

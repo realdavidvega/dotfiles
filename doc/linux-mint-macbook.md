@@ -16,7 +16,8 @@ flowchart TD
   boot --> display[Display layer]
   power --> lid[logind ignores lid close]
   power --> usb[GRUB disables USB autosuspend]
-  keyboard --> keyd[keyd swaps Ctrl and Super]
+  keyboard --> keyd[keyd captures both keyboards]
+  keyd --> mapper[Application mapper provides Command shortcuts]
   display --> xprofile[.xprofile invokes the display helper]
   hotplug[DRM hotplug event] --> udev[udev rule]
   udev --> script[display-hotplug.sh]
@@ -32,7 +33,7 @@ flowchart TD
 | Layer | Purpose | Managed files |
 |---|---|---|
 | Display | External resolution, lid state, and KVM hotplug | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/home/display-lid-watch.desktop`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
-| Keyboard | Swap Ctrl and Super | `os/linux/system/etc/keyd/default.conf` |
+| Keyboard | macOS-style Command shortcuts with native terminal Ctrl | `os/linux/system/etc/keyd/default.conf`, `os/linux/home/keyd/app.conf`, `os/linux/home/keyd-application-mapper.desktop` |
 | Power | Clamshell mode and USB reconnect reliability | `os/linux/system/etc/systemd/logind.conf.d/lid.conf`, `os/linux/system/etc/default/grub` |
 
 ## Restore
@@ -43,16 +44,22 @@ The guarded `restoration_scripts/01-linux-mint-macbook.sh` links the user files:
 ~/.xprofile -> ~/.dotfiles/os/linux/home/.xprofile
 ~/.local/bin/display-hotplug.sh -> ~/.dotfiles/os/linux/home/display-hotplug.sh
 ~/.config/autostart/display-lid-watch.desktop -> ~/.dotfiles/os/linux/home/display-lid-watch.desktop
+~/.config/keyd/app.conf -> ~/.dotfiles/os/linux/home/keyd/app.conf
+~/.config/autostart/keyd-application-mapper.desktop -> ~/.dotfiles/os/linux/home/keyd-application-mapper.desktop
 ```
 
-The same installer links the system files:
+The same installer links the system files, except for keyd's early-boot configuration:
 
 ```text
 /etc/udev/rules.d/95-monitor-hotplug.rules -> ~/.dotfiles/os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules
-/etc/keyd/default.conf -> ~/.dotfiles/os/linux/system/etc/keyd/default.conf
 /etc/systemd/logind.conf.d/lid.conf -> ~/.dotfiles/os/linux/system/etc/systemd/logind.conf.d/lid.conf
 /etc/default/grub -> ~/.dotfiles/os/linux/system/etc/default/grub
 ```
+
+`/etc/keyd/default.conf` is installed as a root-owned regular file from
+`os/linux/system/etc/keyd/default.conf`. keyd drops privileges before parsing its configuration
+and cannot traverse the mode `0700` home directory during early boot. A symlink into the
+repository therefore fails at boot even though a post-login reload succeeds.
 
 The installer runs only on Linux Mint installed on `MacBookPro12,1`. It skips macOS, WSL, and
 other native Linux systems. It links an existing regular file only when it exactly matches the
@@ -65,8 +72,9 @@ Apply the complete managed setup with:
 DOTFILES_PATH="$HOME/.dotfiles" bash "$HOME/.dotfiles/restoration_scripts/01-linux-mint-macbook.sh"
 ```
 
-The installer also enables and starts keyd, then reloads its mapping. Reboot after a GRUB or
-lid configuration change.
+The installer also enables and starts keyd, adds the desktop user to the trusted `keyd` group,
+then reloads its mapping. Log out and back in after the first group assignment. Reboot after a
+GRUB or lid configuration change.
 
 ## Display resolution
 
@@ -162,9 +170,11 @@ gsettings set org.cinnamon.desktop.interface text-scaling-factor 1.3
 Font hinting is `Full`, sub-pixel rendering is `RGB`, and a panel height around 40 to 48 pixels
 fits the external display.
 
-## Keyboard remapping
+## Keyboard shortcuts
 
-`keyd` swaps Ctrl and Super at the input layer, where Cinnamon cannot override it.
+`keyd` captures both the Apple internal keyboard and the Corne. Ctrl and Command retain their
+native identities at the input layer. The session application mapper translates common
+Command combinations into each application's Linux shortcuts.
 
 Install `keyd` when it is absent:
 
@@ -177,25 +187,40 @@ sudo make install
 sudo systemctl enable --now keyd
 ```
 
-Live path: `/etc/keyd/default.conf`
+Live path: `/etc/keyd/default.conf`, deployed from `os/linux/system/etc/keyd/default.conf`
 
 ```ini
 [ids]
 *
 
 [main]
-leftmeta = layer(control)
-leftcontrol = layer(meta)
+# Keep the configuration non-empty without changing normal keyboard behavior.
+f24 = noop
 ```
 
-Modifier keys use keyd layers. Directly assigning one modifier key to another is rejected by
-keyd 2.6.0 when the daemon loads the configuration.
+Ctrl and Command retain their native identities because neither is remapped in the base
+configuration. The unused F24 binding keeps `[main]` non-empty. An empty section and
+self-referential Meta layer bindings pass `keyd check` in keyd 2.6.0 but are rejected during
+the daemon's initial boot load.
+
+Live path: `~/.config/keyd/app.conf`
+
+The wildcard section maps common Command shortcuts to their Ctrl equivalents. The
+`*terminal*` section appears first because keyd keeps the first duplicate binding when filters
+overlap. It maps GNOME Terminal operations that use Ctrl+Shift, including copy, paste, new tab,
+and close tab. Physical Ctrl remains unchanged, so `CTRL+A`, `CTRL+E`, `CTRL+U`, `CTRL+C`, and
+other terminal controls continue to work normally.
+
+The mapper starts from `~/.config/autostart/keyd-application-mapper.desktop`. The user must be
+in the `keyd` group so it can access `/run/keyd.socket`.
 
 Apply and inspect the mapping with:
 
 ```bash
 sudo keyd reload
 sudo keyd monitor
+id -nG | grep -w keyd
+pgrep -af keyd-application-mapper
 ```
 
 The wildcard applies to all keyboards. To scope the mapping to the Corne, find its device ID
@@ -343,6 +368,8 @@ ShellCheck, shfmt, Tesseract, and tmux.
 
 - Check `sudo systemctl status keyd`.
 - Enable and start it with `sudo systemctl enable --now keyd`.
+- Confirm `id -nG` contains `keyd`, then log out and back in after a group change.
+- Check `~/.config/keyd/app.log` and `pgrep -af keyd-application-mapper`.
 - Inspect Corne events with `sudo evtest`.
 - Reload with `sudo keyd reload`.
 
