@@ -96,14 +96,49 @@ link_system_file() {
   echo "created: $target -> $source"
 }
 
+install_system_file() {
+  local source="$1"
+  local target="$2"
+  local changed_flag="$3"
+
+  if [ ! -f "$source" ]; then
+    echo "Missing managed source: $source"
+    return 1
+  fi
+
+  if [ -L "$target" ]; then
+    if [ "$(readlink -f "$target")" != "$(readlink -f "$source")" ]; then
+      echo "blocked: $target is a symlink to another source"
+      return 1
+    fi
+    sudo unlink "$target" || return 1
+  elif [ -e "$target" ] && ! cmp -s "$source" "$target"; then
+    echo "blocked: $target differs from the managed copy"
+    echo "review both files and reconcile them before installing"
+    return 1
+  fi
+
+  if [ ! -e "$target" ] || ! cmp -s "$source" "$target" || \
+      [ "$(stat -c '%U:%G:%a' "$target" 2>/dev/null)" != "root:root:644" ]; then
+    sudo install -o root -g root -m 0644 "$source" "$target" || return 1
+    printf -v "$changed_flag" '%s' 1
+    echo "installed: $target from $source"
+  else
+    echo "installed: $target"
+  fi
+}
+
 link_user_file "$HOME_ROOT/.xprofile" "$HOME/.xprofile" || FAILED=1
 link_user_file "$HOME_ROOT/display-hotplug.sh" "$HOME/.local/bin/display-hotplug.sh" || FAILED=1
 link_user_file "$HOME_ROOT/display-lid-watch.desktop" \
   "$HOME/.config/autostart/display-lid-watch.desktop" || FAILED=1
+link_user_file "$HOME_ROOT/keyd/app.conf" "$HOME/.config/keyd/app.conf" || FAILED=1
+link_user_file "$HOME_ROOT/keyd-application-mapper.desktop" \
+  "$HOME/.config/autostart/keyd-application-mapper.desktop" || FAILED=1
 
 link_system_file "$SYSTEM_ROOT/etc/udev/rules.d/95-monitor-hotplug.rules" \
   /etc/udev/rules.d/95-monitor-hotplug.rules CHANGED_UDEV || FAILED=1
-link_system_file "$SYSTEM_ROOT/etc/keyd/default.conf" \
+install_system_file "$SYSTEM_ROOT/etc/keyd/default.conf" \
   /etc/keyd/default.conf CHANGED_KEYD || FAILED=1
 link_system_file "$SYSTEM_ROOT/etc/systemd/logind.conf.d/lid.conf" \
   /etc/systemd/logind.conf.d/lid.conf CHANGED_LOGIND || FAILED=1
@@ -115,6 +150,10 @@ if [ "$CHANGED_UDEV" -eq 1 ]; then
 fi
 
 if command -v keyd >/dev/null 2>&1; then
+  if getent group keyd >/dev/null 2>&1 && ! id -nG "$USER" | grep -qw keyd; then
+    sudo usermod -aG keyd "$USER"
+    echo "Added $USER to the keyd group. Log out and back in before using the application mapper."
+  fi
   sudo systemctl enable --now keyd
   sudo keyd reload
 fi
