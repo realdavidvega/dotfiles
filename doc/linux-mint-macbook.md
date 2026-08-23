@@ -34,7 +34,7 @@ flowchart TD
 |---|---|---|
 | Display | External resolution, lid state, and KVM hotplug | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/home/display-lid-watch.desktop`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
 | Keyboard | macOS-style Command shortcuts with native terminal Ctrl | `os/linux/system/etc/keyd/default.conf`, `os/linux/home/keyd/app.conf`, `os/linux/home/keyd-application-mapper.desktop` |
-| Gestures | Three-finger workspace overview and navigation | Cinnamon `org.cinnamon.gestures` settings, Touchégg |
+| Gestures and scrolling | Three-finger workspace navigation and smoother two-finger scrolling | Cinnamon `org.cinnamon.gestures` settings, Touchégg, `os/linux/system/etc/X11/xorg.conf.d/90-bcm5974.conf` |
 | Power | Clamshell mode and USB reconnect reliability | `os/linux/system/etc/systemd/logind.conf.d/lid.conf`, `os/linux/system/etc/default/grub` |
 
 ## Restore
@@ -61,6 +61,9 @@ The same installer links the system files, except for keyd's early-boot configur
 `os/linux/system/etc/keyd/default.conf`. keyd drops privileges before parsing its configuration
 and cannot traverse the mode `0700` home directory during early boot. A symlink into the
 repository therefore fails at boot even though a post-login reload succeeds.
+
+`/etc/X11/xorg.conf.d/90-bcm5974.conf` is also installed as a root-owned regular file because
+the display server reads it before the desktop session starts.
 
 The installer runs only on Linux Mint installed on `MacBookPro12,1`. It skips macOS, WSL, and
 other native Linux systems. It links an existing regular file only when it exactly matches the
@@ -250,6 +253,25 @@ The 5 percent threshold makes recognition start close to normal scrolling sensit
 its automatic distance thresholds because it detects the trackpad's physical size correctly.
 The `bcm5974` driver can still discard occasional touch jumps, which prevents X11 gestures from
 matching macOS reliability exactly.
+
+### Scrolling feel
+
+The libinput scroll pixel distance is 15, matching the driver default instead of the coarse
+50-pixel value observed on this machine:
+
+```xorg.conf
+Section "InputClass"
+    Identifier "MacBook bcm5974 smooth scrolling"
+    MatchProduct "bcm5974"
+    MatchIsTouchpad "on"
+    MatchDriver "libinput"
+    Option "ScrollPixelDistance" "15"
+EndSection
+```
+
+This produces smaller, smoother scroll increments. Kinetic continuation after lifting the
+fingers remains application-controlled on X11, so behavior can differ between browsers,
+terminals, and other toolkits.
 
 Touchégg must be installed and its system daemon running:
 
