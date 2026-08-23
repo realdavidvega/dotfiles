@@ -13,6 +13,9 @@ neovim
 zoxide
 zsh
 
+# Cinnamon desktop integration
+touchegg
+
 # Portable CLI baseline
 aria2
 bat
