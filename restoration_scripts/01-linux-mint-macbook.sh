@@ -164,6 +164,11 @@ fi
 
 if command -v gsettings >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
   gsettings set org.cinnamon.desktop.interface text-scaling-factor 1.3
+  gsettings set org.cinnamon.gestures enabled true
+  gsettings set org.cinnamon.gestures swipe-up-3 'TOGGLE_EXPO::end'
+  gsettings set org.cinnamon.gestures swipe-down-3 'TOGGLE_EXPO::end'
+  gsettings set org.cinnamon.gestures swipe-left-3 'WORKSPACE_NEXT::end'
+  gsettings set org.cinnamon.gestures swipe-right-3 'WORKSPACE_PREVIOUS::end'
 fi
 
 echo "Linux Mint MacBook configuration pass complete."

@@ -34,6 +34,7 @@ flowchart TD
 |---|---|---|
 | Display | External resolution, lid state, and KVM hotplug | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/home/display-lid-watch.desktop`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
 | Keyboard | macOS-style Command shortcuts with native terminal Ctrl | `os/linux/system/etc/keyd/default.conf`, `os/linux/home/keyd/app.conf`, `os/linux/home/keyd-application-mapper.desktop` |
+| Gestures | Three-finger workspace overview and navigation | Cinnamon `org.cinnamon.gestures` settings, Touchégg |
 | Power | Clamshell mode and USB reconnect reliability | `os/linux/system/etc/systemd/logind.conf.d/lid.conf`, `os/linux/system/etc/default/grub` |
 
 ## Restore
@@ -229,6 +230,26 @@ and replace `*` in `[ids]`:
 ```bash
 cat /proc/bus/input/devices | grep -A 4 "Corne"
 sudo keyd list-keys
+```
+
+## Trackpad gestures
+
+Cinnamon's native gesture integration uses the Touchégg daemon on X11. Three-finger vertical
+swipes toggle the workspace Expo view. Horizontal swipes move between adjacent workspaces:
+
+```bash
+gsettings set org.cinnamon.gestures enabled true
+gsettings set org.cinnamon.gestures swipe-up-3 'TOGGLE_EXPO::end'
+gsettings set org.cinnamon.gestures swipe-down-3 'TOGGLE_EXPO::end'
+gsettings set org.cinnamon.gestures swipe-left-3 'WORKSPACE_NEXT::end'
+gsettings set org.cinnamon.gestures swipe-right-3 'WORKSPACE_PREVIOUS::end'
+```
+
+Touchégg must be installed and its system daemon running:
+
+```bash
+sudo apt install touchegg
+systemctl status touchegg
 ```
 
 ## Clamshell mode
