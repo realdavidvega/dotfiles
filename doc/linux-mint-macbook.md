@@ -243,7 +243,13 @@ gsettings set org.cinnamon.gestures swipe-up-3 'TOGGLE_EXPO::end'
 gsettings set org.cinnamon.gestures swipe-down-3 'TOGGLE_EXPO::end'
 gsettings set org.cinnamon.gestures swipe-left-3 'WORKSPACE_NEXT::end'
 gsettings set org.cinnamon.gestures swipe-right-3 'WORKSPACE_PREVIOUS::end'
+gsettings set org.cinnamon.gestures swipe-percent-threshold 5
 ```
+
+The 5 percent threshold makes recognition start close to normal scrolling sensitivity. Touchégg keeps
+its automatic distance thresholds because it detects the trackpad's physical size correctly.
+The `bcm5974` driver can still discard occasional touch jumps, which prevents X11 gestures from
+matching macOS reliability exactly.
 
 Touchégg must be installed and its system daemon running:
 

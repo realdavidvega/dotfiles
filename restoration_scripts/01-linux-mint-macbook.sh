@@ -169,6 +169,7 @@ if command -v gsettings >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" 
   gsettings set org.cinnamon.gestures swipe-down-3 'TOGGLE_EXPO::end'
   gsettings set org.cinnamon.gestures swipe-left-3 'WORKSPACE_NEXT::end'
   gsettings set org.cinnamon.gestures swipe-right-3 'WORKSPACE_PREVIOUS::end'
+  gsettings set org.cinnamon.gestures swipe-percent-threshold 5
 fi
 
 echo "Linux Mint MacBook configuration pass complete."
