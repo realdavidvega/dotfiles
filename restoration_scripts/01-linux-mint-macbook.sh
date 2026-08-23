@@ -24,6 +24,7 @@ HOME_ROOT="$DOTFILES_PATH/os/linux/home"
 SYSTEM_ROOT="$DOTFILES_PATH/os/linux/system"
 CHANGED_UDEV=0
 CHANGED_GRUB=0
+CHANGED_XORG=0
 FAILED=0
 
 link_user_file() {
@@ -140,6 +141,8 @@ link_system_file "$SYSTEM_ROOT/etc/udev/rules.d/95-monitor-hotplug.rules" \
   /etc/udev/rules.d/95-monitor-hotplug.rules CHANGED_UDEV || FAILED=1
 install_system_file "$SYSTEM_ROOT/etc/keyd/default.conf" \
   /etc/keyd/default.conf CHANGED_KEYD || FAILED=1
+install_system_file "$SYSTEM_ROOT/etc/X11/xorg.conf.d/90-bcm5974.conf" \
+  /etc/X11/xorg.conf.d/90-bcm5974.conf CHANGED_XORG || FAILED=1
 link_system_file "$SYSTEM_ROOT/etc/systemd/logind.conf.d/lid.conf" \
   /etc/systemd/logind.conf.d/lid.conf CHANGED_LOGIND || FAILED=1
 link_system_file "$SYSTEM_ROOT/etc/default/grub" \
@@ -162,6 +165,10 @@ if [ "$CHANGED_GRUB" -eq 1 ]; then
   sudo update-grub
 fi
 
+if [ "$CHANGED_XORG" -eq 1 ]; then
+  echo "Log out and back in to apply the Xorg trackpad configuration."
+fi
+
 if command -v gsettings >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
   gsettings set org.cinnamon.desktop.interface text-scaling-factor 1.3
   gsettings set org.cinnamon.gestures enabled true
@@ -173,7 +180,7 @@ if command -v gsettings >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" 
 fi
 
 echo "Linux Mint MacBook configuration pass complete."
-echo "Reboot to apply lid and kernel command-line settings."
+echo "Reboot to apply lid, Xorg input, and kernel command-line settings."
 
 if [ "$FAILED" -ne 0 ]; then
   return 1 2>/dev/null || exit 1
