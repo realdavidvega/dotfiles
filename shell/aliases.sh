@@ -144,6 +144,9 @@ alias py="python"
 # Build aliases
 alias m="make"
 
+# SSH aliases
+alias sshcfg="vim $DOTFILES_SECRETS/ssh/config"
+
 # ---------------------------
 #      Directory Aliases
 # ---------------------------
