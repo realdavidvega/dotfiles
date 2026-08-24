@@ -298,7 +298,20 @@ HandleLidSwitchDocked=ignore
 ```
 
 Cinnamon Power Management also sets the lid-close action to `Nothing` on battery and external
-power. Apply the system setting with a reboot. A temporary inhibitor is available for testing:
+power. Its inactive action is also `Nothing` with a zero timeout on both power sources, so losing
+the display, keyboard, and mouse through a USB switch does not suspend the machine. These settings
+keep Tailscale and other network services reachable while the MacBook runs headless.
+
+```bash
+gsettings set org.cinnamon.settings-daemon.plugins.power lid-close-ac-action 'nothing'
+gsettings set org.cinnamon.settings-daemon.plugins.power lid-close-battery-action 'nothing'
+gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
+gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
+gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-timeout 0
+```
+
+Apply the system-level lid setting with a reboot. A temporary inhibitor is available for testing:
 
 ```bash
 systemd-inhibit --what=handle-lid-switch --why="Using external monitor" sleep infinity
@@ -372,6 +385,10 @@ gsettings get org.cinnamon.desktop.interface text-scaling-factor
 sudo udevadm test /sys/class/drm/card1-DP-2
 sudo keyd monitor
 loginctl show-logind | grep -i lid
+gsettings get org.cinnamon.settings-daemon.plugins.power lid-close-ac-action
+gsettings get org.cinnamon.settings-daemon.plugins.power lid-close-battery-action
+gsettings get org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-type
+gsettings get org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-type
 cat /proc/cmdline | grep 'usbcore.autosuspend=-1'
 readlink -f ~/.xprofile ~/.local/bin/display-hotplug.sh
 readlink -f /etc/udev/rules.d/95-monitor-hotplug.rules
