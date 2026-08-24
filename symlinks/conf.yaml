@@ -20,6 +20,7 @@
     ~/.zlogin: shell/zsh/.zlogin
     ~/.zshenv: shell/zsh/.zshenv
     ~/.zshrc: shell/zsh/.zshrc
+    ~/.ssh/config: secrets/ssh/config
     ~/.inputrc: shell/.inputrc
     ~/.vimrc: editors/vim/.vimrc
     ~/.p10k.zsh: shell/zsh/themes/.p10k.zsh
