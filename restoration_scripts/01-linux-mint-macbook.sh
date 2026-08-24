@@ -157,8 +157,8 @@ if command -v keyd >/dev/null 2>&1; then
     sudo usermod -aG keyd "$USER"
     echo "Added $USER to the keyd group. Log out and back in before using the application mapper."
   fi
-  sudo systemctl enable --now keyd
-  sudo keyd reload
+  sudo systemctl enable keyd
+  sudo systemctl restart keyd
 fi
 
 if [ "$CHANGED_GRUB" -eq 1 ]; then
@@ -176,7 +176,7 @@ if command -v gsettings >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" 
   gsettings set org.cinnamon.gestures swipe-down-3 'TOGGLE_EXPO::end'
   gsettings set org.cinnamon.gestures swipe-left-3 'WORKSPACE_NEXT::end'
   gsettings set org.cinnamon.gestures swipe-right-3 'WORKSPACE_PREVIOUS::end'
-  gsettings set org.cinnamon.gestures swipe-percent-threshold 5
+  gsettings set org.cinnamon.gestures swipe-percent-threshold 1
 fi
 
 echo "Linux Mint MacBook configuration pass complete."

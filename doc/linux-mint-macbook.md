@@ -209,7 +209,12 @@ the daemon's initial boot load.
 
 Live path: `~/.config/keyd/app.conf`
 
-The wildcard section maps common Command shortcuts to their Ctrl equivalents. The
+The wildcard section maps common Command shortcuts, including Command+Comma for application
+settings, to their Ctrl equivalents. The Obsidian section adds its macOS defaults for Quick
+Switcher, editing view, graph view, and back/forward navigation. It also covers Markdown
+formatting, link handling, checklist toggles,
+comments, and zoom. Generic mappings cover Command+P for the Command Palette,
+Command+Shift+F for global search, file operations, and standard editing shortcuts. The
 `*terminal*` section appears first because keyd keeps the first duplicate binding when filters
 overlap. It maps GNOME Terminal operations that use Ctrl+Shift, including copy, paste, new tab,
 and close tab. Physical Ctrl remains unchanged, so `CTRL+A`, `CTRL+E`, `CTRL+U`, `CTRL+C`, and
@@ -246,11 +251,12 @@ gsettings set org.cinnamon.gestures swipe-up-3 'TOGGLE_EXPO::end'
 gsettings set org.cinnamon.gestures swipe-down-3 'TOGGLE_EXPO::end'
 gsettings set org.cinnamon.gestures swipe-left-3 'WORKSPACE_NEXT::end'
 gsettings set org.cinnamon.gestures swipe-right-3 'WORKSPACE_PREVIOUS::end'
-gsettings set org.cinnamon.gestures swipe-percent-threshold 5
+gsettings set org.cinnamon.gestures swipe-percent-threshold 1
 ```
 
-The 5 percent threshold makes recognition start close to normal scrolling sensitivity. Touchégg keeps
-its automatic distance thresholds because it detects the trackpad's physical size correctly.
+The 1 percent threshold minimizes the movement needed for recognition, matching the responsive feel
+of normal scrolling. Touchégg keeps its automatic distance thresholds because it detects the
+trackpad's physical size correctly.
 The `bcm5974` driver can still discard occasional touch jumps, which prevents X11 gestures from
 matching macOS reliability exactly.
 
@@ -416,7 +422,8 @@ ShellCheck, shfmt, Tesseract, and tmux.
 ### Keyboard mapping does not apply
 
 - Check `sudo systemctl status keyd`.
-- Enable and start it with `sudo systemctl enable --now keyd`.
+- Enable it with `sudo systemctl enable keyd`, then restart it with `sudo systemctl restart keyd`
+  so `/run/keyd.socket` receives the `keyd` group.
 - Confirm `id -nG` contains `keyd`, then log out and back in after a group change.
 - Check `~/.config/keyd/app.log` and `pgrep -af keyd-application-mapper`.
 - Inspect Corne events with `sudo evtest`.
