@@ -32,7 +32,9 @@ flowchart TD
   connected -->|yes| lidstate{Lid closed}
   lidstate -->|yes| external[Apply external mode and disable eDP-1]
   lidstate -->|no| dual[Apply external mode and enable eDP-1]
-  connected -->|no| internal[Enable eDP-1]
+  connected -->|no| fallback{Lid closed}
+  fallback -->|yes| nodisplay[Keep eDP-1 off]
+  fallback -->|no| internal[Enable eDP-1]
 ```
 
 | Layer | Purpose | Managed files |
@@ -56,11 +58,10 @@ The guarded `restoration_scripts/01-linux-mint-macbook.sh` links the user files:
 ~/.config/autostart/keyd-application-mapper.desktop -> ~/.dotfiles/os/linux/home/keyd-application-mapper.desktop
 ```
 
-The same installer links the system files, except for keyd's early-boot configuration:
+The same installer links the system files that remain readable during their consumers' startup:
 
 ```text
 /etc/udev/rules.d/95-monitor-hotplug.rules -> ~/.dotfiles/os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules
-/etc/systemd/logind.conf.d/lid.conf -> ~/.dotfiles/os/linux/system/etc/systemd/logind.conf.d/lid.conf
 /etc/default/grub -> ~/.dotfiles/os/linux/system/etc/default/grub
 ```
 
@@ -70,6 +71,7 @@ The installer copies these early-boot files as root-owned regular files:
 /etc/keyd/default.conf
 /etc/X11/xorg.conf.d/90-bcm5974.conf
 /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf
+/etc/systemd/logind.conf.d/lid.conf
 /etc/systemd/system/rustdesk.service.d/10-dotfiles.conf
 /usr/local/libexec/rustdesk-sync-xauth
 ```
@@ -222,11 +224,12 @@ DISPLAY_HOTPLUG_DELAY=0 "$HOME/.local/bin/display-hotplug.sh" >/dev/null 2>&1 ||
 
 ## Display hotplug
 
-When the KVM disconnects `DP-2`, the helper enables `eDP-1`. When `DP-2` is connected, the
-helper reads `/proc/acpi/button/lid/*/state`. It disables the internal panel with the lid closed
-and enables it to the left of `DP-2` with the lid open. The udev rule invokes the helper when
-DRM state changes. The XDG session autostart entry runs the helper in watcher mode so opening
-or closing the lid applies the layout without requiring a display hotplug event.
+The helper reads `/proc/acpi/button/lid/*/state` for every display layout. With the lid closed,
+`eDP-1` remains off whether `DP-2` is connected or disconnected. With the lid open, the internal
+panel is enabled by itself when `DP-2` is absent, or to the left of `DP-2` when it is present.
+The udev rule invokes the helper when DRM state changes. The XDG session autostart entry also
+runs the helper in watcher mode. The watcher handles lid changes and turns `eDP-1` off again if
+Cinnamon enables it during a DisplayPort disconnect race.
 
 Live path: `~/.local/bin/display-hotplug.sh`
 
@@ -376,6 +379,9 @@ systemctl status touchegg
 ## Clamshell mode
 
 Live path: `/etc/systemd/logind.conf.d/lid.conf`
+
+This path is a root-owned regular file. A symlink into the repository is unreadable to logind
+during early boot because the home directory has mode `0700`.
 
 ```ini
 [Login]
