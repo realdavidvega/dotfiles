@@ -25,6 +25,9 @@ SYSTEM_ROOT="$DOTFILES_PATH/os/linux/system"
 CHANGED_UDEV=0
 CHANGED_GRUB=0
 CHANGED_XORG=0
+CHANGED_KEYD=0
+CHANGED_LOGIND=0
+CHANGED_RUSTDESK=0
 FAILED=0
 
 link_user_file() {
@@ -101,6 +104,8 @@ install_system_file() {
   local source="$1"
   local target="$2"
   local changed_flag="$3"
+  local mode="${4:-0644}"
+  local stat_mode="${mode#0}"
 
   if [ ! -f "$source" ]; then
     echo "Missing managed source: $source"
@@ -120,8 +125,9 @@ install_system_file() {
   fi
 
   if [ ! -e "$target" ] || ! cmp -s "$source" "$target" || \
-      [ "$(stat -c '%U:%G:%a' "$target" 2>/dev/null)" != "root:root:644" ]; then
-    sudo install -o root -g root -m 0644 "$source" "$target" || return 1
+      [ "$(stat -c '%U:%G:%a' "$target" 2>/dev/null)" != "root:root:$stat_mode" ]; then
+    sudo mkdir -p "$(dirname "$target")" || return 1
+    sudo install -o root -g root -m "$mode" "$source" "$target" || return 1
     printf -v "$changed_flag" '%s' 1
     echo "installed: $target from $source"
   else
@@ -131,6 +137,7 @@ install_system_file() {
 
 link_user_file "$HOME_ROOT/.xprofile" "$HOME/.xprofile" || FAILED=1
 link_user_file "$HOME_ROOT/display-hotplug.sh" "$HOME/.local/bin/display-hotplug.sh" || FAILED=1
+link_user_file "$HOME_ROOT/rustdesk-display.sh" "$HOME/.local/bin/rustdesk-display" || FAILED=1
 link_user_file "$HOME_ROOT/display-lid-watch.desktop" \
   "$HOME/.config/autostart/display-lid-watch.desktop" || FAILED=1
 link_user_file "$HOME_ROOT/keyd/app.conf" "$HOME/.config/keyd/app.conf" || FAILED=1
@@ -143,6 +150,12 @@ install_system_file "$SYSTEM_ROOT/etc/keyd/default.conf" \
   /etc/keyd/default.conf CHANGED_KEYD || FAILED=1
 install_system_file "$SYSTEM_ROOT/etc/X11/xorg.conf.d/90-bcm5974.conf" \
   /etc/X11/xorg.conf.d/90-bcm5974.conf CHANGED_XORG || FAILED=1
+install_system_file "$SYSTEM_ROOT/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf" \
+  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf CHANGED_RUSTDESK || FAILED=1
+install_system_file "$SYSTEM_ROOT/usr/local/libexec/rustdesk-sync-xauth" \
+  /usr/local/libexec/rustdesk-sync-xauth CHANGED_RUSTDESK 0755 || FAILED=1
+install_system_file "$SYSTEM_ROOT/etc/systemd/system/rustdesk.service.d/10-dotfiles.conf" \
+  /etc/systemd/system/rustdesk.service.d/10-dotfiles.conf CHANGED_RUSTDESK || FAILED=1
 link_system_file "$SYSTEM_ROOT/etc/systemd/logind.conf.d/lid.conf" \
   /etc/systemd/logind.conf.d/lid.conf CHANGED_LOGIND || FAILED=1
 link_system_file "$SYSTEM_ROOT/etc/default/grub" \
@@ -169,8 +182,28 @@ if [ "$CHANGED_XORG" -eq 1 ]; then
   echo "Log out and back in to apply the Xorg trackpad configuration."
 fi
 
+if [ "$CHANGED_RUSTDESK" -eq 1 ]; then
+  sudo systemctl daemon-reload
+  echo "RustDesk display files changed. Restart display-manager from SSH to apply them."
+fi
+
+if systemctl cat rustdesk.service >/dev/null 2>&1; then
+  sudo systemctl enable rustdesk.service
+fi
+
+if command -v rustdesk >/dev/null 2>&1; then
+  rustdesk --option allow-linux-headless Y || FAILED=1
+  rustdesk --option approve-mode password || FAILED=1
+  rustdesk --option verification-method use-permanent-password || FAILED=1
+  sudo rustdesk --option allow-linux-headless Y || FAILED=1
+  sudo rustdesk --option approve-mode password || FAILED=1
+  sudo rustdesk --option verification-method use-permanent-password || FAILED=1
+else
+  echo "RustDesk is not installed. Install its .deb, then rerun this restoration script."
+fi
+
 if command -v gsettings >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-  gsettings set org.cinnamon.desktop.interface text-scaling-factor 1.3
+  gsettings set org.cinnamon.desktop.interface text-scaling-factor 1.0
   gsettings set org.cinnamon.settings-daemon.plugins.power lid-close-ac-action 'nothing'
   gsettings set org.cinnamon.settings-daemon.plugins.power lid-close-battery-action 'nothing'
   gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
