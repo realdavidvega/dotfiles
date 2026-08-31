@@ -1,7 +1,8 @@
 # MacBook Pro 2015 Linux Mint Cinnamon Setup Guide
 
 This machine uses Linux Mint Cinnamon on X11 with a 2015 MacBook Pro, Intel Iris Graphics
-6100, a 3440 by 1440 external display on `DP-2`, a Corne keyboard, and a DP plus USB KVM.
+6100, a 3440 by 1440 external display on `DP-2`, RustDesk remote access, a Corne keyboard,
+and a DP plus USB KVM.
 
 The active configuration is stored in this repository and linked into the home directory and
 `/etc`. The XDG autostart method is documented as a fallback and is not installed because
@@ -19,6 +20,10 @@ flowchart TD
   keyboard --> keyd[keyd captures both keyboards]
   keyd --> mapper[Application mapper provides Command shortcuts]
   display --> xprofile[.xprofile invokes the display helper]
+  display --> dummy[Xorg dummy output for RustDesk]
+  dummy --> profile[Saved remote display profile]
+  displaymanager[LightDM restart] --> xauth[Refresh user X11 cookie]
+  xauth --> rustdesk[RustDesk service]
   hotplug[DRM hotplug event] --> udev[udev rule]
   udev --> script[display-hotplug.sh]
   lidchange[Lid state change] --> watcher[Session lid watcher]
@@ -32,7 +37,8 @@ flowchart TD
 
 | Layer | Purpose | Managed files |
 |---|---|---|
-| Display | External resolution, lid state, and KVM hotplug | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/home/display-lid-watch.desktop`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
+| Display | Physical hotplug plus selectable RustDesk dummy resolutions | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/home/rustdesk-display.sh`, `os/linux/home/display-lid-watch.desktop`, `os/linux/system/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
+| Remote access | Keep RustDesk ordered after LightDM with a current X11 cookie | `os/linux/system/usr/local/libexec/rustdesk-sync-xauth`, `os/linux/system/etc/systemd/system/rustdesk.service.d/10-dotfiles.conf` |
 | Keyboard | macOS-style Command shortcuts with native terminal Ctrl | `os/linux/system/etc/keyd/default.conf`, `os/linux/home/keyd/app.conf`, `os/linux/home/keyd-application-mapper.desktop` |
 | Gestures and scrolling | Three-finger workspace navigation and smoother two-finger scrolling | Cinnamon `org.cinnamon.gestures` settings, Touchégg, `os/linux/system/etc/X11/xorg.conf.d/90-bcm5974.conf` |
 | Power | Clamshell mode and USB reconnect reliability | `os/linux/system/etc/systemd/logind.conf.d/lid.conf`, `os/linux/system/etc/default/grub` |
@@ -44,6 +50,7 @@ The guarded `restoration_scripts/01-linux-mint-macbook.sh` links the user files:
 ```text
 ~/.xprofile -> ~/.dotfiles/os/linux/home/.xprofile
 ~/.local/bin/display-hotplug.sh -> ~/.dotfiles/os/linux/home/display-hotplug.sh
+~/.local/bin/rustdesk-display -> ~/.dotfiles/os/linux/home/rustdesk-display.sh
 ~/.config/autostart/display-lid-watch.desktop -> ~/.dotfiles/os/linux/home/display-lid-watch.desktop
 ~/.config/keyd/app.conf -> ~/.dotfiles/os/linux/home/keyd/app.conf
 ~/.config/autostart/keyd-application-mapper.desktop -> ~/.dotfiles/os/linux/home/keyd-application-mapper.desktop
@@ -57,13 +64,20 @@ The same installer links the system files, except for keyd's early-boot configur
 /etc/default/grub -> ~/.dotfiles/os/linux/system/etc/default/grub
 ```
 
-`/etc/keyd/default.conf` is installed as a root-owned regular file from
-`os/linux/system/etc/keyd/default.conf`. keyd drops privileges before parsing its configuration
-and cannot traverse the mode `0700` home directory during early boot. A symlink into the
-repository therefore fails at boot even though a post-login reload succeeds.
+The installer copies these early-boot files as root-owned regular files:
 
-`/etc/X11/xorg.conf.d/90-bcm5974.conf` is also installed as a root-owned regular file because
-the display server reads it before the desktop session starts.
+```text
+/etc/keyd/default.conf
+/etc/X11/xorg.conf.d/90-bcm5974.conf
+/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf
+/etc/systemd/system/rustdesk.service.d/10-dotfiles.conf
+/usr/local/libexec/rustdesk-sync-xauth
+```
+
+keyd drops privileges before parsing its configuration, and system services must not execute
+through a user-writable checkout. Root-owned copies avoid both mode `0700` home-directory
+traversal failures and privilege-boundary symlinks. The restore script uses `sudo install` with
+explicit owner and mode instead of changing ownership inside the repository.
 
 The installer runs only on Linux Mint installed on `MacBookPro12,1`. It skips macOS, WSL, and
 other native Linux systems. It links an existing regular file only when it exactly matches the
@@ -79,6 +93,78 @@ DOTFILES_PATH="$HOME/.dotfiles" bash "$HOME/.dotfiles/restoration_scripts/01-lin
 The installer also enables and starts keyd, adds the desktop user to the trusted `keyd` group,
 then reloads its mapping. Log out and back in after the first group assignment. Reboot after a
 GRUB or lid configuration change.
+
+## RustDesk remote display
+
+The apt baseline installs `xauth` and `xserver-xorg-video-dummy`. RustDesk itself remains a
+manual `.deb` installation because its release package is not part of the Mint apt baseline.
+The restore script enables its non-secret unattended-access options for both the desktop user
+and root service configuration. The permanent password and RustDesk identity stay machine-local
+and are never stored in Git.
+
+Set the password once after installing RustDesk:
+
+```bash
+bash -c 'read -r -s -p "Permanent RustDesk password: " rustdesk_password; printf "\n"; sudo /usr/bin/rustdesk --password "$rustdesk_password"; unset rustdesk_password'
+sudo /usr/bin/rustdesk --get-id
+```
+
+`99-rustdesk-dummy.conf` exposes modes below the dummy driver's default 300 MHz pixel-clock
+ceiling. The ultrawide profile uses 50 Hz to keep 3440 by 1440 within that limit:
+
+| Profile | Dummy mode | Use |
+|---|---|---|
+| `macbook` | 1920 by 1248 | Readable text on the 3024 by 1964 Retina client |
+| `macbook-hires` | 2560 by 1662 | More remote workspace with the same MacBook aspect ratio |
+| `ultrawide` | 3440 by 1440 at 50 Hz | Home external monitor |
+
+Switch profiles without `sudo` or a display-manager restart:
+
+```bash
+rustdesk-display macbook
+rustdesk-display macbook-hires
+rustdesk-display ultrawide
+rustdesk-display status
+```
+
+The selected profile is stored in `~/.config/rustdesk-display/profile`. `.xprofile` reapplies it
+on the next Cinnamon login. RustDesk remains on Adaptive Scale, while Cinnamon interface and
+text scaling remain at 100 percent so changing profiles does not leak scaling preferences from
+one client monitor to another.
+
+The systemd drop-in orders RustDesk after LightDM and restarts it with the display manager. Its
+`ExecStartPre` helper merges the current LightDM cookie into the desktop user's `.Xauthority`,
+preventing `Invalid MIT-MAGIC-COOKIE-1` after a login or display-manager restart.
+
+The restore script deliberately does not restart LightDM because that disconnects active GUI
+sessions. Apply a newly installed Xorg or systemd configuration from a working SSH connection:
+
+```bash
+sudo systemctl restart display-manager
+sudo systemctl restart rustdesk
+```
+
+The dummy Xorg device replaces the physical Intel outputs while enabled. Restore physical
+`eDP-1` and `DP-2` operation by disabling the file and restarting the display manager:
+
+```bash
+sudo mv /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
+  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.disabled
+sudo systemctl restart display-manager
+```
+
+On the first managed install, an existing hand-written
+`/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf` intentionally blocks replacement. Compare it,
+preserve it as the one-time backup, and rerun restoration:
+
+```bash
+sudo diff -u /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
+  "$HOME/.dotfiles/os/linux/system/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf" || true
+sudo mv /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
+  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.pre-dotfiles
+DOTFILES_PATH="$HOME/.dotfiles" \
+  bash "$HOME/.dotfiles/restoration_scripts/01-linux-mint-macbook.sh"
+```
 
 ## Display resolution
 
@@ -164,11 +250,12 @@ sudo udevadm trigger --subsystem-match=drm
 
 ## Display and font scaling
 
-Cinnamon display scaling remains at 100 percent. Font scaling provides larger text without
-X11 framebuffer downscaling.
+Cinnamon display and text scaling remain at 100 percent. The RustDesk profile changes the
+remote framebuffer resolution instead, preserving readable text without applying a global
+font preference to both the MacBook and ultrawide clients.
 
 ```bash
-gsettings set org.cinnamon.desktop.interface text-scaling-factor 1.3
+gsettings set org.cinnamon.desktop.interface text-scaling-factor 1.0
 ```
 
 Font hinting is `Full`, sub-pixel rendering is `RGB`, and a panel height around 40 to 48 pixels
@@ -381,6 +468,7 @@ GRUB_CMDLINE_LINUX=""
 
 ```bash
 xrandr | grep -E 'DP-2|eDP-1'
+rustdesk-display status
 gsettings get org.cinnamon.desktop.interface text-scaling-factor
 sudo udevadm test /sys/class/drm/card1-DP-2
 sudo keyd monitor
@@ -391,6 +479,13 @@ gsettings get org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-type
 gsettings get org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-type
 cat /proc/cmdline | grep 'usbcore.autosuspend=-1'
 readlink -f ~/.xprofile ~/.local/bin/display-hotplug.sh
+readlink -f ~/.local/bin/rustdesk-display
+sudo stat -c '%U:%G:%a %n' \
+  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
+  /etc/systemd/system/rustdesk.service.d/10-dotfiles.conf \
+  /usr/local/libexec/rustdesk-sync-xauth
+systemctl is-enabled rustdesk
+systemctl is-active rustdesk
 readlink -f /etc/udev/rules.d/95-monitor-hotplug.rules
 readlink -f /etc/keyd/default.conf
 readlink -f /etc/systemd/logind.conf.d/lid.conf
@@ -420,7 +515,7 @@ bash "$HOME/.dotfiles/restoration_scripts/02-linux-mint-packages.sh"
 
 The apt baseline includes shell and repository tools already expected by the dotfiles, plus
 `aria2`, `bat`, `fd`, FFmpeg, Git Delta, Go, Hyperfine, Midnight Commander, ripgrep,
-ShellCheck, shfmt, Tesseract, and tmux.
+ShellCheck, shfmt, Tesseract, tmux, Xauth, and the Xorg dummy driver.
 
 ## Troubleshooting
 
@@ -429,6 +524,14 @@ ShellCheck, shfmt, Tesseract, and tmux.
 - Increase the `.xprofile` delay from 3 to 5 seconds.
 - Confirm `DP-2` with `xrandr | grep DP-2`.
 - Use the XDG autostart alternative only if Cinnamon ignores `.xprofile`.
+
+### RustDesk reports no displays or a black frame
+
+- Confirm `xrandr --current` reports `DUMMY0 connected` with a non-zero framebuffer.
+- Check `rustdesk-display status` and reapply the saved profile with `rustdesk-display apply`.
+- Inspect `journalctl -u rustdesk -b` for Xauthority errors.
+- Run `sudo /usr/local/libexec/rustdesk-sync-xauth black`, then restart RustDesk.
+- Keep SSH available before restarting `display-manager`.
 
 ### KVM hotplug does not trigger
 
@@ -455,5 +558,6 @@ ShellCheck, shfmt, Tesseract, and tmux.
 ### Text is blurry
 
 - Keep Cinnamon display scaling at 100 percent.
-- Confirm `gsettings get org.cinnamon.desktop.interface text-scaling-factor` returns `1.3`.
+- Confirm `gsettings get org.cinnamon.desktop.interface text-scaling-factor` returns `1.0`.
+- Use `rustdesk-display macbook` for readable Retina-client text instead of global font scaling.
 - Use full hinting and RGB or BGR sub-pixel rendering based on the panel.

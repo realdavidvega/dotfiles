@@ -49,6 +49,11 @@ if [ "${1:-}" = "--watch-lid" ]; then
     exit 0
 fi
 
+if xrandr --query | grep -q '^DUMMY0 connected'; then
+    DISPLAY_HOTPLUG_DELAY=0 "$HOME/.local/bin/rustdesk-display" apply
+    exit 0
+fi
+
 # Check if DP-2 is connected
 if xrandr --query | grep -q '^DP-2 connected'; then
     # Re-add the custom mode when the external monitor returns

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+TARGET_USER="${1:?Usage: rustdesk-sync-xauth <user>}"
+SOURCE_AUTHORITY="${RUSTDESK_XAUTH_SOURCE:-/var/run/lightdm/root/:0}"
+TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+TARGET_GROUP="$(id -gn "$TARGET_USER")"
+TARGET_AUTHORITY="$TARGET_HOME/.Xauthority"
+
+if [ -z "$TARGET_HOME" ]; then
+  echo "Unable to resolve home directory for $TARGET_USER" >&2
+  exit 1
+fi
+
+for _ in $(seq 1 50); do
+  [ -r "$SOURCE_AUTHORITY" ] && break
+  sleep 0.2
+done
+
+if [ ! -r "$SOURCE_AUTHORITY" ]; then
+  echo "LightDM Xauthority is unavailable: $SOURCE_AUTHORITY" >&2
+  exit 1
+fi
+
+cookie_data="$(xauth -f "$SOURCE_AUTHORITY" nlist :0 2>/dev/null || true)"
+if [ -z "$cookie_data" ]; then
+  echo "LightDM did not publish an X11 cookie for :0" >&2
+  exit 1
+fi
+
+if [ ! -e "$TARGET_AUTHORITY" ]; then
+  install -o "$TARGET_USER" -g "$TARGET_GROUP" -m 0600 /dev/null "$TARGET_AUTHORITY"
+else
+  chown "$TARGET_USER:$TARGET_GROUP" "$TARGET_AUTHORITY"
+  chmod 0600 "$TARGET_AUTHORITY"
+fi
+
+printf '%s\n' "$cookie_data" |
+  runuser -u "$TARGET_USER" -- xauth -f "$TARGET_AUTHORITY" nmerge -
