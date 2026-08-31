@@ -156,7 +156,7 @@ install_system_file "$SYSTEM_ROOT/usr/local/libexec/rustdesk-sync-xauth" \
   /usr/local/libexec/rustdesk-sync-xauth CHANGED_RUSTDESK 0755 || FAILED=1
 install_system_file "$SYSTEM_ROOT/etc/systemd/system/rustdesk.service.d/10-dotfiles.conf" \
   /etc/systemd/system/rustdesk.service.d/10-dotfiles.conf CHANGED_RUSTDESK || FAILED=1
-link_system_file "$SYSTEM_ROOT/etc/systemd/logind.conf.d/lid.conf" \
+install_system_file "$SYSTEM_ROOT/etc/systemd/logind.conf.d/lid.conf" \
   /etc/systemd/logind.conf.d/lid.conf CHANGED_LOGIND || FAILED=1
 link_system_file "$SYSTEM_ROOT/etc/default/grub" \
   /etc/default/grub CHANGED_GRUB || FAILED=1
@@ -200,6 +200,10 @@ if command -v rustdesk >/dev/null 2>&1; then
   sudo rustdesk --option verification-method use-permanent-password || FAILED=1
 else
   echo "RustDesk is not installed. Install its .deb, then rerun this restoration script."
+fi
+
+if [ "$CHANGED_LOGIND" -eq 1 ]; then
+  echo "Reboot to apply the logind lid configuration."
 fi
 
 if command -v gsettings >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then

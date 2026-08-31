@@ -26,6 +26,10 @@ lid_state() {
     fi
 }
 
+internal_display_is_active() {
+    xrandr --query | grep -Eq '^eDP-1 connected (primary )?[0-9]+x[0-9]+\+'
+}
+
 watch_lid() {
     local current_state
     local previous_state
@@ -40,6 +44,8 @@ watch_lid() {
         if [ "$current_state" != "$previous_state" ]; then
             DISPLAY_HOTPLUG_DELAY=0 "$0"
             previous_state="$current_state"
+        elif [ "$current_state" = closed ] && internal_display_is_active; then
+            DISPLAY_HOTPLUG_DELAY=0 "$0"
         fi
     done
 }
@@ -68,8 +74,11 @@ if xrandr --query | grep -q '^DP-2 connected'; then
             --output eDP-1 --auto --left-of DP-2
     fi
 else
-    # Use the internal display while the external monitor is disconnected
-    xrandr --output eDP-1 --auto --primary
+    if lid_is_closed; then
+        xrandr --output eDP-1 --off
+    else
+        xrandr --output eDP-1 --auto --primary
+    fi
 fi
 
 exit 0
