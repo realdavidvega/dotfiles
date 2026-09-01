@@ -50,11 +50,13 @@ alias up="dot package update_all"
 alias upall="bash $DOTFILES_PATH/scripts/update-all.sh"
 alias upcheck="bash $DOTFILES_PATH/scripts/update-all.sh --check"
 
-# Activate skills per project. No agent has a per-skill on/off setting, so this
-# symlinks them into .claude/skills, .codex/skills and .opencode/skills, and
-# records the mapping in config/opencode/skills.profiles.json so it restores.
-#   skp status | skp list | skp add <skill>... | skp rm <skill>... | skp apply
-alias skp="bash $DOTFILES_PATH/scripts/skills/project.sh"
+# Skill package manager. Ships with skills-registry, not here: this repo owns
+# neither the tool nor the skills, only the pointer to where the tool lives.
+# The mapping it edits is local state at ~/.skp/profiles.json.
+#   skp sync | skp status | skp list | skp add <skill>... | skp rm | skp apply
+if [ -x "${SKILLS_REGISTRY_REPO:-}/bin/skp" ]; then
+  export PATH="$SKILLS_REGISTRY_REPO/bin:$PATH"
+fi
 
 # ---------------------------
 #       App Aliases
