@@ -9,11 +9,10 @@ resolution, scoping, the restore path, and the `skp` tooling. Everything else in
 this repo is documented in this file.
 
 - **Read `.wiki/index.md` (and `.wiki/CLAUDE.md`) at the start of skills work.**
-- **The skills system has moved out of this repo.** `skp`, the store and the
-  profiles manifest now live with skills-registry, which has its own wiki and
-  its own ADR for the move. Most of this wiki therefore documents an
-  arrangement that no longer exists and is pending a rewrite. Treat it as
-  historical until then, and make skills changes in the registry.
+- **The skills system has moved out of this repo.** `skp` lives in its own
+  public repo, the skills in the private skills-registry, and the config in
+  `~/.skp/`. Most of this wiki therefore documents an arrangement that no
+  longer exists and is pending a rewrite. Treat it as historical until then.
 - **Keep it in sync as you code.** When a change alters something the wiki
   still documents accurately, update the affected page in the SAME change and
   bump its `updated:` date. Record non-obvious decisions as an ADR in
@@ -33,8 +32,8 @@ lifecycle. This repo contributes:
 1. Shell, git, editor and package configuration.
 2. A restoration pipeline in `restoration_scripts/` that runs during
    `dot self install`.
-3. An OpenCode + Claude Code + Codex toolchain: config, commands, skills, and a
-   skills-registry sync mechanism.
+3. An OpenCode + Claude Code + Codex toolchain: config and commands. Skills
+   themselves are elsewhere, see the Skills section.
 4. Custom launchers (`ocv`, `ocvp`, `ochl`) and helper scripts under `scripts/`.
 
 Most non-shell content in `config/opencode/**`, `doc/opencode/**`, and
@@ -135,35 +134,38 @@ bootstrap.
 
 ### Skills
 
-**This repo owns none of the skills system any more.** The tool (`skp`), the
-store and the profiles manifest all live in skills-registry, which documents
-them in its own wiki (`runbooks/managing-skills`) and records the move in its
-ADR 0004. What remains here is two pointers:
+**This repo owns none of the skills system any more.** Three pieces, none of
+them here:
 
-- `SKILLS_REGISTRY_REPO` in `shell/exports.sh`, which also puts
-  `$SKILLS_REGISTRY_REPO/bin` on `PATH` so `skp` is callable.
-- The `skills` component of `upall`, which fast-forwards that checkout when it
+- **`skp`**, the tool, at https://github.com/realdavidvega/skp (public). It
+  documents its own setup and daily use.
+- **skills-registry**, the content (private, git-crypted).
+- **`~/.skp/`**, local state: `sources` says where skills come from,
+  `profiles.json` says what loads where, `skills/` is a rebuildable cache.
+  Neither config file is versioned anywhere, so both are yours to back up.
+
+What remains here is two pointers:
+
+- `SKP_REPO` and `SKILLS_REGISTRY_REPO` in `shell/exports.sh`. The first puts
+  `skp` on `PATH`; the second is only needed by `upall`, since `skp` itself
+  reads `~/.skp/sources`.
+- The `skills` component of `upall`, which fast-forwards both checkouts when it
   is safe to do so and then runs `skp sync`. The pull lives here because
-  `skp sync` ships inside the registry and will not manage its own working
-  tree.
-
-Local state lives outside both repos: the store at `~/.skp/skills` and the
-manifest at `~/.skp/profiles.json` (override with `$SKP_PROFILES`). The manifest
-is versioned nowhere, so it is yours to back up.
+  `skp sync` deliberately does not fetch.
 
 #### Vendoring a third-party skill collection
 
 Third-party skills live in skills-registry under
-`external-skills/<domain>/<skill>`, generated and hash-locked there. Add a
-source to that repo's `external-skills.sources.json` pinned to a **commit
-SHA**, then:
+`external-skills/<domain>/<skill>`, generated and hash-locked there. The
+scripts come from the skp repo. Add a source to
+`external-skills.sources.json` pinned to a **commit SHA**, then:
 
 ```bash
 cd "$SKILLS_REGISTRY_REPO"
-bash scripts/sync-external.sh          # copy + regenerate external-skills.lock.json
-bash scripts/sync-external.sh --check  # drift check
-bash scripts/sync-external.sh --verify # hash-check the tree (also runs in upall)
-bash scripts/validate-skills.sh && bash scripts/build-registry.sh
+bash "$SKP_REPO"/scripts/sync-external.sh --repo .            # copy + regenerate the lock
+bash "$SKP_REPO"/scripts/sync-external.sh --repo . --check    # drift check
+bash "$SKP_REPO"/scripts/sync-external.sh --repo . --verify   # hash-check (also in upall)
+bash "$SKP_REPO"/scripts/validate-skills.sh . && bash "$SKP_REPO"/scripts/build-registry.sh .
 ```
 
 `sync-external.sh` clones remote git URLs, so `repo` can be an `https://` or
@@ -309,8 +311,8 @@ both.
 - **No skills live in this repo.** Author them in skills-registry under
   `skills/<domain>/<skill>`; third-party ones are vendored there under
   `external-skills/` (generated — edit `external-skills.sources.json` and re-run
-  `scripts/sync-external.sh`, committing the tree and lock together). Scope is
-  decided outside both repos, in `~/.skp/profiles.json`.
+  `sync-external.sh` from the skp repo, committing the tree and lock together).
+  Scope is decided outside both repos, in `~/.skp/profiles.json`.
 - **A new skill is not global until it is listed.** Add it to the `global` array
   in `~/.skp/profiles.json`, or leave it opt-in and attach it to projects with
   `skp add`. Then run `upall --only skills` (or `skp sync`) to materialize the

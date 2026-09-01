@@ -246,49 +246,55 @@ update_npm() {
   npm update -g
 }
 
-update_skills() {
-  local skp="${SKILLS_REGISTRY_REPO:-}/bin/skp"
-  local verify="${SKILLS_REGISTRY_REPO:-}/scripts/sync-external.sh"
+# Pull a checkout, but only when doing so unattended cannot lose anything.
+# ff-only refuses rather than discarding, and unpushed commits are left alone.
+_ff_only_pull() {
+  local repo="$1" label="$2"
+  [ -d "$repo/.git" ] || return 0
 
-  [ -n "${SKILLS_REGISTRY_REPO:-}" ] || {
-    SKIPPED+=("skills: SKILLS_REGISTRY_REPO unset")
+  if [ -n "$(git -C "$repo" status --porcelain)" ]; then
+    echo "$label has local changes; not fetching" >&2
+    return 0
+  fi
+
+  git -C "$repo" fetch origin
+  # --porcelain sees uncommitted work only. A clean tree holding unpushed
+  # commits would lose them to a reset, so check that separately.
+  if [ -n "$(git -C "$repo" log --oneline origin/main..HEAD 2>/dev/null)" ]; then
+    echo "$label has unpushed commits; not updating" >&2
+  elif ! git -C "$repo" merge --ff-only origin/main >/dev/null 2>&1; then
+    echo "$label could not fast-forward to origin/main; leaving as-is" >&2
+  fi
+}
+
+update_skills() {
+  local skp="${SKP_REPO:-}/bin/skp"
+  local verify="${SKP_REPO:-}/scripts/sync-external.sh"
+
+  [ -n "${SKP_REPO:-}" ] || {
+    SKIPPED+=("skills: SKP_REPO unset")
     return 0
   }
   [ -x "$skp" ] || {
-    SKIPPED+=("skills: $skp not found — is SKILLS_REGISTRY_REPO correct for this machine?")
+    SKIPPED+=("skills: $skp not found — is SKP_REPO correct for this machine?")
     return 0
   }
 
-  section "skills registry"
+  section "skills"
 
-  # `skp sync` deliberately does not fetch: it ships inside the registry, so
-  # updating that checkout would mean operating on its own working tree. Pull
-  # here instead, and only when it is safe to do so unattended.
-  if [ -d "$SKILLS_REGISTRY_REPO/.git" ]; then
-    if [ -n "$(git -C "$SKILLS_REGISTRY_REPO" status --porcelain)" ]; then
-      echo "Registry has local changes; relinking without fetching" >&2
-    else
-      git -C "$SKILLS_REGISTRY_REPO" fetch origin
-      # --porcelain sees uncommitted work only. A clean tree holding unpushed
-      # commits would lose them to a reset, so check separately and use
-      # ff-only, which refuses rather than discarding.
-      if [ -n "$(git -C "$SKILLS_REGISTRY_REPO" log --oneline origin/main..HEAD 2>/dev/null)" ]; then
-        echo "Registry has unpushed commits; relinking without updating" >&2
-      elif ! git -C "$SKILLS_REGISTRY_REPO" merge --ff-only origin/main >/dev/null 2>&1; then
-        echo "Registry could not fast-forward to origin/main; relinking as-is" >&2
-      fi
-    fi
-  fi
+  # `skp sync` deliberately does not fetch, so both checkouts are pulled here:
+  # the tool and the skills it reads are separate repos now.
+  _ff_only_pull "$SKP_REPO" "skp"
+  [ -n "${SKILLS_REGISTRY_REPO:-}" ] && _ff_only_pull "$SKILLS_REGISTRY_REPO" "Registry"
 
   bash "$skp" sync || return 1
 
-  # Third-party skills live in the registry under external-skills/, vendored at
-  # a pinned SHA. Nothing here bumps that pin — that is a deliberate manual
-  # sync-external.sh run — but a hand-edit or a half-applied sync would diverge
-  # silently, so surface it.
-  if [ -f "$verify" ]; then
-    if ! bash "$verify" --verify; then
-      WARNINGS+=("skills: vendored skills do not match external-skills.lock.json — run scripts/sync-external.sh in skills-registry")
+  # Third-party skills are vendored at a pinned SHA. Nothing here bumps that
+  # pin — that is a deliberate manual sync-external.sh run — but a hand-edit or
+  # a half-applied sync would diverge silently, so surface it.
+  if [ -f "$verify" ] && [ -n "${SKILLS_REGISTRY_REPO:-}" ]; then
+    if ! bash "$verify" --repo "$SKILLS_REGISTRY_REPO" --verify; then
+      WARNINGS+=("skills: vendored skills do not match external-skills.lock.json — re-run sync-external.sh")
     fi
   fi
 }

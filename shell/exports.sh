@@ -272,6 +272,15 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Machines disagree on where checkouts live: some use repos/github/tools/,
   # others a flat github/. Pick the one that exists rather than asserting a
   # layout — a wrong path here silently disables skp everywhere.
+  #
+  # Two repos now: SKP_REPO is the tool, SKILLS_REGISTRY_REPO the skills. The
+  # tool no longer derives one from the other, so both are looked up.
+  for _candidate in \
+    "$OS_WORKSPACE/repos/github/tools/skp" \
+    "$OS_WORKSPACE/github/skp"
+  do
+    [ -d "$_candidate" ] && export SKP_REPO="$_candidate" && break
+  done
   for _candidate in \
     "$OS_WORKSPACE/repos/github/tools/skills-registry" \
     "$OS_WORKSPACE/github/skills-registry"

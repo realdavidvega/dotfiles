@@ -60,7 +60,7 @@ This will:
 - Install all dotfiles
 - Run custom restoration scripts
 - Set up symlinks
-- Clone the private `skills-registry` repo and link its skills into Claude, Codex, and OpenCode
+- Clone the public `skp` tool and the private `skills-registry`, then link skills into Claude, Codex, and OpenCode
 - Install Claude Code and wire global Claude config/skills on supported machines
 - Restore OpenCode config and related dotfiles-managed integrations
 
@@ -127,10 +127,10 @@ git-crypt unlock /path/to/dotfiles-key.bin
 The dotfiles are the source of truth for the OpenCode setup:
 
 - `config/opencode/opencode.json` tracks providers, plugins, MCPs, and skill paths
-- `skp sync` (from skills-registry, on `PATH` via `SKILLS_REGISTRY_REPO`) links global skills into `~/.claude/skills`, `~/.agents/skills` and `~/.codex/skills`, then links project-scoped skills into each mapped repo's `.claude/skills`, `.codex/skills` and `.opencode/skills`
+- `skp sync` (from the skp repo, on `PATH` via `SKP_REPO`) links global skills into `~/.claude/skills`, `~/.agents/skills` and `~/.codex/skills`, then links project-scoped skills into each mapped repo's `.claude/skills`, `.codex/skills` and `.opencode/skills`
 - `config/opencode/global/AGENTS.md` is shared through `~/.agents/AGENTS.md` and `~/.codex/AGENTS.md`; Codex's mutable `~/.codex/config.toml` remains machine-local
 - `~/.skp/profiles.json` decides which skills are global and which are opt-in per project; `skp add` / `skp rm` edit it. It is local state, versioned in no repo
-- Third-party skills are vendored in skills-registry under `external-skills/<domain>/<skill>`, pinned by SHA and hash-locked by that repo's `scripts/sync-external.sh`
+- Third-party skills are vendored in skills-registry under `external-skills/<domain>/<skill>`, pinned by SHA and hash-locked by `sync-external.sh` from the skp repo
 - `scripts/opencode-session.sh` is the dotfiles-owned OpenCode launcher used by `ocv`
 - `scripts/hindsight-local.sh` is the dotfiles-owned launcher for the local Hindsight backend used by `ochl`
 - the Hindsight plugin is configured in `config/opencode/opencode.json` and defaults to `http://localhost:8888`
@@ -139,7 +139,7 @@ To restore the setup on a new machine:
 
 1. Restore dotfiles normally (`dot self install`)
 2. Make sure your OpenCode config is symlinked into `~/.config/opencode`
-3. Make sure the external skills-registry checkout is available; `skp sync` links the global skills for Claude, Codex, and OpenCode and materializes the per-project ones from `~/.skp/profiles.json`
+3. Make sure both the skp and skills-registry checkouts are available; `skp sync` links the global skills for Claude, Codex, and OpenCode and materializes the per-project ones from `~/.skp/profiles.json`
 4. Make sure `ollama` is installed and pull the local Hindsight model: `ollama pull gemma4:12b`
 5. Start the local backend with `ochl` if you want Hindsight enabled
 6. Launch `ocv` or `opencode`
