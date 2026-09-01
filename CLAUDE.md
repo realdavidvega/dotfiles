@@ -9,14 +9,15 @@ resolution, scoping, the restore path, and the `skp` tooling. Everything else in
 this repo is documented in this file.
 
 - **Read `.wiki/index.md` (and `.wiki/CLAUDE.md`) at the start of skills work.**
+- **The skills system has moved out of this repo.** `skp`, the store and the
+  profiles manifest now live with skills-registry, which has its own wiki and
+  its own ADR for the move. Most of this wiki therefore documents an
+  arrangement that no longer exists and is pending a rewrite. Treat it as
+  historical until then, and make skills changes in the registry.
 - **Keep it in sync as you code.** When a change alters something the wiki
-  documents — the roots or precedence in `scripts/skills/lib.sh`, the `skp`
-  commands, the scopes materialized by `restoration_scripts/04-skills-sync.sh`,
-  the shape of `skills.profiles.json`, or which agent directories are written —
-  update the affected `.wiki/` page in the SAME change and bump its `updated:`
-  date. Record non-obvious decisions as an ADR in `.wiki/decisions/`. This is
-  part of "done", not a follow-up. Adding or removing a skill *name* in
-  `skills.profiles.json` is routine config, not a wiki change.
+  still documents accurately, update the affected page in the SAME change and
+  bump its `updated:` date. Record non-obvious decisions as an ADR in
+  `.wiki/decisions/`. This is part of "done", not a follow-up.
 - **`.wiki/` is git-crypt encrypted.** On a locked checkout every page, including
   `lint.py`, is binary. That is not corruption — run `git-crypt unlock` first.
 - Run `python3 .wiki/lint.py .` for a health check (dead links, orphans, stale pages).
@@ -134,59 +135,28 @@ bootstrap.
 
 ### Skills
 
-**No agent has a per-skill enable/disable setting.** Verified against Claude Code
-2.1.233, Codex 0.147 and OpenCode 1.18: `disabledSkills`, `enabledSkills`,
-`allowedSkills` and `deniedSkills` do not exist. Presence in a skills directory
-IS the switch, which is why everything below is symlinks rather than config.
+**This repo owns none of the skills system any more.** The tool (`skp`), the
+store and the profiles manifest all live in skills-registry, which documents
+them in its own wiki (`runbooks/managing-skills`) and records the move in its
+ADR 0004. What remains here is two pointers:
 
-Skills come from two **roots**, both in the skills-registry, resolved in this
-precedence order (later wins on a name collision):
+- `SKILLS_REGISTRY_REPO` in `shell/exports.sh`, which also puts
+  `$SKILLS_REGISTRY_REPO/bin` on `PATH` so `skp` is callable.
+- The `skills` component of `upall`, which fast-forwards that checkout when it
+  is safe to do so and then runs `skp sync`. The pull lives here because
+  `skp sync` ships inside the registry and will not manage its own working
+  tree.
 
-1. `$SKILLS_REGISTRY_REPO/external-skills/<domain>/<skill>` — third-party,
-   vendored at a pinned commit
-2. `$SKILLS_REGISTRY_REPO/skills/<domain>/<skill>` — authored by you
-
-Third-party content sits lowest so your own skills always win a name collision.
-
-**This repo holds no skill content.** It owns only `skills.profiles.json`, which
-decides where skills load. The registry owns what they are.
-
-They are activated in one of two **scopes**, both declared in
-`config/opencode/skills.profiles.json`:
-
-- `global` — symlinked into `~/.claude/skills` (Claude Code, OpenCode),
-  `~/.agents/skills` (Codex, OpenCode) and `~/.codex/skills` (Codex).
-- `projects` — symlinked only into the projects that name them, under
-  `<repo>/.claude/skills`, `<repo>/.codex/skills` and `<repo>/.opencode/skills`.
-
-**A skill absent from `global` is opt-in.** Adding a skill to skills-registry
-does not make it global until it is listed. Project keys support `~` and `$VAR`
-so one manifest serves macOS and WSL; a key whose path is missing on this
-machine is skipped.
-
-```bash
-skp status                 # roots, counts, configured projects, what resolved
-skp list                   # effective skills for the current project
-skp add <skill>...         # activate in the current project (writes the manifest)
-skp rm  <skill>...         # deactivate
-skp apply --all            # re-materialize every project (what restore runs)
-skp add <skill> --exclude  # also add the link dirs to .git/info/exclude
-```
-
-Both scopes are materialized by `restoration_scripts/04-skills-sync.sh`, which
-hard-refreshes `$SKILLS_REGISTRY_REPO`, links the global set, then calls
-`scripts/skills/project.sh apply --all`. It is also the `skills` component of
-`upall`. Two guards make it safe to re-run: it only ever deletes symlinks
-pointing into a root it owns (so the hand-installed `skill-creator`, `recall`,
-`signet` … directories in `~/.agents/skills` survive), and it refuses to link
-over a real directory.
+Local state lives outside both repos: the store at `~/.skp/skills` and the
+manifest at `~/.skp/profiles.json` (override with `$SKP_PROFILES`). The manifest
+is versioned nowhere, so it is yours to back up.
 
 #### Vendoring a third-party skill collection
 
-Third-party skills are **not** vendored in this repo — they live in
-skills-registry under `external-skills/<domain>/<skill>`, generated and
-hash-locked there. Add a source to that repo's `external-skills.sources.json`
-pinned to a **commit SHA**, then:
+Third-party skills live in skills-registry under
+`external-skills/<domain>/<skill>`, generated and hash-locked there. Add a
+source to that repo's `external-skills.sources.json` pinned to a **commit
+SHA**, then:
 
 ```bash
 cd "$SKILLS_REGISTRY_REPO"
@@ -206,7 +176,7 @@ repo with a `.claude-plugin/` directory is not necessarily a plugin; Claude Code
 only recognizes `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
 
 Vendoring only makes a skill *available*. Which projects it activates in is
-`skills.profiles.json` here, via `skp add`.
+`~/.skp/profiles.json`, via `skp add`.
 
 ### git-crypt
 
@@ -339,12 +309,12 @@ both.
 - **No skills live in this repo.** Author them in skills-registry under
   `skills/<domain>/<skill>`; third-party ones are vendored there under
   `external-skills/` (generated — edit `external-skills.sources.json` and re-run
-  `scripts/sync-external.sh`, committing the tree and lock together). This repo
-  only decides scope, via `config/opencode/skills.profiles.json`.
+  `scripts/sync-external.sh`, committing the tree and lock together). Scope is
+  decided outside both repos, in `~/.skp/profiles.json`.
 - **A new skill is not global until it is listed.** Add it to the `global` array
-  in `config/opencode/skills.profiles.json`, or leave it opt-in and attach it to
-  projects with `skp add`. Then run `upall --only skills` (or
-  `restoration_scripts/04-skills-sync.sh`) to materialize the links.
+  in `~/.skp/profiles.json`, or leave it opt-in and attach it to projects with
+  `skp add`. Then run `upall --only skills` (or `skp sync`) to materialize the
+  links.
 - **After installing new tools, run `dot package dump` and commit
   `os/`, `langs/`, `editors/`.** For `uv tool install <foo>`, additionally add
   `foo` to `langs/python/uv_tools.txt` by hand. The dump command does not know
@@ -363,8 +333,8 @@ both.
   per-OS variant. Do not add ad-hoc `ln -s` calls to restoration scripts for
   things that dotbot can express declaratively.
 - **Cross-OS scripts must branch on `$OSTYPE`.** See
-  `restoration_scripts/02-ollama-setup.sh` and `restoration_scripts/04-skills-sync.sh`
-  for the pattern (`darwin*` vs `linux-gnu*`).
+  `restoration_scripts/02-ollama-setup.sh` for the pattern (`darwin*` vs
+  `linux-gnu*`).
 - **The `modules/dotly` submodule is upstream code.** Bumping it means
   `git -C modules/dotly pull` then committing the new submodule SHA. Do not
   patch dotly in place.

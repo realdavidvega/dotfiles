@@ -247,17 +247,40 @@ update_npm() {
 }
 
 update_skills() {
-  local script="$DOTFILES_PATH/restoration_scripts/04-skills-sync.sh"
-  local verify
-  [ -f "$script" ] || { SKIPPED+=("skills: $script not found"); return 0; }
+  local skp="${SKILLS_REGISTRY_REPO:-}/bin/skp"
+  local verify="${SKILLS_REGISTRY_REPO:-}/scripts/sync-external.sh"
 
-  # lib.sh owns the OS branch for the registry checkout path; do not duplicate it.
-  # shellcheck source=./skills/lib.sh
-  source "$DOTFILES_PATH/scripts/skills/lib.sh"
-  verify="$SKILLS_REGISTRY_REPO/scripts/sync-external.sh"
+  [ -n "${SKILLS_REGISTRY_REPO:-}" ] || {
+    SKIPPED+=("skills: SKILLS_REGISTRY_REPO unset")
+    return 0
+  }
+  [ -x "$skp" ] || {
+    SKIPPED+=("skills: $skp not found — is SKILLS_REGISTRY_REPO correct for this machine?")
+    return 0
+  }
 
   section "skills registry"
-  bash "$script" || return 1
+
+  # `skp sync` deliberately does not fetch: it ships inside the registry, so
+  # updating that checkout would mean operating on its own working tree. Pull
+  # here instead, and only when it is safe to do so unattended.
+  if [ -d "$SKILLS_REGISTRY_REPO/.git" ]; then
+    if [ -n "$(git -C "$SKILLS_REGISTRY_REPO" status --porcelain)" ]; then
+      echo "Registry has local changes; relinking without fetching" >&2
+    else
+      git -C "$SKILLS_REGISTRY_REPO" fetch origin
+      # --porcelain sees uncommitted work only. A clean tree holding unpushed
+      # commits would lose them to a reset, so check separately and use
+      # ff-only, which refuses rather than discarding.
+      if [ -n "$(git -C "$SKILLS_REGISTRY_REPO" log --oneline origin/main..HEAD 2>/dev/null)" ]; then
+        echo "Registry has unpushed commits; relinking without updating" >&2
+      elif ! git -C "$SKILLS_REGISTRY_REPO" merge --ff-only origin/main >/dev/null 2>&1; then
+        echo "Registry could not fast-forward to origin/main; relinking as-is" >&2
+      fi
+    fi
+  fi
+
+  bash "$skp" sync || return 1
 
   # Third-party skills live in the registry under external-skills/, vendored at
   # a pinned SHA. Nothing here bumps that pin — that is a deliberate manual

@@ -268,7 +268,17 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
 
   export BLACK_VAULT="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Black Vault"
   export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/tools/black-vault"
-  export SKILLS_REGISTRY_REPO="$OS_WORKSPACE/repos/github/tools/skills-registry"
+
+  # Machines disagree on where checkouts live: some use repos/github/tools/,
+  # others a flat github/. Pick the one that exists rather than asserting a
+  # layout — a wrong path here silently disables skp everywhere.
+  for _candidate in \
+    "$OS_WORKSPACE/repos/github/tools/skills-registry" \
+    "$OS_WORKSPACE/github/skills-registry"
+  do
+    [ -d "$_candidate" ] && export SKILLS_REGISTRY_REPO="$_candidate" && break
+  done
+  unset _candidate
 fi
 
 # ---------------------------
