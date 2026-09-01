@@ -50,12 +50,13 @@ alias up="dot package update_all"
 alias upall="bash $DOTFILES_PATH/scripts/update-all.sh"
 alias upcheck="bash $DOTFILES_PATH/scripts/update-all.sh --check"
 
-# Skill package manager. Ships with skills-registry, not here: this repo owns
-# neither the tool nor the skills, only the pointer to where the tool lives.
-# The mapping it edits is local state at ~/.skp/profiles.json.
+# Skill package manager, from the skp repo. This repo owns neither the tool nor
+# the skills, only the pointer to where the tool lives. Its config is local
+# state: ~/.skp/sources (where skills come from) and ~/.skp/profiles.json
+# (what loads where).
 #   skp sync | skp status | skp list | skp add <skill>... | skp rm | skp apply
-if [ -x "${SKILLS_REGISTRY_REPO:-}/bin/skp" ]; then
-  export PATH="$SKILLS_REGISTRY_REPO/bin:$PATH"
+if [ -x "${SKP_REPO:-}/bin/skp" ]; then
+  export PATH="$SKP_REPO/bin:$PATH"
 fi
 
 # ---------------------------
