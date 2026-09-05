@@ -347,48 +347,60 @@ The hub is the only backup source, since it holds every folder and is always on.
 **Requirement: versioned, not mirrored.** Syncthing propagates deletions within seconds, so a
 mirror reproduces the exact failure it is meant to protect against.
 
-### FreeFileSync in Update mode with versioning
+> [!note] Designed, not yet built
+> The vault is already protected against the failure this guards against, by 365-day staggered
+> versioning on the hub plus git history on GitHub. What follows is needed before the other
+> workloads migrate, and for hub disk failure. It is not blocking.
 
-Chosen for familiarity, since it already covers the current iCloud-to-external-drive run. The
-configuration is what matters:
+### restic, not FreeFileSync
 
-| Setting | Value | Why |
-|---|---|---|
-| Variant | **Update**, not Mirror | Mirror deletes on the target whatever vanished on the source. That is the whole problem |
-| Deletion handling | **Versioning**, not "Permanent" or "Recycle bin" | Moves replaced and deleted files into a versioning folder instead of removing them |
-| Naming convention | **Time stamp (file)** | Keeps every revision. "Replace" keeps only the newest, which defeats the purpose |
-| Versioning limits | Keep a generous minimum | The point is surviving a deletion you notice weeks later |
+FreeFileSync was the original choice, for familiarity with the existing external-drive run. It
+is disqualified by the same constraint that shaped everything else on this hub: it is a GUI
+application, and a boot-time systemd service has no display and no logged-in session. Batch mode
+does not escape that. This is the answer to the question the design left open.
 
-> [!warning] Mirror mode is the trap
-> FreeFileSync defaults to a two-way or mirror mindset. Mirror plus a propagated Syncthing
-> deletion equals a lost file on both source and backup. Verify the variant reads **Update**
-> and the deletion handling reads **Versioning** before the first real run.
+`restic` fits the specifics rather than merely being CLI-native:
 
-Save the configuration as a `.ffs_batch` file so it can run unattended. Set it to ignore
-errors rather than pop a dialog, since nothing will be watching.
+| Property | Why it matters here |
+|---|---|
+| Encrypted repository | An external drive that leaves the house leaks nothing if lost |
+| Deduplicating | Daily snapshots of a mostly-static 2GB dataset share nearly every block |
+| Opaque pack files | Target can be ext4, vfat or exFAT. POSIX ownership is stored in metadata, not on the target filesystem |
+| `restic check` | Integrity verification, which no file-copy tool offers |
+| Policy-based prune | Bounded growth without manual housekeeping |
 
-**Alternatives, if FreeFileSync proves awkward to schedule headless:** `restic` (deduplicating,
-encrypted, snapshot-based, prunable) or `rsync --backup-dir` (no new dependency). Both are
-strictly better for scripted use, and neither is worth the switch unless FreeFileSync fights
-the timer.
+**Requirement, unchanged: versioned, not mirrored.** A mirror plus a propagated Syncthing
+deletion equals a lost file on both source and target, which is the exact failure being guarded
+against.
 
 ### Scheduling
 
-Runs from a **systemd user timer with `Persistent=true`** so a missed window fires on the next
-boot rather than being skipped, matching how the vault automation is scheduled. Add
-`loginctl enable-linger` so the unit survives logout.
+A **system** timer with `Persistent=true`, not a user timer.
+
+> [!warning] `loginctl enable-linger` does not work on this hub
+> A user timer plus linger is the usual answer, and it fails here. The home is ecryptfs and
+> unlocks only when PAM receives the login password, so a user service starting at boot cannot
+> read it. Every other service on this hub is a system unit for the same reason.
+
+The repository password is a secret, kept in KeePass and in a `0600` file on the hub, and read by
+the unit rather than embedded in it.
 
 ### What to include
 
-- All Syncthing folders
-- The Black Vault working tree on the hub, where LiveSync materialises notes and warm attachments
-- The CouchDB data directory (the live store behind that working tree)
-- The Syncthing config directory, since device IDs and folder keys are painful to rebuild
+- `/srv/sync/*`, every Syncthing folder
+- `/srv/services/couchdb/data`, the LiveSync database
+- `/srv/services/syncthing`, the device certificate and folder keys. Losing these means a new
+  device ID and re-pairing every device
+- `/srv/services/livesync-bridge/dat`, the bridge config and the encryption passphrase
+
+Excluded deliberately: `/srv/sync/blackvault/.git`, which is 450MB reconstructible from GitHub,
+and `.stversions`, which is already a versioning layer.
 
 ### Verify the restore
 
-A backup nobody has restored from is a hypothesis. Before step 9 of the rollout, pull a file
-out of the versioning folder and confirm it opens. Repeat after any change to the folder set.
+A backup nobody has restored from is a hypothesis. Pull a file out of a snapshot and confirm it
+opens, before trusting it and again after any change to the include list. `restic check --read-data`
+verifies the repository itself, which is a different question from whether a restore works.
 
 ***
 
@@ -457,12 +469,16 @@ graphical session, or a login.
 |---|---|
 | iPhone: LiveSync client, fetch from remote | The remote already holds the vault, so this device only pulls |
 | Windows: Syncthing, `blackvault` and the rest | Fan out once the shape is proven on two machines |
-| Backup timer to the external drive, **with a verified restore** | Before iCloud is switched off, so nothing is ever unprotected |
-| Turn off iCloud Drive for the migrated folders | Last, and only after a restore has actually been performed |
+| restic backup to an external drive, with a verified restore | Needed before the remaining workloads migrate, and against hub disk failure |
 
-> [!danger] Do not switch off iCloud before a verified restore
-> Between leaving iCloud and having a working versioned backup, a single propagated deletion is
-> unrecoverable. Pull a file out of the versioning folder and confirm it opens first.
+The Obsidian vault has left iCloud. It is protected against propagated deletion by 365-day
+staggered versioning on the hub and by git history on GitHub, both verified, which is why it did
+not wait for restic.
+
+> [!danger] The remaining workloads have no such cover
+> KeePass, documents and media get no git layer. For those, a propagated deletion is
+> unrecoverable once versioning ages out. Build restic and verify a restore before migrating
+> them off iCloud.
 
 The Windows side keeps the vault at `repos/github/docs/black-vault`. Normalise it to
 `repos/github/tools/black-vault` when it joins, so the path is identical on all three desktops.
@@ -474,8 +490,6 @@ impossible rather than merely unwise.
 
 ## Open questions
 
-- Whether FreeFileSync schedules cleanly headless from a systemd timer, or whether the backup leg
-  moves to restic
 - Whether `livesync-bridge` proves reliable enough to keep, given it carries no license and is
   built from source. The fallback is the LiveSync plugin on a desktop, which needs no new
   infrastructure but reintroduces a dependency on Obsidian being open
