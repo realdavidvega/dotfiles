@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Template only. The real dat/config.json holds the CouchDB password and",
+    "the E2EE passphrase, is mode 0600, and is never versioned. Recover both",
+    "from KeePass. Peers sharing a group replicate with each other.",
+    "Hidden files (.obsidian, .stfolder, .git) are excluded by default, which",
+    "is deliberate: the phone keeps its own light plugin set."
+  ],
+  "peers": [
+    {
+      "type": "storage",
+      "group": "blackvault",
+      "name": "hub-files",
+      "baseDir": "./data/blackvault/",
+      "scanOfflineChanges": true,
+      "useChokidar": true
+    },
+    {
+      "type": "couchdb",
+      "group": "blackvault",
+      "name": "couchdb",
+      "database": "blackvault",
+      "username": "REPLACE_FROM_KEEPASS",
+      "password": "REPLACE_FROM_KEEPASS",
+      "url": "http://couchdb:5984",
+      "passphrase": "REPLACE_FROM_KEEPASS",
+      "obfuscatePassphrase": "REPLACE_FROM_KEEPASS",
+      "baseDir": ""
+    }
+  ]
+}

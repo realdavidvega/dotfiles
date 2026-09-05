@@ -1,0 +1,21 @@
+services:
+  couchdb:
+    image: couchdb:3.5
+    container_name: couchdb
+    restart: unless-stopped
+    # Credentials live in a sibling .env (0600), never in this file, which is
+    # what keeps this file safe to version in a public repo.
+    env_file: .env
+    volumes:
+      - ./data:/opt/couchdb/data
+      - ./local.d:/opt/couchdb/etc/local.d
+    ports:
+      # Loopback only. Never the tailnet IP: tailscale serve fronts this and
+      # supplies the certificate that Obsidian on iOS refuses to work without.
+      - "127.0.0.1:5984:5984"
+    networks:
+      - personalcloud
+
+networks:
+  personalcloud:
+    external: true
