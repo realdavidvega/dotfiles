@@ -1,0 +1,12 @@
+# Upstream runs as uid 1993 (deno), but Syncthing on the hub writes as uid
+# 1000 (black). A bridge running as 1993 cannot write the vault, and files it
+# created would not be writable by Syncthing. Building with USER 1000 keeps
+# every file on the hub owned consistently by black.
+FROM docker.io/denoland/deno:2.6.9
+WORKDIR /app
+COPY . .
+RUN deno install --frozen \
+ && mkdir -p /deno-dir/location_data \
+ && chown -R 1000:1000 /deno-dir /app
+USER 1000:1000
+CMD ["deno", "task", "run"]

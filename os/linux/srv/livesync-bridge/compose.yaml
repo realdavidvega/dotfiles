@@ -1,0 +1,23 @@
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.hub
+    image: localhost/livesync-bridge:hub
+    container_name: livesync-bridge
+    restart: unless-stopped
+    volumes:
+      - ./dat:/app/dat
+      - /srv/sync/blackvault:/app/data/blackvault
+      # Offline-scan state. Preserve across recreation, or the next scan
+      # rebuilds it from scratch.
+      - bridge_local_storage:/deno-dir/location_data
+    networks:
+      - personalcloud
+
+volumes:
+  bridge_local_storage:
+
+networks:
+  personalcloud:
+    external: true
