@@ -1,0 +1,8 @@
+[Unit]
+Description=Personal cloud health check
+After=docker.service syncthing@black.service
+
+[Service]
+Type=oneshot
+User=black
+ExecStart=/srv/services/healthcheck/personal-cloud-health.sh
