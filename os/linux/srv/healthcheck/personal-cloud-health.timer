@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the personal cloud health check every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+# A missed window fires on next boot rather than being skipped.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
