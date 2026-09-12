@@ -356,7 +356,21 @@ class Bridge:
 
     # ── command handling ────────────────────────────────────────────────────
 
+    @property
+    def bot_id(self) -> int:
+        # A bot token is "<bot user id>:<secret>", so its own id needs no API call.
+        try:
+            return int(self.config.token.split(":", 1)[0])
+        except ValueError:
+            return 0
+
     def authorised(self, chat_id: int, user_id: int | None) -> bool:
+        # The bridge's own posts come back as group updates. Refusing them is
+        # correct, but warning about it once per notification would bury the
+        # rejections that actually matter.
+        if user_id == self.bot_id:
+            LOG.debug("ignoring the bridge's own message")
+            return False
         if chat_id != self.config.chat_id:
             LOG.warning("ignoring update from chat %s", chat_id)
             return False

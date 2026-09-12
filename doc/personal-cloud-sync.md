@@ -401,6 +401,9 @@ the unit rather than embedded in it.
 - `/srv/services/syncthing`, the device certificate and folder keys. Losing these means a new
   device ID and re-pairing every device
 - `/srv/services/livesync-bridge/dat`, the bridge config including its chunk settings
+- `/srv/services/agents`, the Telegram bridge's `bridge.env` and its topic mapping.
+  Both are reconstructible, the token from KeePass and the chat id from
+  `agent-bridge.py discover`, so this is convenience rather than the only copy
 
 Excluded deliberately: `/srv/sync/blackvault/.git`, which is 450MB reconstructible from GitHub,
 and `.stversions`, which is already a versioning layer.
