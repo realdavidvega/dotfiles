@@ -242,6 +242,30 @@ The bridge publishes its command menu scoped to the configured chat rather than
 globally, so a token shared with another deployment keeps that deployment's
 menu everywhere else.
 
+### The pinned guide
+
+The operating guide that sits pinned in the group is a `GUIDE` constant in
+`agent-bridge.py`, not a message someone typed once. It is versioned with the
+commands it describes, staged to the hub by the same restore step, and rendered
+with the live session allowlist substituted in.
+
+```bash
+agent-bridge.py guide --show    # print it, send nothing
+agent-bridge.py guide --pin     # post and pin it, first time only
+agent-bridge.py guide           # edit the pinned one in place
+```
+
+Editing in place is what keeps the pin. Posting a new message would need
+pinning again and would leave the old one behind.
+
+`serve` refreshes it on start when a guide message id is already stored, so
+changing the text and restarting is enough to update the group. It never
+creates one unasked: `--pin` is an explicit decision, because it posts and pins
+in a shared chat.
+
+The message id lives in `bridge-state.json`. If the message is deleted, the
+next edit fails, the id is dropped, and `--pin` posts a fresh one.
+
 ### Topic lifecycle
 
 `bridge-state.json` maps session name to `message_thread_id`. Topics outlive

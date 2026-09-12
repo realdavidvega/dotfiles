@@ -87,6 +87,65 @@ BUTTONS: dict[str, tuple[str, str]] = {
 }
 
 
+# The pinned operating guide. It lives here rather than in a separate file so
+# it is versioned with the commands it documents, and staged to the hub by the
+# same restore step. {sessions} is filled from the live allowlist.
+GUIDE = """\u2301 BLACK AGENTS \u2014 operating guide
+
+Each topic is one tmux session on the hub. The session keeps running when you
+close Telegram, the terminal, or your laptop.
+
+\u2500\u2500 DAILY \u2500\u2500
+/ls          what is running, and whether anyone is watching
+/peek        show the session's pane
+/say TEXT    type into the pane and press Enter
+/esc         interrupt the agent
+/enter       press Enter in the pane
+
+Plain typing does NOT reach me while privacy mode is on. Use /say, or reply
+directly to one of my messages.
+
+\u2500\u2500 LIFECYCLE \u2500\u2500
+/resume NAME   start it and continue the last conversation
+/new NAME      start it with a blank conversation
+/bind NAME     attach this topic to a session already running
+/kill NAME     close it
+
+Both /resume and /new take an agent after the name: claude (default), codex,
+opencode, shell.
+
+\u2500\u2500 TOPICS OUTLIVE SESSIONS \u2500\u2500
+Killing a session, or rebooting the hub, leaves this topic alone. A session is
+a process; the conversation is a file on disk. /resume NAME brings the same
+topic back with the conversation intact, /new NAME starts fresh in it.
+
+Deleting a topic is the only real cleanup, and only you can do it.
+
+\u2500\u2500 BUTTONS \u2500\u2500
+Notifications carry: peek \u00b7 1 \u00b7 2 \u00b7 interrupt.
+They send the keystrokes a human would press, and do not read the prompt, so
+/peek before approving something you did not watch happen.
+
+\u2500\u2500 WHEN IT GOES QUIET \u2500\u2500
+No pings while a terminal is attached to the session. That is intended.
+/ls says "detached" when notifications are live.
+
+Sessions I may touch: {sessions}
+Anything else is refused until AGENT_BRIDGE_SESSIONS is widened on the hub.
+
+\u2500\u2500 AFTER A REBOOT \u2500\u2500
+I come back on my own, but tmux sessions do not, and the agents live in the
+encrypted home. From a phone:
+
+  ssh mint
+  ecryptfs-mount-private
+
+then /resume vault here. Never send the passphrase through Telegram.
+
+\u2500\u2500 FULL GUIDE \u2500\u2500
+black-vault \u2192 02 - Personal/06 - Tech/03 - Guides/Remote Agent Sessions"""
+
+
 class ConfigError(RuntimeError):
     pass
 
@@ -170,6 +229,7 @@ class State:
     path: Path
     offset: int = 0
     topics: dict[str, int] = field(default_factory=dict)
+    guide_message_id: int | None = None
 
     @classmethod
     def load(cls, path: Path) -> "State":
@@ -177,14 +237,20 @@ class State:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return cls(path=path)
+        guide = raw.get("guide_message_id")
         return cls(
             path=path,
             offset=int(raw.get("offset", 0)),
             topics={str(k): int(v) for k, v in (raw.get("topics") or {}).items()},
+            guide_message_id=int(guide) if guide else None,
         )
 
     def save(self) -> None:
-        payload = {"offset": self.offset, "topics": self.topics}
+        payload = {
+            "offset": self.offset,
+            "topics": self.topics,
+            "guide_message_id": self.guide_message_id,
+        }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -702,6 +768,58 @@ class Bridge:
         except (urllib.error.URLError, OSError, ValueError) as exc:
             LOG.warning("could not publish the command menu: %s", exc)
 
+    def render_guide(self) -> str:
+        return GUIDE.format(sessions=" ".join(self.config.session_patterns))
+
+    def publish_guide(self, pin: bool = False) -> str:
+        """Post and pin the guide, or edit the one already pinned.
+
+        Editing in place keeps the pin. A new message would have to be pinned
+        again and would leave the old one in the chat.
+        """
+        text = self.render_guide()
+
+        if self.state.guide_message_id:
+            result = self.tg.call(
+                "editMessageText",
+                chat_id=self.config.chat_id,
+                message_id=self.state.guide_message_id,
+                text=text,
+                link_preview_options={"is_disabled": True},
+            )
+            if result.get("ok"):
+                return f"updated the pinned guide, message {self.state.guide_message_id}"
+            description = str(result.get("description", ""))
+            if "not modified" in description:
+                return "the pinned guide is already current"
+            # The message is gone. Fall through and post a new one.
+            LOG.warning("could not edit the guide (%s), posting a new one", description)
+            self.state.guide_message_id = None
+
+        if not pin:
+            return "no pinned guide to update. Run: agent-bridge.py guide --pin"
+
+        sent = self.tg.send(self.config.chat_id, text)
+        if not sent.get("ok"):
+            return f"could not post the guide: {sent}"
+
+        message_id = int(sent["result"]["message_id"])
+        self.state.guide_message_id = message_id
+        self.state.save()
+
+        pinned = self.tg.call(
+            "pinChatMessage",
+            chat_id=self.config.chat_id,
+            message_id=message_id,
+            disable_notification=True,
+        )
+        if pinned.get("ok"):
+            return f"posted and pinned the guide, message {message_id}"
+        return (
+            f"posted the guide as message {message_id}, but pinning failed: "
+            f"{pinned.get('description')}. The bot needs the Pin Messages right."
+        )
+
     def serve(self) -> int:
         running = True
 
@@ -714,6 +832,9 @@ class Bridge:
         signal.signal(signal.SIGINT, stop)
 
         self.publish_commands()
+
+        if self.state.guide_message_id:
+            LOG.info("%s", self.publish_guide())
 
         LOG.info(
             "serving chat %s, sessions %s",
@@ -846,6 +967,15 @@ def cmd_discover(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_guide(args: argparse.Namespace) -> int:
+    bridge = build(Config.from_env())
+    if args.show:
+        print(bridge.render_guide())
+        return 0
+    print(bridge.publish_guide(pin=args.pin))
+    return 0
+
+
 def cmd_doctor(_args: argparse.Namespace) -> int:
     try:
         config = Config.from_env()
@@ -909,6 +1039,11 @@ def main(argv: list[str] | None = None) -> int:
     notify.add_argument("--event", default="stop", choices=["stop", "notification"])
     notify.add_argument("--dry-run", action="store_true")
     notify.set_defaults(func=cmd_notify)
+
+    guide = sub.add_parser("guide", help="post, pin or refresh the operating guide")
+    guide.add_argument("--pin", action="store_true", help="post and pin it if none exists yet")
+    guide.add_argument("--show", action="store_true", help="print it without sending anything")
+    guide.set_defaults(func=cmd_guide)
 
     sub.add_parser("doctor", help="check configuration and connectivity").set_defaults(
         func=cmd_doctor
