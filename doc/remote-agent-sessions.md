@@ -108,6 +108,19 @@ own current window. Cleanup is a `client-detached` hook rather than
 `destroy-unattached on`, which reaps the session the moment it is created,
 before there is a client to attach.
 
+### Resuming
+
+`--resume` types the agent's own continue command instead of a bare
+invocation: `claude --continue`, `codex resume --last`, `opencode --continue`.
+Each resolves the most recent conversation in the session's working directory,
+so the launcher's directory resolution is what makes it deterministic.
+
+A session is a process and a conversation is a file. Killing the first, or
+rebooting the host, leaves the second alone, which is why `/resume` can rebuild
+a session and carry on mid-thread. To pick from a list instead of taking the
+most recent, type `claude --resume` or `codex resume` in the pane, since those
+open an interactive picker.
+
 ## Notifications
 
 `scripts/agent-notify.sh` reports on a detached session. It stays silent while
