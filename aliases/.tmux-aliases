@@ -1,0 +1,14 @@
+# Persistent agent sessions over tmux. See doc/remote-agent-sessions.md.
+
+alias ags='"$DOTFILES_PATH"/scripts/agent-session.sh'
+alias agsl='"$DOTFILES_PATH"/scripts/agent-session.sh ls'
+alias agso='"$DOTFILES_PATH"/scripts/agent-session.sh open'
+alias agsm='"$DOTFILES_PATH"/scripts/agent-session.sh mobile'
+
+# The hub. `agsr` with no arguments lists its sessions.
+alias agsr='"$DOTFILES_PATH"/scripts/agent-session.sh remote'
+alias agsrv='"$DOTFILES_PATH"/scripts/agent-session.sh remote open vault'
+
+# Plain tmux shorthands, useful when the session was not made by the launcher.
+alias tl='tmux list-sessions'
+alias ta='tmux attach-session -t'

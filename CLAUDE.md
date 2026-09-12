@@ -214,6 +214,29 @@ session `hindsight-backend` when `HINDSIGHT_API_URL` points at localhost and no
 existing server responds on `/health`. Killing that tmux session shuts down
 Hindsight.
 
+### Agent sessions (tmux)
+
+```bash
+ags open <name>         # create or attach a tmux session running an agent
+ags ls                  # list sessions
+ags mobile <name>       # second client, sized independently of the first
+ags remote [args]       # run the same command on the hub over SSH
+agsrv                   # open the vault session on the hub
+```
+
+`scripts/agent-session.sh` gives each session three windows (`agent`, `shell`,
+`git`) and types the agent into a shell rather than running it as the window
+command, so a crash leaves its output visible. `config/tmux/tmux.conf` is
+linked to `~/.tmux.conf` and also staged as a plaintext copy under
+`/srv/services/agents/` on the hub, whose home is encrypted and unreadable
+before login. `scripts/agent-notify.sh` is a Claude Code `Stop`/`Notification` hook and the
+Codex `notify` program; it reports only when no client is attached, and
+withholds agent output outside an allowlist of personal roots.
+`scripts/agent-bridge.py` is a stdlib-only Telegram control plane that drives
+sessions at the tmux layer, so it covers Claude Code, Codex and OpenCode alike:
+one forum topic per session, reply to type into the pane. Full reasoning and the
+alternatives considered are in `doc/remote-agent-sessions.md`.
+
 ## Architecture
 
 ### Directory map (top-level, what's non-obvious)
@@ -247,7 +270,9 @@ Hindsight.
   Order matters. Adding a new step means picking a sensible number.
 - `scripts/` — repo-owned scripts callable from anywhere (not necessarily
   during bootstrap). Includes `opencode-session.sh`, `hindsight-local.sh`,
-  `skills/{sync,verify}.sh`, `mp3-tagger/*`, etc.
+  `agent-session.sh`, `agent-notify.sh`, `agent-bridge.py`,
+  `skills/{sync,verify}.sh`,
+  `mp3-tagger/*`, etc.
 - `shell/` — the actual shell setup. `init.sh` is the single entry point that
   bash and zsh RCs source. It sources `secrets/secrets.sh` (from a separate
   encrypted checkout, not this repo), then `exports.sh`, `functions.sh`,

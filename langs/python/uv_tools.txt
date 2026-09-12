@@ -4,3 +4,4 @@
 
 basedpyright
 nano-pdf
+claude-code-tools

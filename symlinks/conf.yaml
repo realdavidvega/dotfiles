@@ -22,6 +22,7 @@
     ~/.zshrc: shell/zsh/.zshrc
     ~/.ssh/config: secrets/ssh/config
     ~/.inputrc: shell/.inputrc
+    ~/.tmux.conf: config/tmux/tmux.conf
     ~/.vimrc: editors/vim/.vimrc
     ~/.p10k.zsh: shell/zsh/themes/.p10k.zsh
     ~/.claude/CLAUDE.md: config/claude/CLAUDE.md

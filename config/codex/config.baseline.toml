@@ -1,0 +1,17 @@
+# Codex baseline keys, seeded into ~/.codex/config.toml by
+# restoration_scripts/02-seed-runtime-configs.sh under the same rule as the
+# JSON baselines: add-only, live wins.
+#
+# This file is NOT symlinked. Codex rewrites its own config at runtime with
+# project trust levels, plugin hook hashes and agent registrations, so a link
+# would dirty the repository on every session.
+#
+# Only top-level keys are seeded. XXX_DOTFILES_PATH_XXX is substituted with the
+# machine's dotfiles path, because Codex executes the argv directly and TOML
+# performs no variable expansion.
+
+# Report a finished turn to a detached tmux session's owner. The script decides
+# whether to send and what may leave the machine. Codex has one notification
+# event, agent-turn-complete, so there is no blocked-on-a-prompt ping here.
+# See doc/remote-agent-sessions.md.
+notify = ["XXX_DOTFILES_PATH_XXX/scripts/agent-notify.sh"]
