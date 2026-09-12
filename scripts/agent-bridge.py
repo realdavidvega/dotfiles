@@ -423,7 +423,7 @@ class Bridge:
             return False
         return True
 
-    def launch(self, session: str, agent: str) -> str:
+    def launch(self, session: str, agent: str, resume: bool = False) -> str:
         """Create a session through the launcher, so layout stays consistent.
 
         The launcher tries to attach at the end and fails without a terminal,
@@ -434,12 +434,10 @@ class Bridge:
             return "agent-session launcher not found on this host"
 
         try:
-            subprocess.run(
-                [launcher, "open", session, "--agent", agent],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            command = [launcher, "open", session, "--agent", agent]
+            if resume:
+                command.append("--resume")
+            subprocess.run(command, capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError) as exc:
             return f"could not start {session}: {exc}"
 
@@ -447,6 +445,8 @@ class Bridge:
             return f"{session} did not start. Is the encrypted home unlocked?"
 
         self.topic_for(session)
+        if resume:
+            return f"started {session}, {agent} picking up its last conversation"
         return f"started {session} running {agent}"
 
     def act(self, session: str, action: str, argument: str = "") -> str:
@@ -455,7 +455,8 @@ class Bridge:
         if not self.tmux.exists(session):
             return (
                 f"no session named {session} is running.\n"
-                f"Start it with /new {session}, and it returns to this topic."
+                f"/resume {session} continues its last conversation, "
+                f"/new {session} starts a blank one. Either returns to this topic."
             )
 
         if action == "peek":
@@ -552,12 +553,13 @@ class Bridge:
             self.post(target, f"Topic bound to {target}. Reply here to type into its pane.")
             return
 
-        if command == "new":
+        if command in ("new", "resume"):
+            resume = command == "resume"
             parts = argument.split()
-            target = parts[0] if parts else ""
+            target = parts[0] if parts else session or ""
             agent = parts[1] if len(parts) > 1 else "claude"
             if not target:
-                self.post(None, "Usage: /new <session> [claude|codex|opencode|shell]")
+                self.post(None, f"Usage: /{command} <session> [claude|codex|opencode|shell]")
                 return
             if not self.config.session_allowed(target):
                 self.post(None, f"session {target} is not in the allowlist")
@@ -566,7 +568,7 @@ class Bridge:
                 self.topic_for(target)
                 self.post(target, f"{target} already exists. Topic bound.")
                 return
-            self.post(None, self.launch(target, agent))
+            self.post(None, self.launch(target, agent, resume=resume))
             return
 
         if command in ("kill", "close"):
@@ -589,10 +591,9 @@ class Bridge:
             self.post(
                 target,
                 f"killed {target}.\n\n"
-                "This topic stays. /new "
-                f"{target} comes back to it.\n"
-                "The agent is gone but its history is not: `claude --continue` "
-                "or `codex resume` in the new session.",
+                f"This topic stays. /resume {target} comes back to it and picks "
+                f"up the conversation. /new {target} comes back to it and starts "
+                "a blank one.",
             )
             return
 
@@ -612,7 +613,8 @@ class Bridge:
                 "/esc       interrupt\n"
                 "/enter     press Enter\n"
                 "/ls        list sessions\n"
-                "/new S [a] start a session running claude, codex, opencode or shell\n"
+                "/new S [a] start a session, blank conversation\n"
+                "/resume S  start a session and continue where it left off\n"
                 "/bind S    bind a topic to an existing session\n"
                 "/kill S    kill a session and its agent\n"
                 "/id        report ids for setup",
@@ -673,7 +675,8 @@ class Bridge:
 
     COMMANDS = [
         ("ls", "List sessions and what each is running"),
-        ("new", "Start a session: /new NAME [claude|codex|opencode|shell]"),
+        ("new", "Start a session with a blank conversation: /new NAME [agent]"),
+        ("resume", "Start a session and continue its last conversation: /resume NAME [agent]"),
         ("bind", "Bind this topic to an existing session"),
         ("kill", "Close a session and its agent"),
         ("peek", "Show the session's pane"),
