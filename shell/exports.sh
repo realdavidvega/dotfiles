@@ -293,6 +293,18 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   unset _candidate
 fi
 
+# The skp tool is a sibling checkout on managed machines. Keep discovery outside
+# the OS branches so Linux, WSL, and macOS expose the same command.
+if [ -z "${SKP_REPO:-}" ]; then
+  for _candidate in \
+    "${OS_WORKSPACE:-$HOME/Workspace}/repos/github/tools/skp" \
+    "${OS_WORKSPACE:-$HOME/Workspace}/github/skp"
+  do
+    [ -x "$_candidate/bin/skp" ] && export SKP_REPO="$_candidate" && break
+  done
+  unset _candidate
+fi
+
 # ---------------------------
 #        Dotly Exports
 # ---------------------------

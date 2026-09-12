@@ -42,7 +42,7 @@ git submodule update --init --recursive modules/dotly
 
 3. **Configure unlock script:**
 
-Edit `restoration_scripts/00-unlock-encrypted-sources.sh` and set your key location:
+Edit `restoration_scripts/01-unlock-encrypted-sources.sh` and set your key location:
 
 ```bash
 GIT_CRYPT_KEY_PATH="$HOME/dotfiles-key.bin"  # or wherever your key is
@@ -61,7 +61,7 @@ This will:
 - Install all dotfiles
 - Run custom restoration scripts
 - Set up symlinks
-- Clone the public `skp` tool and the private `skills-registry`, then link skills into Claude, Codex, and OpenCode
+- Clone the public `skp` tool and the private `skills-registry`. The restoration pass links the `skp` launcher, seeds missing local configuration, and links skills into Claude, Codex, and OpenCode
 - Install Claude Code and wire global Claude config/skills on supported machines
 - Restore OpenCode config and related dotfiles-managed integrations
 
@@ -230,10 +230,10 @@ git commit -m "Add ngrok to snap packages"
 During initial setup:
 
 - **macOS and WSL package-manager state** is imported with `dot package import`
-- **Linux Mint apt packages** are installed by `restoration_scripts/02-linux-mint-packages.sh`
-- **NVM and Node LTS** are installed by `restoration_scripts/02-nvm-setup.sh`
-- **npm globals** are installed through dotly by `restoration_scripts/02-npm-globals.sh`
-- **uv and uv tools** are installed by `02-uv-setup.sh` and `02-uv-tools.sh`
+- **Linux Mint apt packages** are installed by `restoration_scripts/00-linux-mint-packages.sh`
+- **NVM and Node LTS** are installed by `restoration_scripts/20-nvm-setup.sh`
+- **npm globals** are installed through dotly by `restoration_scripts/21-npm-globals.sh`
+- **uv and uv tools** are installed by `22-uv-setup.sh` and `23-uv-tools.sh`
 
 To manually import standard packages later:
 
@@ -260,7 +260,7 @@ instead of the WSL apt manifest.
 1. **Use curated apt packages on Mint** through `os/linux/apt/packages.mint.txt`.
 2. **Use the WSL apt dump and Linuxbrew only on WSL**.
 3. **Use uv tools** for Python CLI tools and LSP servers. Track them in
-   `langs/python/uv_tools.txt` for restoration by `02-uv-tools.sh`.
+   `langs/python/uv_tools.txt` for restoration by `23-uv-tools.sh`.
 4. **Use npm globals** for Node.js CLI tools. Track them in `langs/js/global_modules.txt` for
    restoration through dotly's npm importer.
 5. **Add a guarded restoration script** for tools installed manually into `~/.local/bin`.

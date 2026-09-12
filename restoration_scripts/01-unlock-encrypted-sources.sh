@@ -64,7 +64,7 @@ if [ ! -f "$GIT_CRYPT_KEY_PATH" ]; then
     echo "Key file not found: $GIT_CRYPT_KEY_PATH"
     echo
     echo "Edit this script and set GIT_CRYPT_KEY_PATH to your key location:"
-    echo "  $DOTFILES_PATH/restoration_scripts/00-unlock-encrypted-sources.sh"
+    echo "  $DOTFILES_PATH/restoration_scripts/01-unlock-encrypted-sources.sh"
     echo
     echo "Then run: dot self install"
     echo
