@@ -212,6 +212,23 @@ Buttons on a notification cover the same ground without typing: peek, `1`, `2`,
 and interrupt. They send the keystrokes a human would press rather than
 pretending to understand the prompt, because approving is positional in a TUI.
 
+### Privacy mode, and sharing a bot
+
+Two Telegram facts shape deployment more than any code here.
+
+**Privacy mode.** On by default. A bot in a group then receives only commands,
+mentions, and replies to its own messages, so a plain message in a topic never
+arrives. `doctor` reports which state the bot is in. Disable it in BotFather
+and re-add the bot to the group, or stay on `/say` and Telegram replies.
+
+**One long-poller per token.** `getUpdates` is exclusive. A second consumer on
+the same token, such as an OpenClaw gateway, means both steal each other's
+updates and one receives `409 Conflict`. Give each deployment its own bot.
+
+The bridge publishes its command menu scoped to the configured chat rather than
+globally, so a token shared with another deployment keeps that deployment's
+menu everywhere else.
+
 ### Security
 
 Anything that can type into a pane can run code on the host. Three gates, all

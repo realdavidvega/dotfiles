@@ -9,9 +9,11 @@ Usage: agent-session.sh <command> [args]
 Persistent tmux sessions for coding agents, local or over SSH.
 
 Commands:
-  open <name> [dir]   Create or attach a session named <name>
+  open <name> [dir]   Create, or attach to, a session named <name>. When
+                      somebody is already attached it joins as a second client
+                      automatically, so this is the only command usually needed
   ls                  List sessions
-  mobile <name>       Attach a second client to <name>, sized independently
+  mobile <name>       Force the second-client attach, even if nobody is on
   kill <name>         Kill session <name>
   remote [args...]    Run this same command on the hub over SSH
   unlock              Unlock the hub's encrypted home (hub only)
@@ -28,6 +30,9 @@ Environment:
 A session gets three windows: agent, shell, git. The agent is typed into a
 shell rather than run as the window's command, so that when it exits or
 crashes the window survives holding its output.
+
+`remote` is the only distinction that depends on where you are: it runs the
+command on the hub instead of here. Everything else reads the session's state.
 EOF
 }
 
@@ -154,7 +159,13 @@ cmd_open() {
   name="${name//[.:]/-}"
 
   if tmux has-session -t "=$name" 2>/dev/null; then
-    enter_session "$name"
+    # Somebody is already watching, and we are not inside tmux ourselves, so
+    # join as a second client rather than resizing the session under them.
+    if [[ -z "${TMUX:-}" ]] && [[ "$(attached_clients "$name")" -gt 0 ]]; then
+      attach_grouped "$name"
+    else
+      enter_session "$name"
+    fi
     return 0
   fi
 
@@ -187,20 +198,14 @@ cmd_open() {
   enter_session "$name"
 }
 
-cmd_mobile() {
-  local name="${1:?A session name is required}" client
-
-  name="${name//[.:]/-}"
-
-  if ! tmux has-session -t "=$name" 2>/dev/null; then
-    printf 'No session named %s. Create it with: agent-session.sh open %s\n' "$name" "$name" >&2
-    exit 1
-  fi
-
-  client="${name}-m"
+# Attach as an additional client, in a session of its own that shares the
+# windows. Used whenever somebody is already attached, so a second client never
+# reshapes the first one's view.
+attach_grouped() {
+  local name="$1" client="${1}-m"
 
   # A grouped session shares the windows but keeps its own size and its own
-  # current window, so a phone attaching does not reshape the desk's view.
+  # current window, so a second client does not reshape the first one's view.
   #
   # Cleanup is a detach hook rather than `destroy-unattached on`, which reaps
   # the session the moment it is created, before there is a client to attach.
@@ -210,6 +215,24 @@ cmd_mobile() {
   fi
 
   enter_session "$client"
+}
+
+cmd_mobile() {
+  local name="${1:?A session name is required}"
+
+  name="${name//[.:]/-}"
+
+  if ! tmux has-session -t "=$name" 2>/dev/null; then
+    printf 'No session named %s. Create it with: agent-session.sh open %s\n' "$name" "$name" >&2
+    exit 1
+  fi
+
+  attach_grouped "$name"
+}
+
+# How many clients are watching a session right now.
+attached_clients() {
+  tmux list-clients -t "=$1" 2>/dev/null | grep -c . || true
 }
 
 cmd_remote() {

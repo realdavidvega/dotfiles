@@ -270,6 +270,27 @@ class Tmux:
             return []
         return [line.strip() for line in out.splitlines() if line.strip()]
 
+    def summary(self) -> list[dict[str, str]]:
+        """Name, window count and attach state for every session."""
+        code, out = self._run(
+            "list-sessions", "-F", "#{session_name}\t#{session_windows}\t#{session_attached}"
+        )
+        if code != 0:
+            return []
+        rows = []
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            rows.append({"name": parts[0], "windows": parts[1], "attached": parts[2]})
+        return rows
+
+    def running(self, session: str) -> str:
+        code, out = self._run(
+            "display-message", "-p", "-t", self._pane(session), "#{pane_current_command}"
+        )
+        return out.strip() if code == 0 else "?"
+
     @staticmethod
     def _pane(session: str) -> str:
         """Target the session's current window and active pane.
@@ -479,25 +500,34 @@ class Bridge:
         if session:
             self.post(session, self.act(session, "say", text))
         else:
-            self.post(None, "Send that inside a session topic, or use /open <session>.")
+            self.post(None, "Send that inside a session topic, or use /bind <session>.")
 
     def handle_command(
         self, command: str, argument: str, session: str | None, thread_id: Any
     ) -> None:
         if command in ("ls", "sessions"):
-            names = self.tmux.sessions()
-            if not names:
+            rows = [r for r in self.tmux.summary() if not r["name"].endswith("-m")]
+            if not rows:
                 self.post(
                     None,
-                    "No tmux sessions. On the hub after a reboot this usually means the "
-                    "encrypted home is still locked.",
+                    "No sessions running.\n\n"
+                    "After a reboot this usually means the encrypted home is still locked, "
+                    "so no agent has started. Unlock it over SSH, then /new vault.",
                 )
                 return
-            lines = []
-            for name in names:
-                mark = "allowed" if self.config.session_allowed(name) else "not allowed"
-                clients = self.tmux.attached(name)
-                lines.append(f"{name} · {mark} · {clients} attached")
+
+            lines = [f"{len(rows)} session{'s' if len(rows) != 1 else ''}", ""]
+            for row in rows:
+                name = row["name"]
+                watched = row["attached"] != "0"
+                allowed = self.config.session_allowed(name)
+                lines.append(f"{'🟢' if allowed else '🔒'} {name} · {self.tmux.running(name)}")
+                detail = "someone is watching" if watched else "detached, so it will notify you"
+                if not allowed:
+                    detail = "not in the allowlist, so the bridge cannot touch it"
+                lines.append(f"    {detail}")
+                lines.append("")
+            lines.append("Open a session's topic and just type to send it there.")
             self.post(None, "\n".join(lines))
             return
 
@@ -631,6 +661,34 @@ class Bridge:
 
     # ── the loop ────────────────────────────────────────────────────────────
 
+    COMMANDS = [
+        ("ls", "List sessions and what each is running"),
+        ("new", "Start a session: /new NAME [claude|codex|opencode|shell]"),
+        ("bind", "Bind this topic to an existing session"),
+        ("kill", "Close a session and its agent"),
+        ("peek", "Show the session's pane"),
+        ("say", "Type text into the pane and press Enter"),
+        ("esc", "Interrupt the agent"),
+        ("enter", "Press Enter in the pane"),
+        ("help", "Show these commands"),
+    ]
+
+    def publish_commands(self) -> None:
+        """Register the command menu for this chat only.
+
+        The token may be shared with another bot deployment whose commands live
+        in the default scope. A chat-scoped list wins inside this group and
+        leaves every other chat untouched, so nothing else loses its menu.
+        """
+        try:
+            self.tg.call(
+                "setMyCommands",
+                commands=[{"command": c, "description": d} for c, d in self.COMMANDS],
+                scope={"type": "chat", "chat_id": self.config.chat_id},
+            )
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            LOG.warning("could not publish the command menu: %s", exc)
+
     def serve(self) -> int:
         running = True
 
@@ -641,6 +699,8 @@ class Bridge:
 
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
+
+        self.publish_commands()
 
         LOG.info(
             "serving chat %s, sessions %s",
@@ -793,10 +853,31 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     try:
         me = Telegram(config.token).call("getMe")
-        print(f"bot:      @{me['result']['username']}" if me.get("ok") else f"bot: {me}")
     except (urllib.error.URLError, OSError, ValueError) as exc:
         print(f"bot:      unreachable ({exc})")
         return 1
+
+    if not me.get("ok"):
+        print(f"bot:      {me}")
+        return 1
+
+    info = me["result"]
+    print(f"bot:      @{info['username']}")
+
+    # Privacy mode decides whether a plain message in a topic reaches the bot
+    # at all. With it on, Telegram delivers only commands, mentions and replies
+    # to the bot's own messages, so the "just type" flow silently does nothing.
+    if info.get("can_read_all_group_messages"):
+        print("privacy:  off, so plain messages in a topic reach the bridge")
+        return 0
+
+    print(
+        "privacy:  ON, so plain messages in a topic are NOT delivered.\n"
+        "          Use /say TEXT, or reply directly to one of the bot's messages.\n"
+        "          To type freely, disable privacy in BotFather:\n"
+        "            /mybots -> this bot -> Bot Settings -> Group Privacy -> Turn off\n"
+        "          then remove and re-add the bot to the group for it to take effect."
+    )
     return 0
 
 
