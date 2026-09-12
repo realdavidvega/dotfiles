@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import fnmatch
+import html
 import json
 import logging
 import os
@@ -290,6 +291,20 @@ class State:
         except OSError as exc:
             LOG.warning("could not persist state: %s", exc)
 
+    def reload(self) -> None:
+        """Re-read the file so disk, not memory, decides what a topic id is.
+
+        The daemon holds state for minutes while one-shot commands write the
+        same file. Merging on save is not enough on its own: a stale in-memory
+        topic id would be written back over a replacement another process had
+        just created, and the two would fight. Reading before use ends that.
+        """
+        fresh = State.load(self.path)
+        self.topics = fresh.topics
+        self.offset = max(self.offset, fresh.offset)
+        if fresh.guide_message_id:
+            self.guide_message_id = fresh.guide_message_id
+
     def forget_topic(self, session: str) -> None:
         self.topics.pop(session, None)
         try:
@@ -313,6 +328,10 @@ class State:
 # ── Telegram ────────────────────────────────────────────────────────────────
 
 
+class TelegramError(RuntimeError):
+    pass
+
+
 class Telegram:
     def __init__(self, token: str) -> None:
         self._token = token
@@ -328,8 +347,17 @@ class Telegram:
         request = urllib.request.Request(
             url, data=body, headers={"Content-Type": "application/json"}
         )
-        with urllib.request.urlopen(request, timeout=http_timeout) as response:
-            return json.loads(response.read().decode())
+        try:
+            with urllib.request.urlopen(request, timeout=http_timeout) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as exc:
+            # Telegram puts the real reason in the body. A bare "400 Bad
+            # Request" is unactionable, so surface the description instead.
+            try:
+                detail = json.loads(exc.read().decode()).get("description", "")
+            except Exception:  # noqa: BLE001 - we are already handling an error
+                detail = ""
+            raise TelegramError(f"{method}: {exc.code} {detail or exc.reason}") from exc
 
     def send(
         self,
@@ -338,6 +366,7 @@ class Telegram:
         thread_id: int | None = None,
         buttons: list[str] | None = None,
         session: str | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any]:
         markup = None
         if buttons and session:
@@ -353,6 +382,7 @@ class Telegram:
             chat_id=chat_id,
             message_thread_id=thread_id,
             text=text[:MAX_MESSAGE],
+            parse_mode=parse_mode,
             reply_markup=markup,
             link_preview_options={"is_disabled": True},
         )
@@ -468,6 +498,7 @@ class Bridge:
         self.tmux = tmux
 
     def topic_for(self, session: str, create: bool = True) -> int | None:
+        self.state.reload()
         existing = self.state.topics.get(session)
         if existing is not None:
             return existing
@@ -477,7 +508,7 @@ class Bridge:
             result = self.tg.call(
                 "createForumTopic", chat_id=self.config.chat_id, name=f"⌁ {session}"
             )
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
             LOG.warning("could not create a topic for %s: %s", session, exc)
             return None
         if not result.get("ok"):
@@ -496,14 +527,25 @@ class Bridge:
                 return session
         return None
 
-    def post(self, session: str | None, text: str, buttons: list[str] | None = None) -> None:
+    def post(
+        self,
+        session: str | None,
+        text: str,
+        buttons: list[str] | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
         thread_id = self.topic_for(session) if session else None
         try:
             self.tg.send(
-                self.config.chat_id, text, thread_id=thread_id, buttons=buttons, session=session
+                self.config.chat_id,
+                text,
+                thread_id=thread_id,
+                buttons=buttons,
+                session=session,
+                parse_mode=parse_mode,
             )
             return
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
             LOG.warning("send failed for %s: %s", session, exc)
 
         if not session:
@@ -516,9 +558,14 @@ class Bridge:
         thread_id = self.topic_for(session)
         try:
             self.tg.send(
-                self.config.chat_id, text, thread_id=thread_id, buttons=buttons, session=session
+                self.config.chat_id,
+                text,
+                thread_id=thread_id,
+                buttons=buttons,
+                session=session,
+                parse_mode=parse_mode,
             )
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
             LOG.warning("could not deliver to a replacement topic for %s: %s", session, exc)
             try:
                 self.tg.send(self.config.chat_id, text)
@@ -576,6 +623,34 @@ class Bridge:
             return f"started {session}, {agent} picking up its last conversation"
         return f"started {session} running {agent}"
 
+    def peek_message(self, session: str, lines: int = PEEK_LINES) -> str:
+        """Render a pane as HTML so Telegram shows it in a monospace block.
+
+        An agent TUI is columns and box drawing. In Telegram's proportional
+        font it reads as noise, so the <pre> block is most of the improvement
+        here. Colours are dropped: capture-pane without -e gives plain text,
+        and Telegram cannot render ANSI anyway.
+        """
+        try:
+            pane = self.tmux.capture(session, lines)
+        except TmuxError as exc:
+            return html.escape(str(exc))
+
+        header = f"<b>{html.escape(session)}</b> · {html.escape(self.tmux.running(session))}"
+        if self.tmux.attached(session):
+            header += " · someone is watching"
+
+        body = "\n".join(line.rstrip() for line in pane.splitlines())
+
+        # Trim from the top so the newest output always survives the cap.
+        budget = MAX_MESSAGE - len(header) - 64
+        escaped = html.escape(body)
+        while len(escaped) > budget and "\n" in body:
+            body = body.split("\n", 1)[1]
+            escaped = html.escape(body)
+
+        return f"{header}\n<pre>{escaped}</pre>"
+
     def act(self, session: str, action: str, argument: str = "") -> str:
         if not self.config.session_allowed(session):
             return f"session {session} is not in the allowlist"
@@ -587,10 +662,7 @@ class Bridge:
             )
 
         if action == "peek":
-            try:
-                return f"{session}\n\n{self.tmux.capture(session)}"
-            except TmuxError as exc:
-                return str(exc)
+            return self.peek_message(session)
         if action == "esc":
             error = self.tmux.send_key(session, "Escape")
             return error or f"sent Escape to {session}"
@@ -758,17 +830,18 @@ class Bridge:
             return
 
         if command == "peek":
+            if not self.config.session_allowed(target):
+                self.post(target, f"session {target} is not in the allowlist")
+                return
+            if not self.tmux.exists(target):
+                self.post(target, self.act(target, "peek"))
+                return
             lines = int(argument) if argument.isdigit() else PEEK_LINES
-            body = self.act(target, "peek") if lines == PEEK_LINES else ""
-            if not body:
-                try:
-                    body = self.tmux.capture(target, lines)
-                except TmuxError as exc:
-                    body = str(exc)
             self.post(
                 target,
-                body or f"session {target} is not in the allowlist",
-                buttons=["yes", "no", "esc"],
+                self.peek_message(target, lines),
+                buttons=["peek", "yes", "no", "esc"],
+                parse_mode="HTML",
             )
             return
 
@@ -800,7 +873,11 @@ class Bridge:
         if len(parts) != 3 or parts[0] != "a":
             return
         _, action, session = parts
-        self.post(session, self.act(session, action), buttons=["peek", "yes", "no", "esc"])
+        body = self.act(session, action)
+        if action == "peek" and body.startswith("<b>"):
+            self.post(session, body, buttons=["peek", "yes", "no", "esc"], parse_mode="HTML")
+        else:
+            self.post(session, body, buttons=["peek", "yes", "no", "esc"])
 
     # ── the loop ────────────────────────────────────────────────────────────
 
@@ -830,7 +907,7 @@ class Bridge:
                 commands=[{"command": c, "description": d} for c, d in self.COMMANDS],
                 scope={"type": "chat", "chat_id": self.config.chat_id},
             )
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
             LOG.warning("could not publish the command menu: %s", exc)
 
     def render_guide(self) -> str:
@@ -917,7 +994,7 @@ class Bridge:
                     timeout=POLL_TIMEOUT,
                     allowed_updates=["message", "callback_query"],
                 )
-            except (urllib.error.URLError, OSError, ValueError) as exc:
+            except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
                 LOG.warning("poll failed (%s), retrying in %ss", exc, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60)
@@ -988,7 +1065,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
         result = tg.call(
             "getUpdates", http_timeout=20, timeout=0, allowed_updates=["message"]
         )
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
         print(f"Telegram unreachable: {exc}")
         return 1
 
@@ -1062,7 +1139,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     try:
         me = Telegram(config.token).call("getMe")
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
         print(f"bot:      unreachable ({exc})")
         return 1
 
