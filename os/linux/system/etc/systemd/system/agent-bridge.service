@@ -13,10 +13,11 @@ ExecStart=/usr/bin/python3 /srv/services/agents/bin/agent-bridge.py serve
 Restart=always
 RestartSec=5
 
-# SIGTERM cannot interrupt an in-flight long poll, so the daemon exits once the
-# current one returns. The poll is 25s, and systemd's 90s default was killing
-# it with SIGKILL on every restart.
-TimeoutStopSec=40
+# tmux servers created by the bridge must survive a bridge restart.
+KillMode=process
+
+# Allow the in-flight HTTP request (up to 40 seconds) to finish on SIGTERM.
+TimeoutStopSec=60
 
 # The bridge talks to the tmux server over its socket in /tmp/tmux-1000, so a
 # private /tmp would hide exactly the thing it exists to control.

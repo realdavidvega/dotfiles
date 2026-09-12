@@ -68,18 +68,57 @@ Reload after an edit with `tmuxcfg` to open it, then prefix `R`.
 
 ## The launcher
 
-`scripts/agent-session.sh`, aliased to `ags`.
+`ags` is the interactive alias for `scripts/agent-session.sh`. The hub also
+has `agent-session` on PATH. Bare `ags`, `ags --help`, and
+`agent-session --help` show the same usage. Use `ags remote --help` for the hub
+from another machine. Before the encrypted home is unlocked, use
+`/srv/services/agents/bin/agent-session --help`.
 
-| Command | Effect |
-|---|---|
-| `ags open <name> [dir]` | Create or attach a session. `--agent claude\|codex\|opencode\|shell`, `--dir <path>` |
-| `ags ls` | List sessions |
-| `ags mobile <name>` | Attach a second client sized independently of the first |
-| `ags kill <name>` | Kill a session |
-| `ags remote [args]` | Run the same command on the hub over SSH. Host from `AGENT_SESSION_HOST`, default `mint` |
-| `ags unlock` | Unlock the hub's encrypted home |
+The terminal and Telegram use the same core verbs. `new` and `resume` start
+detached. Both preserve a session that is already running. To watch it in a
+terminal, use `ags open NAME`.
 
-A session gets three windows: `agent`, `shell`, `git`. The working directory
+| Action | Terminal | Telegram |
+|---|---|---|
+| List | `ags ls` | `/ls` |
+| Start fresh | `ags new vault codex` | `/new vault codex` |
+| Continue saved conversation | `ags resume vault codex` | `/resume vault codex` |
+| Stop session | `ags kill vault` | `/kill vault` |
+| Read pane | `ags peek vault 15` | `/peek 15` in its topic, `/peek vault 15` in General |
+| Send input | `ags say vault "continue"` | `/say continue` in its topic, `/say vault continue` in General |
+| Interrupt | `ags esc vault` | `/esc` in its topic, `/esc vault` in General |
+| Press Enter | `ags enter vault` | `/enter` in its topic, `/enter vault` in General |
+| Help | `ags --help` or `ags help` | `/help` |
+
+`claude` is the default agent. `codex`, `opencode` and `shell` are also accepted.
+`new` and `resume` accept `--agent NAME` as an alternative to the positional
+agent, and `--dir PATH` for a custom directory.
+
+Terminal attachment remains `ags open NAME`, which also supports creating a
+missing session with the existing `--agent`, `--dir` and `--resume` options.
+`--detached` suppresses attachment. `ags mobile NAME` explicitly adds another
+terminal client, `ags remote COMMAND ...` runs the command on the hub, and
+`ags unlock` unlocks its encrypted home. Telegram's `/bind NAME` associates a
+topic with a running session. Existing aliases remain available.
+
+Pane commands resolve the active pane of the `agent` window, independent of
+which window a terminal client is viewing. Sessions without an `agent` window
+use their selected window. Text is sent literally, with Enter as a separate
+keystroke. Terminal `peek` prints text. Telegram `peek` renders a PNG with text
+fallback. Both default to 30 lines and clamp numeric requests to 1 through 60.
+
+A session gets three windows: `agent`, `shell`, `git`. These are terminal
+workspaces within one session. `shell` and `git` start as ordinary shells.
+The count describes windows, not the number of agents.
+
+`ags ls` reads the foreground program and directory from the `agent` window,
+even when another window is selected. A shell there is shown as `shell (zsh)`
+or its equivalent. Sessions without an `agent` window use their selected
+window. `ATTACHMENT` counts terminal clients, not Telegram users. `detached`
+means no terminal is attached to that session, and does not mean it is stopped.
+`RUNNING` reports the foreground program, not an inferred busy or idle state.
+
+The working directory
 resolves from `AGENT_SESSION_ROOT`, then `BLACK_VAULT_REPO`, then
 `BLACK_VAULT`, then the hub's vault path, then the current directory.
 
@@ -110,7 +149,7 @@ before there is a client to attach.
 
 ### Resuming
 
-`--resume` types the agent's own continue command instead of a bare
+`ags resume NAME [agent]` (or `ags open NAME --resume`) types the agent's own continue command instead of a bare
 invocation: `claude --continue`, `codex resume --last`, `opencode --continue`.
 Each resolves the most recent conversation in the session's working directory,
 so the launcher's directory resolution is what makes it deterministic.
@@ -206,9 +245,10 @@ prompt from a phone is then just replying to the message that told you about it.
 ```text
 /ls             list sessions and whether each is allowed
 /new S [agent]  start a session through the launcher, default claude
+/resume S [a]  continue the last conversation if the session is stopped
 /bind S         bind a topic to a session that already exists
 /kill S         close a session and its agent
-/peek [n]       show the pane
+/peek [n]       colour PNG of the pane, default 30 lines, maximum 60
 /say TEXT       type text and press Enter
 /esc            interrupt
 /enter          press Enter
@@ -216,10 +256,11 @@ prompt from a phone is then just replying to the message that told you about it.
 /discover       run on the host, not in chat, to get ids before first start
 ```
 
-`/new` shells out to `agent-session` so a session created from a phone gets the
-same layout as one created at the desk. `/bind` is deliberately not called
-`open`: the launcher's `open` creates a session, and reusing the word for
-"attach a topic to an existing one" was a collision worth removing.
+`/new` and `/resume` call the launcher's matching detached commands, so they
+have the same lifecycle behavior as `ags new` and `ags resume`. `/bind` handles
+Telegram topic association. `/open` remains a compatibility alias for `/bind`.
+Inside a topic, the session is inferred. In General, pane commands take the
+same explicit session name as their terminal counterparts.
 
 Buttons on a notification cover the same ground without typing: peek, `1`, `2`,
 and interrupt. They send the keystrokes a human would press rather than
@@ -272,10 +313,60 @@ next edit fails, the id is dropped, and `--pin` posts a fresh one.
 sessions deliberately: the history is the record, and reusing a name returns to
 the same thread.
 
-Deleting a topic under a live session is the only path with error handling
-worth knowing. `sendMessage` returns 400, `post()` drops the mapping and retries
-in the general chat, and the next call mints a fresh topic. One message lands
-outside a topic before it heals. This path is tested rather than reasoned about.
+A deleted topic is replaced immediately on the next delivery, including a
+`/new` or `/resume` response. An existing session and topic are reused.
+Only Telegram's explicit missing-topic error invalidates the mapping. Network
+failures, rate limits, closed topics and formatting errors preserve it.
+If creation fails, session output is not redirected into General.
+
+Topic lookup, creation and replacement are serialized across the daemon and
+notification hooks. State writes use an atomic rename and a separate file
+lock. Writers apply only changed fields against their loaded snapshot, so an
+old polling process cannot restore a deleted mapping or erase a newer one.
+
+`/bind NAME` inside an existing forum topic associates that topic with the
+session. In General it finds or creates the session's topic. This also lets you
+recover an orphaned topic if the state file was lost.
+
+### Pane images and deployment
+
+`/peek` and the Peek button render ANSI output with
+[Charmbracelet Freeze](https://github.com/charmbracelet/freeze), then upload a
+PNG using Telegram's [sendPhoto](https://core.telegram.org/bots/api#sendphoto).
+Tap the image to zoom. `/peek 15` gives a shorter view on a phone.
+Rendering preserves terminal colours and uses the captured column width
+without resizing the live pane. A render timeout or unavailable image upload
+falls back to an escaped text block.
+
+Freeze is optional. Install it from the upstream release packages or with
+`brew install charmbracelet/tap/freeze`. The bridge checks `AGENT_BRIDGE_FREEZE`, then PATH, then the hub bin directory,
+`~/.local/bin`, `~/go/bin`, `/usr/local/bin`, and the bridge script directory.
+The restore step copies a PATH-installed Freeze binary beside the bridge.
+The hub's staged version is v0.2.2. No binary is committed to dotfiles.
+
+Stage changes with `restoration_scripts/51-agent-sessions.sh`. The daemon
+checks its script modification time between polls and re-executes when it
+changes. The first deployment to a daemon without that check needs a restart:
+
+```bash
+sudo systemctl restart agent-bridge
+systemctl is-active agent-bridge
+```
+
+The unit allows 60 seconds to stop, covering the 40-second HTTP timeout.
+`KillMode=process` stops only the bridge, preserving tmux servers and agents
+started from Telegram across a service restart. Install the unit and run
+`sudo systemctl daemon-reload` before the first restart.
+Updates are persisted before dispatch, choosing at-most-once handling over
+replaying keystrokes. A crash after persistence can lose an action, so inspect
+the pane before resending it.
+
+Run the offline regression suite with:
+
+```bash
+python3 scripts/test_agent_bridge.py
+python3 scripts/test_agent_session.py
+```
 
 The bridge never deletes a topic. Removing one is a human decision about
 history.
@@ -300,10 +391,10 @@ The daemon makes outbound HTTPS long-poll requests and listens on nothing.
 `tmux -f` is honoured only by the command that starts the server, and
 `start-server` does not count because a server with no sessions exits at once.
 
-The `=` exact-match prefix is valid only for session-level commands.
-`has-session -t "=name"` is right, and `send-keys -t "=name"` fails with
-`can't find pane`. Pane commands use `name:` instead, guarded by an `exists()`
-check that does use `=`.
+Pane operations resolve a concrete pane id from `list-windows -t "=NAME"`.
+The `agent` window wins over the selected window, so switching to `shell` or
+`git` does not redirect Telegram input. Literal text and its Enter keystroke
+use the same resolved id.
 
 ### Alternatives, and when to revisit
 
@@ -320,8 +411,8 @@ the following changes.
 | OpenClaw as the gateway | Already installed on the hub and chosen for the assistant role, but unconfigured, self-rated alpha, and gated in the vault's runbook behind working vault version control | The runbook's gate clears. The bridge's verbs then become the tools OpenClaw calls, rather than being replaced |
 | Node, for a shared runtime with OpenClaw | The hub's Node comes from nvm inside the encrypted home, which a boot service cannot read | Node moves to a system path, or the bridge stops needing to start at boot |
 
-The shape is deliberately reusable either way: the verbs are list, peek, type,
-key and interrupt against a named session. Whatever drives them later, that
+The shared verbs are `ls`, `new`, `resume`, `kill`, `peek`, `say`, `esc` and
+`enter` against a named session. Whatever drives them later, that
 surface is the part worth keeping.
 
 ## tmux-cli
@@ -373,7 +464,7 @@ tmux -L cfgtest show-options -g history-limit
 tmux -L cfgtest show-options -gw allow-passthrough
 tmux -L cfgtest kill-server
 
-scripts/agent-session.sh open scratch --agent shell --dir /tmp
+scripts/agent-session.sh new scratch shell --dir /tmp
 tmux list-windows -t scratch          # expect 1-indexed
 scripts/agent-session.sh kill scratch
 

@@ -70,6 +70,13 @@ else
     "$AGENT_ROOT/bin/agent-bridge.py" 0755 || FAILED=1
 fi
 
+# Optional PNG renderer. Keep it outside the encrypted home for the service.
+if command -v freeze >/dev/null 2>&1; then
+  stage_plaintext_copy "$(command -v freeze)" "$AGENT_ROOT/bin/freeze" 0755 || FAILED=1
+elif [ ! -x "$AGENT_ROOT/bin/freeze" ]; then
+  echo "Optional: install Charmbracelet Freeze for image peeks. Text peeks remain available."
+fi
+
 # The bridge's configuration holds a bot token, so the sample is seeded once and
 # never overwritten. A real file always wins.
 BRIDGE_ENV="$AGENT_ROOT/bridge.env"
