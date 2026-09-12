@@ -54,7 +54,7 @@ dot package update_all  # Alias: up
 `dot package import` covers Brewfile, the WSL apt manifest, snap, pip
 (`langs/python/requirements.txt`), NPM globals (`langs/js/global_modules.txt`), and VSCode
 extensions. Native Linux Mint uses `os/linux/apt/packages.mint.txt` through the guarded
-`02-linux-mint-packages.sh` restoration script. The following guarded steps install NVM with
+`00-linux-mint-packages.sh` restoration script. The following guarded steps install NVM with
 Node LTS, invoke dotly's npm importer for globals, then install uv and
 `langs/python/uv_tools.txt`.
 
@@ -152,6 +152,9 @@ What remains here is two pointers:
 - `SKP_REPO` and `SKILLS_REGISTRY_REPO` in `shell/exports.sh`. The first puts
   `skp` on `PATH`; the second is only needed by `upall`, since `skp` itself
   reads `~/.skp/sources`.
+- `restoration_scripts/31-skp-setup.sh` discovers sibling checkouts, repairs the
+  launcher in `~/.local/bin`, seeds missing local configuration, and runs
+  `skp sync`. Existing `~/.skp` configuration remains untouched.
 - The `skills` component of `upall`, which fast-forwards both checkouts when it
   is safe to do so and then runs `skp sync`. The pull lives here because
   `skp sync` deliberately does not fetch.
@@ -193,7 +196,7 @@ git-crypt unlock ~/dotfiles-key.bin
 git-crypt status | grep encrypted
 ```
 
-The bootstrap script `restoration_scripts/00-unlock-encrypted-sources.sh` has a
+The bootstrap script `restoration_scripts/01-unlock-encrypted-sources.sh` has a
 `GIT_CRYPT_KEY_PATH` constant near the top. Update that path (or symlink the
 key to the default) before running `dot self install` on a new machine.
 
@@ -307,7 +310,7 @@ both.
 ## Maintenance rules
 
 - **Never edit encrypted files on a locked checkout.** Run
-  `git-crypt unlock` first (or `restoration_scripts/00-unlock-encrypted-sources.sh`).
+  `git-crypt unlock` first (or `restoration_scripts/01-unlock-encrypted-sources.sh`).
   If you see gibberish in a file that `.gitattributes` marks as
   `filter=git-crypt`, that is the encrypted form. Editing it corrupts the
   filter state.
@@ -338,7 +341,7 @@ both.
   per-OS variant. Do not add ad-hoc `ln -s` calls to restoration scripts for
   things that dotbot can express declaratively.
 - **Cross-OS scripts must branch on `$OSTYPE`.** See
-  `restoration_scripts/02-ollama-setup.sh` for the pattern (`darwin*` vs
+  `restoration_scripts/24-ollama-setup.sh` for the pattern (`darwin*` vs
   `linux-gnu*`).
 - **The `modules/dotly` submodule is upstream code.** Bumping it means
   `git -C modules/dotly pull` then committing the new submodule SHA. Do not

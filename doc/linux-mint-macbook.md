@@ -47,7 +47,7 @@ flowchart TD
 
 ## Restore
 
-The guarded `restoration_scripts/01-linux-mint-macbook.sh` links the user files:
+The guarded `restoration_scripts/10-linux-mint-macbook.sh` links the user files:
 
 ```text
 ~/.xprofile -> ~/.dotfiles/os/linux/home/.xprofile
@@ -89,7 +89,7 @@ backup blocks installation for manual review.
 Apply the complete managed setup with:
 
 ```bash
-DOTFILES_PATH="$HOME/.dotfiles" bash "$HOME/.dotfiles/restoration_scripts/01-linux-mint-macbook.sh"
+DOTFILES_PATH="$HOME/.dotfiles" bash "$HOME/.dotfiles/restoration_scripts/10-linux-mint-macbook.sh"
 ```
 
 The installer also enables and starts keyd, adds the desktop user to the trusted `keyd` group,
@@ -165,7 +165,7 @@ sudo diff -u /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
 sudo mv /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
   /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.pre-dotfiles
 DOTFILES_PATH="$HOME/.dotfiles" \
-  bash "$HOME/.dotfiles/restoration_scripts/01-linux-mint-macbook.sh"
+  bash "$HOME/.dotfiles/restoration_scripts/10-linux-mint-macbook.sh"
 ```
 
 ## Display resolution
@@ -505,18 +505,18 @@ Native Linux Mint uses a curated apt manifest at `os/linux/apt/packages.mint.txt
 
 The Mint restore sequence is:
 
-1. `02-linux-mint-packages.sh` installs the apt baseline.
-2. `02-nvm-setup.sh` installs NVM `0.40.4` and the current Node LTS line.
-3. `02-npm-globals.sh` calls dotly's npm importer for `langs/js/global_modules.txt`.
-4. `02-uv-setup.sh` installs uv `0.12.5` into `~/.local/bin`.
-5. `02-uv-tools.sh` creates the shared Python environment and installs
+1. `00-linux-mint-packages.sh` installs the apt baseline.
+2. `20-nvm-setup.sh` installs NVM `0.40.4` and the current Node LTS line.
+3. `21-npm-globals.sh` calls dotly's npm importer for `langs/js/global_modules.txt`.
+4. `22-uv-setup.sh` installs uv `0.12.5` into `~/.local/bin`.
+5. `23-uv-tools.sh` creates the shared Python environment and installs
    `langs/python/uv_tools.txt`.
 
 These scripts require native Linux Mint. They skip macOS, WSL, and other Linux distributions.
 Install the baseline manually with:
 
 ```bash
-bash "$HOME/.dotfiles/restoration_scripts/02-linux-mint-packages.sh"
+bash "$HOME/.dotfiles/restoration_scripts/00-linux-mint-packages.sh"
 ```
 
 The apt baseline includes shell and repository tools already expected by the dotfiles, plus

@@ -9,7 +9,7 @@ echo
 
 if ! command -v uv &> /dev/null; then
     echo "  uv not found — skipping. Install it (brew install uv, or the official"
-    echo "  installer) and re-run: bash restoration_scripts/02-uv-tools.sh"
+    echo "  installer) and re-run: bash restoration_scripts/23-uv-tools.sh"
     echo
     return 0 2>/dev/null || exit 0
 fi
