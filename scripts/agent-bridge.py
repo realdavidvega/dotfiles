@@ -36,13 +36,14 @@ import argparse
 import fcntl
 import fnmatch
 import html
-import mimetypes
-import secrets
-import tempfile
 import json
 import logging
 import os
 import signal
+import shutil
+import tempfile
+import uuid
+from contextlib import contextmanager
 import subprocess
 import sys
 import time
@@ -114,17 +115,22 @@ BUTTONS: dict[str, tuple[str, str]] = {
 # The pinned operating guide. It lives here rather than in a separate file so
 # it is versioned with the commands it documents, and staged to the hub by the
 # same restore step. {sessions} is filled from the live allowlist.
-GUIDE = """\u2301 BLACK AGENTS \u2014 operating guide
+GUIDE = """\u2301 BLACK AGENTS - operating guide
 
 Each topic is one tmux session on the hub. The session keeps running when you
 close Telegram, the terminal, or your laptop.
 
 \u2500\u2500 DAILY \u2500\u2500
 /ls          what is running, and whether anyone is watching
-/peek        show the session's pane
+/peek        show a colour image of the pane (tap to zoom)
 /say TEXT    type into the pane and press Enter
 /esc         interrupt the agent
 /enter       press Enter in the pane
+
+In General, include the session: /peek vault, /say vault TEXT, /esc vault.
+At a terminal use the same verbs: ags peek vault, ags say vault "TEXT".
+ags new vault codex and ags resume vault codex start detached.
+ags open vault attaches your terminal. /bind vault links a Telegram topic.
 
 Plain typing does NOT reach me while privacy mode is on. Use /say, or reply
 directly to one of my messages.
@@ -140,10 +146,11 @@ opencode, shell.
 
 \u2500\u2500 TOPICS OUTLIVE SESSIONS \u2500\u2500
 Killing a session, or rebooting the hub, leaves this topic alone. A session is
-a process; the conversation is a file on disk. /resume NAME brings the same
+a process. The conversation is a file on disk. /resume NAME brings the same
 topic back with the conversation intact, /new NAME starts fresh in it.
 
-Deleting a topic is the only real cleanup, and only you can do it.
+Deleting a topic creates one replacement on the next delivery.
+Network errors never replace a topic. /bind NAME inside a topic reuses it.
 
 \u2500\u2500 BUTTONS \u2500\u2500
 Notifications carry: peek \u00b7 1 \u00b7 2 \u00b7 interrupt.
@@ -262,103 +269,91 @@ class State:
         except (OSError, ValueError):
             return cls(path=path)
         guide = raw.get("guide_message_id")
-        return cls(
+        state = cls(
             path=path,
             offset=int(raw.get("offset", 0)),
             topics={str(k): int(v) for k, v in (raw.get("topics") or {}).items()},
             guide_message_id=int(guide) if guide else None,
         )
+        state._snapshot = dict(state.topics)
+        state._guide_snapshot = state.guide_message_id
+        return state
+
+    @contextmanager
+    def locked(self, suffix: str):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(self.path) + suffix, "a", encoding="utf-8") as handle:
+            os.chmod(handle.name, 0o600)
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
 
     def save(self) -> None:
-        """Merge into whatever is on disk, rather than overwriting it.
+        """Apply only locally changed fields under a stable lock.
 
-        The daemon keeps state in memory for minutes at a time while one-shot
-        commands (`notify`, `guide`) write the same file. A wholesale write
-        silently discards the other process's work, which is how a pinned guide
-        id went missing. Merge under a lock instead.
+        Atomic replacement keeps readers from seeing a truncated JSON file.
+        Compare against the loaded snapshot so stale writers cannot restore
+        deleted topics or overwrite replacements.
         """
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.path, "a+", encoding="utf-8") as handle:
-                fcntl.flock(handle, fcntl.LOCK_EX)
-                try:
-                    handle.seek(0)
-                    raw = handle.read()
-                    disk = json.loads(raw) if raw.strip() else {}
-                except ValueError:
-                    disk = {}
-
-                topics = {str(k): int(v) for k, v in (disk.get("topics") or {}).items()}
-                topics.update(self.topics)
-                self.topics = topics
-
-                # The furthest-read offset wins, so a stale in-memory copy
-                # cannot rewind another process past updates it handled.
-                self.offset = max(self.offset, int(disk.get("offset") or 0))
-
-                if self.guide_message_id is None and disk.get("guide_message_id"):
-                    self.guide_message_id = int(disk["guide_message_id"])
-
-                payload = {
-                    "offset": self.offset,
-                    "topics": self.topics,
-                    "guide_message_id": self.guide_message_id,
-                }
-                handle.seek(0)
-                handle.truncate()
-                handle.write(json.dumps(payload, indent=2) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-                fcntl.flock(handle, fcntl.LOCK_UN)
-        except OSError as exc:
-            LOG.warning("could not persist state: %s", exc)
+        with self.locked(".lock"):
+            fresh = State.load(self.path)
+            baseline = getattr(self, "_snapshot", {})
+            for key in baseline.keys() | self.topics.keys():
+                old, new = baseline.get(key), self.topics.get(key)
+                if old != new and fresh.topics.get(key) == old:
+                    if new is None:
+                        fresh.topics.pop(key, None)
+                    else:
+                        fresh.topics[key] = new
+            old_guide = getattr(self, "_guide_snapshot", None)
+            if self.guide_message_id != old_guide and fresh.guide_message_id == old_guide:
+                fresh.guide_message_id = self.guide_message_id
+            self.topics = fresh.topics
+            self.guide_message_id = fresh.guide_message_id
+            self.offset = max(self.offset, fresh.offset)
+            payload = {"offset": self.offset, "topics": self.topics,
+                       "guide_message_id": self.guide_message_id}
+            fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".bridge-state-")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, indent=2)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(name, self.path)
+            finally:
+                Path(name).unlink(missing_ok=True)
+            self._snapshot = dict(self.topics)
+            self._guide_snapshot = self.guide_message_id
 
     def reload(self) -> None:
-        """Re-read the file so disk, not memory, decides what a topic id is.
-
-        The daemon holds state for minutes while one-shot commands write the
-        same file. Merging on save is not enough on its own: a stale in-memory
-        topic id would be written back over a replacement another process had
-        just created, and the two would fight. Reading before use ends that.
-        """
         fresh = State.load(self.path)
         self.topics = fresh.topics
         self.offset = max(self.offset, fresh.offset)
-        if fresh.guide_message_id:
-            self.guide_message_id = fresh.guide_message_id
+        self.guide_message_id = fresh.guide_message_id
+        self._snapshot = dict(self.topics)
+        self._guide_snapshot = self.guide_message_id
 
     def forget_topic(self, session: str) -> None:
         self.topics.pop(session, None)
-        try:
-            with open(self.path, "a+", encoding="utf-8") as handle:
-                fcntl.flock(handle, fcntl.LOCK_EX)
-                handle.seek(0)
-                raw = handle.read()
-                disk = json.loads(raw) if raw.strip() else {}
-                (disk.get("topics") or {}).pop(session, None)
-                disk["topics"] = {
-                    k: v for k, v in (disk.get("topics") or {}).items() if k != session
-                }
-                handle.seek(0)
-                handle.truncate()
-                handle.write(json.dumps(disk, indent=2) + "\n")
-                fcntl.flock(handle, fcntl.LOCK_UN)
-        except (OSError, ValueError) as exc:
-            LOG.warning("could not forget topic %s: %s", session, exc)
+        self.save()
 
 
 # ── Telegram ────────────────────────────────────────────────────────────────
 
 
 class TelegramError(RuntimeError):
-    pass
+    @property
+    def missing_topic(self) -> bool:
+        detail = str(self).lower()
+        return "message thread not found" in detail or "topic_deleted" in detail
+
 
 
 class Telegram:
     def __init__(self, token: str) -> None:
         self._token = token
 
-    def call(self, method: str, http_timeout: int = 20, **params: Any) -> dict[str, Any]:
+    def call(self, method: str, http_timeout: int = 20, photo: bytes | None = None, **params: Any) -> dict[str, Any]:
         """Call a Bot API method.
 
         `http_timeout` is the socket timeout and is named apart from `timeout`
@@ -366,12 +361,28 @@ class Telegram:
         """
         url = f"{API_ROOT}/bot{self._token}/{method}"
         body = json.dumps({k: v for k, v in params.items() if v is not None}).encode()
+        content_type = "application/json"
+        if photo is not None:
+            boundary = "bridge-" + uuid.uuid4().hex
+            chunks = []
+            for key, value in params.items():
+                if value is None:
+                    continue
+                encoded = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+                chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{encoded}\r\n'.encode())
+            chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="pane.png"\r\nContent-Type: image/png\r\n\r\n'.encode() + photo + b"\r\n")
+            chunks.append(f"--{boundary}--\r\n".encode())
+            body = b"".join(chunks)
+            content_type = f"multipart/form-data; boundary={boundary}"
         request = urllib.request.Request(
-            url, data=body, headers={"Content-Type": "application/json"}
+            url, data=body, headers={"Content-Type": content_type}
         )
         try:
             with urllib.request.urlopen(request, timeout=http_timeout) as response:
-                return json.loads(response.read().decode())
+                result = json.loads(response.read().decode())
+                if not result.get("ok"):
+                    raise TelegramError(f"{method}: {result.get('description', 'request refused')}")
+                return result
         except urllib.error.HTTPError as exc:
             # Telegram puts the real reason in the body. A bare "400 Bad
             # Request" is unactionable, so surface the description instead.
@@ -381,62 +392,6 @@ class Telegram:
                 detail = ""
             raise TelegramError(f"{method}: {exc.code} {detail or exc.reason}") from exc
 
-    def send_photo(
-        self,
-        chat_id: int,
-        image: bytes,
-        caption: str | None = None,
-        thread_id: int | None = None,
-        buttons: list[str] | None = None,
-        session: str | None = None,
-    ) -> dict[str, Any]:
-        """Upload a PNG as a photo. multipart is hand-rolled to stay stdlib."""
-        fields: dict[str, str] = {"chat_id": str(chat_id)}
-        if thread_id is not None:
-            fields["message_thread_id"] = str(thread_id)
-        if caption:
-            fields["caption"] = caption
-            fields["parse_mode"] = "HTML"
-        if buttons and session:
-            row = [
-                {"text": BUTTONS[name][0], "callback_data": f"a:{name}:{session}"}
-                for name in buttons
-                if name in BUTTONS
-            ]
-            if row:
-                fields["reply_markup"] = json.dumps({"inline_keyboard": [row]})
-
-        boundary = "----agentbridge" + secrets.token_hex(16)
-        parts: list[bytes] = []
-        for key, value in fields.items():
-            parts.append(
-                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n"
-                f"{value}\r\n".encode()
-            )
-        parts.append(
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="photo"; filename="pane.png"\r\n'
-            f"Content-Type: image/png\r\n\r\n".encode()
-        )
-        parts.append(image)
-        parts.append(f"\r\n--{boundary}--\r\n".encode())
-        body = b"".join(parts)
-
-        request = urllib.request.Request(
-            f"{API_ROOT}/bot{self._token}/sendPhoto",
-            data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                return json.loads(response.read().decode())
-        except urllib.error.HTTPError as exc:
-            try:
-                detail = json.loads(exc.read().decode()).get("description", "")
-            except Exception:  # noqa: BLE001
-                detail = ""
-            raise TelegramError(f"sendPhoto: {exc.code} {detail or exc.reason}") from exc
-
     def send(
         self,
         chat_id: int,
@@ -445,6 +400,7 @@ class Telegram:
         buttons: list[str] | None = None,
         session: str | None = None,
         parse_mode: str | None = None,
+        photo: bytes | None = None,
     ) -> dict[str, Any]:
         markup = None
         if buttons and session:
@@ -455,6 +411,9 @@ class Telegram:
             ]
             markup = {"inline_keyboard": [row]} if row else None
 
+        if photo is not None:
+            return self.call("sendPhoto", chat_id=chat_id, message_thread_id=thread_id,
+                             photo=photo, caption=text[:1024], reply_markup=markup)
         return self.call(
             "sendMessage",
             chat_id=chat_id,
@@ -509,40 +468,43 @@ class Tmux:
             rows.append({"name": parts[0], "windows": parts[1], "attached": parts[2]})
         return rows
 
-    def capture_ansi(self, session: str, lines: int = PEEK_LINES) -> str:
-        """Capture with escape sequences kept, for rendering to an image."""
-        code, out = self._run(
-            "capture-pane", "-p", "-e", "-t", self._pane(session), "-S", f"-{lines}"
-        )
-        if code != 0:
-            raise TmuxError(f"could not read the pane: {out}")
-        trimmed = [line.rstrip() for line in out.splitlines()]
-        while trimmed and not trimmed[-1].strip():
-            trimmed.pop()
-        return "\n".join(trimmed[-lines:])
-
     def running(self, session: str) -> str:
         code, out = self._run(
             "display-message", "-p", "-t", self._pane(session), "#{pane_current_command}"
         )
-        return out.strip() if code == 0 else "?"
+        program = out.strip() if code == 0 else "?"
+        return f"shell ({program})" if program in ("bash", "zsh", "sh", "fish", "dash", "ksh") else program
 
-    @staticmethod
-    def _pane(session: str) -> str:
-        """Target the session's current window and active pane.
+    def directory(self, session: str) -> str:
+        code, out = self._run("display-message", "-p", "-t", self._pane(session), "#{pane_current_path}")
+        return out if code == 0 else "?"
 
-        The `=` exact-match prefix is valid only for session-level commands.
-        tmux rejects `=name` as a pane target, so pane commands use `name:`,
-        which resolves to the current window. Callers check `exists()` first,
-        which does use `=`, so the session named here is the exact one.
-        """
-        return f"{session}:"
+    def _pane(self, session: str) -> str:
+        """Resolve the agent window's active pane by id, independent of selection."""
+        code, out = self._run(
+            "list-windows", "-t", f"={session}", "-F",
+            "#{window_name}\t#{window_active}\t#{pane_id}",
+        )
+        selected = None
+        if code == 0:
+            for line in out.splitlines():
+                parts = line.split("\t")
+                if len(parts) != 3:
+                    continue
+                window, active, pane = parts
+                if window == "agent":
+                    return pane
+                if active == "1":
+                    selected = pane
+        if selected:
+            return selected
+        raise TmuxError(f"no pane found for session {session}")
 
     def exists(self, session: str) -> bool:
         return self._run("has-session", "-t", f"={session}")[0] == 0
 
-    def capture(self, session: str, lines: int = PEEK_LINES) -> str:
-        code, out = self._run("capture-pane", "-p", "-t", self._pane(session), "-S", f"-{lines}")
+    def capture(self, session: str, lines: int = PEEK_LINES, ansi: bool = False) -> str:
+        code, out = self._run("capture-pane", "-p", *(["-e"] if ansi else []), "-t", self._pane(session), "-S", f"-{lines}")
         if code != 0:
             raise TmuxError(f"could not read the pane: {out}")
         trimmed = [line.rstrip() for line in out.splitlines()]
@@ -553,11 +515,12 @@ class Tmux:
     def type_text(self, session: str, text: str, enter: bool = True) -> str | None:
         # -l sends the string literally, so a stray "C-c" in a message is text
         # rather than a key. The Enter is a separate, deliberate call.
-        code, out = self._run("send-keys", "-t", self._pane(session), "-l", "--", text)
+        pane = self._pane(session)
+        code, out = self._run("send-keys", "-t", pane, "-l", "--", text)
         if code != 0:
             return out
         if enter:
-            code, out = self._run("send-keys", "-t", self._pane(session), "Enter")
+            code, out = self._run("send-keys", "-t", pane, "Enter")
             if code != 0:
                 return out
         return None
@@ -588,6 +551,10 @@ class Bridge:
         self.tmux = tmux
 
     def topic_for(self, session: str, create: bool = True) -> int | None:
+        with self.state.locked(".topics.lock"):
+            return self._topic_for(session, create)
+
+    def _topic_for(self, session: str, create: bool = True) -> int | None:
         self.state.reload()
         existing = self.state.topics.get(session)
         if existing is not None:
@@ -612,78 +579,76 @@ class Bridge:
     def session_for(self, thread_id: int | None) -> str | None:
         if thread_id is None:
             return None
+        self.state.reload()
         for session, known in self.state.topics.items():
             if known == thread_id:
                 return session
         return None
 
-    def post_peek(self, session: str, lines: int = PEEK_LINES) -> None:
-        """Send the pane as an image, falling back to a monospace block."""
-        buttons = ["peek", "yes", "no", "esc"]
-        image = self.render_pane_image(session, lines)
-
-        if image:
-            caption = f"<b>{html.escape(session)}</b> · {html.escape(self.tmux.running(session))}"
-            thread_id = self.topic_for(session)
-            try:
-                self.tg.send_photo(
-                    self.config.chat_id,
-                    image,
-                    caption=caption,
-                    thread_id=thread_id,
-                    buttons=buttons,
-                    session=session,
-                )
-                return
-            except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
-                LOG.warning("could not send the pane image for %s: %s", session, exc)
-
-        self.post(session, self.peek_message(session, lines), buttons=buttons, parse_mode="HTML")
-
     def post(
-        self,
-        session: str | None,
-        text: str,
-        buttons: list[str] | None = None,
-        parse_mode: str | None = None,
+        self, session: str | None, text: str, buttons: list[str] | None = None,
+        parse_mode: str | None = None, photo: bytes | None = None,
     ) -> None:
-        thread_id = self.topic_for(session) if session else None
-        try:
-            self.tg.send(
-                self.config.chat_id,
-                text,
-                thread_id=thread_id,
-                buttons=buttons,
-                session=session,
-                parse_mode=parse_mode,
-            )
-            return
-        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
-            LOG.warning("send failed for %s: %s", session, exc)
-
-        if not session:
-            return
-
-        # A deleted topic is the common case. Mint a replacement and deliver
-        # there, so deleting a topic in Telegram simply gets you a fresh one
-        # rather than messages appearing in the general chat.
-        self.state.forget_topic(session)
-        thread_id = self.topic_for(session)
-        try:
-            self.tg.send(
-                self.config.chat_id,
-                text,
-                thread_id=thread_id,
-                buttons=buttons,
-                session=session,
-                parse_mode=parse_mode,
-            )
-        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
-            LOG.warning("could not deliver to a replacement topic for %s: %s", session, exc)
+        # Serialize lookup, delivery and replacement across daemon and hooks.
+        # Only an explicit missing-topic response invalidates the mapping.
+        with self.state.locked(".topics.lock"):
+            thread_id = self._topic_for(session) if session else None
+            if session and thread_id is None:
+                raise TelegramError("could not resolve session topic")
             try:
-                self.tg.send(self.config.chat_id, text)
-            except Exception:  # noqa: BLE001 - reporting is best effort
-                LOG.warning("fallback send also failed")
+                self.tg.send(self.config.chat_id, text, thread_id=thread_id,
+                             buttons=buttons, session=session, parse_mode=parse_mode, photo=photo)
+            except TelegramError as exc:
+                if not session or not exc.missing_topic:
+                    raise
+                self.state.forget_topic(session)
+                thread_id = self._topic_for(session)
+                if thread_id is None:
+                    raise TelegramError("could not recreate deleted session topic") from exc
+                self.tg.send(self.config.chat_id, text, thread_id=thread_id,
+                             buttons=buttons, session=session, parse_mode=parse_mode, photo=photo)
+
+    def render_peek(self, session: str, lines: int) -> bytes:
+        renderer = os.environ.get("AGENT_BRIDGE_FREEZE") or shutil.which("freeze")
+        if not renderer:
+            renderer = find_freeze()
+        if not renderer:
+            candidate = Path(__file__).resolve().parent / "freeze"
+            renderer = str(candidate) if candidate.is_file() else None
+        if not renderer:
+            raise OSError("freeze is not installed")
+        pane = self.tmux.capture(session, lines, ansi=True)
+        with tempfile.TemporaryDirectory(prefix="agent-peek-") as directory:
+            source = Path(directory) / "pane.ansi"
+            output = Path(directory) / "pane.png"
+            source.write_text(pane, encoding="utf-8")
+            # Explicit ANSI input preserves colours without invoking a shell.
+            # DEVNULL prevents the renderer from waiting on inherited stdin.
+            subprocess.run(
+                [renderer, str(source), "--language", "ansi", "--output", str(output),
+                 "--font.size", "16", "--padding", "16", "--margin", "0",
+                 "--window=false", "--theme", "dracula"],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=12, check=True,
+            )
+            return output.read_bytes()
+
+    def send_peek(self, session: str, lines: int = PEEK_LINES) -> None:
+        buttons = ["peek", "yes", "no", "esc"]
+        if not self.config.session_allowed(session):
+            self.post(None, f"session {session} is not in the allowlist")
+            return
+        if not self.tmux.exists(session):
+            self.post(session, self.act(session, "peek"))
+            return
+        lines = max(1, min(lines, 60))
+        try:
+            photo = self.render_peek(session, lines)
+            self.post(session, f"{session} · {self.tmux.running(session)} · {lines} lines",
+                      buttons=buttons, photo=photo)
+            return
+        except (OSError, subprocess.SubprocessError, TelegramError, ValueError) as exc:
+            LOG.warning("image peek unavailable (%s), using text", type(exc).__name__)
+        self.post(session, self.peek_message(session, lines), buttons=buttons, parse_mode="HTML")
 
     # ── command handling ────────────────────────────────────────────────────
 
@@ -711,20 +676,19 @@ class Bridge:
         return True
 
     def launch(self, session: str, agent: str, resume: bool = False) -> str:
-        """Create a session through the launcher, so layout stays consistent.
-
-        The launcher tries to attach at the end and fails without a terminal,
-        which is expected here and does not prevent the session being created.
-        """
+        """Use the same detached lifecycle commands as the terminal."""
         launcher = find_launcher()
         if not launcher:
             return "agent-session launcher not found on this host"
-
+        if agent not in ("claude", "codex", "opencode", "shell"):
+            return "Unknown agent. Choose claude, codex, opencode or shell."
+        if session.startswith("-") or any(c in session for c in ".:"):
+            return "Session names cannot start with '-' or contain '.' or ':'."
         try:
-            command = [launcher, "open", session, "--agent", agent]
-            if resume:
-                command.append("--resume")
-            subprocess.run(command, capture_output=True, text=True, timeout=30)
+            command = [launcher, "resume" if resume else "new", session, agent]
+            done = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            if done.returncode:
+                return f"could not start {session}: {(done.stderr or done.stdout).strip()[:500]}"
         except (OSError, subprocess.SubprocessError) as exc:
             return f"could not start {session}: {exc}"
 
@@ -735,48 +699,6 @@ class Bridge:
         if resume:
             return f"started {session}, {agent} picking up its last conversation"
         return f"started {session} running {agent}"
-
-    def render_pane_image(self, session: str, lines: int = PEEK_LINES) -> bytes | None:
-        """Render the pane to a PNG, keeping its colour and layout.
-
-        A phone reflows a wide monospace block into noise. An image keeps the
-        columns, the box drawing and the colour, which is most of what makes an
-        agent TUI readable. Returns None when freeze is absent, so the caller
-        falls back to text rather than failing.
-        """
-        freeze = find_freeze()
-        if not freeze:
-            return None
-
-        try:
-            ansi = self.tmux.capture_ansi(session, lines)
-        except TmuxError:
-            return None
-        if not ansi.strip():
-            return None
-
-        with tempfile.TemporaryDirectory() as work:
-            out = os.path.join(work, "pane.png")
-            try:
-                done = subprocess.run(
-                    [
-                        freeze, "--output", out, "--window", "--theme", "charm",
-                        "--font.size", "14", "--padding", "20",
-                    ],
-                    input=ansi.encode(),
-                    capture_output=True,
-                    timeout=30,
-                )
-            except (OSError, subprocess.SubprocessError) as exc:
-                LOG.warning("freeze failed for %s: %s", session, exc)
-                return None
-
-            if done.returncode != 0 or not os.path.exists(out):
-                LOG.warning("freeze produced nothing for %s: %s", session, done.stderr[:200])
-                return None
-
-            with open(out, "rb") as handle:
-                return handle.read()
 
     def peek_message(self, session: str, lines: int = PEEK_LINES) -> str:
         """Render a pane as HTML so Telegram shows it in a monospace block.
@@ -804,6 +726,9 @@ class Bridge:
             body = body.split("\n", 1)[1]
             escaped = html.escape(body)
 
+        while len(escaped) > budget:
+            body = body[max(1, len(body) // 10):]
+            escaped = html.escape(body)
         return f"{header}\n<pre>{escaped}</pre>"
 
     def act(self, session: str, action: str, argument: str = "") -> str:
@@ -880,19 +805,21 @@ class Bridge:
                 watched = row["attached"] != "0"
                 allowed = self.config.session_allowed(name)
                 lines.append(f"{'🟢' if allowed else '🔒'} {name} · {self.tmux.running(name)}")
-                detail = "someone is watching" if watched else "detached, so it will notify you"
+                detail = f"{row['attached']} attached" if watched else "detached"
                 if not allowed:
                     detail = "not in the allowlist, so the bridge cannot touch it"
-                lines.append(f"    {detail}")
+                lines.append(f"    {detail} · {row['windows']} windows")
+                if allowed:
+                    lines.append(f"    {self.tmux.directory(name)}")
                 lines.append("")
-            lines.append("Open a session's topic and just type to send it there.")
+            lines.append("Open a session's topic and use /say TEXT or reply to a bot message.")
             self.post(None, "\n".join(lines))
             return
 
         if command in ("bind", "open"):
             # `open` is kept as an alias because it was the original name, but
             # `bind` is the honest one: this attaches a topic to a session that
-            # already exists. Creating one is /new, matching `agent-session open`.
+            # already exists. Creating one is /new, matching `ags new`.
             target = argument or session or ""
             if not target:
                 self.post(None, "Usage: /bind <session>")
@@ -903,7 +830,14 @@ class Bridge:
             if not self.tmux.exists(target):
                 self.post(None, f"no tmux session named {target}. Create it with /new {target}")
                 return
-            self.topic_for(target)
+            if thread_id is not None and int(thread_id) != 1:
+                with self.state.locked(".topics.lock"):
+                    self.state.reload()
+                    owner = self.session_for(int(thread_id))
+                    if owner and owner != target:
+                        raise TelegramError("That topic is already bound to another session")
+                    self.state.topics[target] = int(thread_id)
+                    self.state.save()
             self.post(target, f"Topic bound to {target}. Reply here to type into its pane.")
             return
 
@@ -912,6 +846,9 @@ class Bridge:
             parts = argument.split()
             target = parts[0] if parts else session or ""
             agent = parts[1] if len(parts) > 1 else "claude"
+            if len(parts) > 2 or agent not in ("claude", "codex", "opencode", "shell"):
+                self.post(None, f"Usage: /{command} SESSION [claude|codex|opencode|shell]")
+                return
             if not target:
                 self.post(None, f"Usage: /{command} <session> [claude|codex|opencode|shell]")
                 return
@@ -965,34 +902,42 @@ class Bridge:
         if command in ("help", "start"):
             self.post(
                 None,
-                "In a session topic: send text to type it into the pane.\n"
+                "In a session topic: /say TEXT or reply to a bot message to type into the pane.\n"
                 "/peek [n]  show the pane\n"
                 "/say TEXT  type text\n"
                 "/esc       interrupt\n"
                 "/enter     press Enter\n"
                 "/ls        list sessions\n"
                 "/new S [a] start a session, blank conversation\n"
-                "/resume S  start a session and continue where it left off\n"
+                "/resume S [a] start a session and continue where it left off\n"
                 "/bind S    bind a topic to an existing session\n"
                 "/kill S    kill a session and its agent\n"
-                "/id        report ids for setup",
+                "/id        report ids for setup\n\n"
+                "In General: /peek S, /say S TEXT, /esc S, /enter S.\n"
+                "Terminal: ags followed by the same verb and session name.\n"
+                "ags open S attaches a terminal. /bind S links a Telegram topic.",
             )
             return
 
         target = session
         if command in ("peek", "say", "esc", "enter") and not target:
-            self.post(None, "That command works inside a session topic. Use /open <session>.")
+            parts = argument.split(maxsplit=1)
+            target = parts[0] if parts else None
+            argument = parts[1] if len(parts) > 1 else ""
+            if not target:
+                self.post(None, f"Usage in General: /{command} SESSION [argument]. In a session topic, omit SESSION.")
+                return
+
+        if command in ("peek", "say", "esc", "enter") and not self.config.session_allowed(target):
+            self.post(None, f"session {target} is not in the allowlist")
             return
 
         if command == "peek":
-            if not self.config.session_allowed(target):
-                self.post(target, f"session {target} is not in the allowlist")
+            if argument and (not argument.isdigit() or len(argument) > 6):
+                self.post(target, "Usage: /peek [1-60] in a topic, or /peek SESSION [1-60] in General.")
                 return
-            if not self.tmux.exists(target):
-                self.post(target, self.act(target, "peek"))
-                return
-            lines = int(argument) if argument.isdigit() else PEEK_LINES
-            self.post_peek(target, lines)
+            lines = int(argument) if argument else PEEK_LINES
+            self.send_peek(target, lines)
             return
 
         if command == "say":
@@ -1000,6 +945,9 @@ class Bridge:
             return
 
         if command in ("esc", "enter"):
+            if argument:
+                self.post(target, f"/{command} takes no extra arguments inside a topic.")
+                return
             self.post(target, self.act(target, command))
             return
 
@@ -1024,10 +972,13 @@ class Bridge:
             return
         _, action, session = parts
         if action == "peek":
-            if self.config.session_allowed(session) and self.tmux.exists(session):
-                self.post_peek(session)
-                return
-        self.post(session, self.act(session, action), buttons=["peek", "yes", "no", "esc"])
+            self.send_peek(session)
+            return
+        body = self.act(session, action)
+        if action == "peek" and body.startswith("<b>"):
+            self.post(session, body, buttons=["peek", "yes", "no", "esc"], parse_mode="HTML")
+        else:
+            self.post(session, body, buttons=["peek", "yes", "no", "esc"])
 
     # ── the loop ────────────────────────────────────────────────────────────
 
@@ -1071,22 +1022,31 @@ class Bridge:
         """
         text = self.render_guide()
 
+        self.state.reload()
         if self.state.guide_message_id:
-            result = self.tg.call(
-                "editMessageText",
-                chat_id=self.config.chat_id,
-                message_id=self.state.guide_message_id,
-                text=text,
-                link_preview_options={"is_disabled": True},
-            )
+            try:
+                result = self.tg.call(
+                    "editMessageText",
+                    chat_id=self.config.chat_id,
+                    message_id=self.state.guide_message_id,
+                    text=text,
+                    link_preview_options={"is_disabled": True},
+                )
+            except TelegramError as exc:
+                if "not modified" in str(exc):
+                    return "the pinned guide is already current"
+                if "message to edit not found" not in str(exc).lower():
+                    raise
+                result = {"ok": False, "description": "message to edit not found"}
             if result.get("ok"):
                 return f"updated the pinned guide, message {self.state.guide_message_id}"
             description = str(result.get("description", ""))
             if "not modified" in description:
                 return "the pinned guide is already current"
             # The message is gone. Fall through and post a new one.
-            LOG.warning("could not edit the guide (%s), posting a new one", description)
+            LOG.warning("pinned guide is missing (%s)", description)
             self.state.guide_message_id = None
+            self.state.save()
 
         if not pin:
             return "no pinned guide to update. Run: agent-bridge.py guide --pin"
@@ -1135,7 +1095,10 @@ class Bridge:
         self.publish_commands()
 
         if self.state.guide_message_id:
-            LOG.info("%s", self.publish_guide())
+            try:
+                LOG.info("%s", self.publish_guide())
+            except (TelegramError, OSError, ValueError):
+                LOG.warning("could not refresh the pinned guide")
 
         LOG.info(
             "serving chat %s, sessions %s",
@@ -1145,6 +1108,10 @@ class Bridge:
 
         backoff = 1
         while running:
+            if loaded_mtime is not None and script.stat().st_mtime != loaded_mtime:
+                LOG.info("bridge file changed, reloading")
+                self.state.save()
+                os.execv(sys.executable, [sys.executable, str(script), "serve"])
             try:
                 result = self.tg.call(
                     "getUpdates",
@@ -1155,21 +1122,14 @@ class Bridge:
                 )
             except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
                 LOG.warning("poll failed (%s), retrying in %ss", exc, backoff)
-                time.sleep(backoff)
+                for _ in range(backoff):
+                    if not running:
+                        break
+                    time.sleep(1)
                 backoff = min(backoff * 2, 60)
                 continue
 
             backoff = 1
-
-            if loaded_mtime is not None:
-                try:
-                    current = script.stat().st_mtime
-                except OSError:
-                    current = loaded_mtime
-                if current != loaded_mtime:
-                    LOG.info("%s changed on disk, restarting into the new version", script.name)
-                    self.state.save()
-                    os.execv(sys.executable, [sys.executable, str(script), "serve"])
 
             if not result.get("ok"):
                 LOG.warning("getUpdates refused: %s", result)
@@ -1177,6 +1137,8 @@ class Bridge:
                 continue
 
             for update in result.get("result", []):
+                if not running:
+                    break
                 self.state.offset = int(update["update_id"]) + 1
                 self.state.save()
                 try:

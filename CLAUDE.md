@@ -217,7 +217,11 @@ Hindsight.
 ### Agent sessions (tmux)
 
 ```bash
-ags open <name>         # create or attach a tmux session running an agent
+ags new <name> codex    # start detached, same as Telegram /new
+ags resume <name> codex # continue saved conversation, same as /resume
+ags open <name>         # attach, or create a missing session
+ags peek <name>         # read the agent pane
+ags say <name> "text"   # type into the agent pane and press Enter
 ags ls                  # list sessions
 ags mobile <name>       # second client, sized independently of the first
 ags remote [args]       # run the same command on the hub over SSH
@@ -234,8 +238,11 @@ Codex `notify` program; it reports only when no client is attached, and
 withholds agent output outside an allowlist of personal roots.
 `scripts/agent-bridge.py` is a stdlib-only Telegram control plane that drives
 sessions at the tmux layer, so it covers Claude Code, Codex and OpenCode alike:
-one forum topic per session, reply to type into the pane. Full reasoning and the
-alternatives considered are in `doc/remote-agent-sessions.md`.
+one forum topic per session, reply to type into the pane. Both interfaces share
+`ls`, `new`, `resume`, `kill`, `peek`, `say`, `esc` and `enter`. The terminal
+requires a session name, while Telegram can infer it from the topic. Pane
+commands target the `agent` window even when a different window is selected.
+Full reasoning and the alternatives considered are in `doc/remote-agent-sessions.md`.
 
 ## Architecture
 
