@@ -36,6 +36,9 @@ import argparse
 import fcntl
 import fnmatch
 import html
+import mimetypes
+import secrets
+import tempfile
 import json
 import logging
 import os
@@ -66,6 +69,25 @@ LAUNCHER_CANDIDATES = (
     os.path.expanduser("~/.dotfiles/scripts/agent-session.sh"),
     os.path.expanduser("~/Workspace/repos/github/tools/dotfiles/scripts/agent-session.sh"),
 )
+
+
+FREEZE_CANDIDATES = (
+    "/srv/services/agents/bin/freeze",
+    os.path.expanduser("~/.local/bin/freeze"),
+    os.path.expanduser("~/go/bin/freeze"),
+    "/usr/local/bin/freeze",
+)
+
+
+def find_freeze() -> str | None:
+    """charmbracelet/freeze, used to render a pane as an image when present."""
+    override = os.environ.get("AGENT_BRIDGE_FREEZE")
+    if override and os.access(override, os.X_OK):
+        return override
+    for candidate in FREEZE_CANDIDATES:
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def find_launcher() -> str | None:
@@ -359,6 +381,62 @@ class Telegram:
                 detail = ""
             raise TelegramError(f"{method}: {exc.code} {detail or exc.reason}") from exc
 
+    def send_photo(
+        self,
+        chat_id: int,
+        image: bytes,
+        caption: str | None = None,
+        thread_id: int | None = None,
+        buttons: list[str] | None = None,
+        session: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload a PNG as a photo. multipart is hand-rolled to stay stdlib."""
+        fields: dict[str, str] = {"chat_id": str(chat_id)}
+        if thread_id is not None:
+            fields["message_thread_id"] = str(thread_id)
+        if caption:
+            fields["caption"] = caption
+            fields["parse_mode"] = "HTML"
+        if buttons and session:
+            row = [
+                {"text": BUTTONS[name][0], "callback_data": f"a:{name}:{session}"}
+                for name in buttons
+                if name in BUTTONS
+            ]
+            if row:
+                fields["reply_markup"] = json.dumps({"inline_keyboard": [row]})
+
+        boundary = "----agentbridge" + secrets.token_hex(16)
+        parts: list[bytes] = []
+        for key, value in fields.items():
+            parts.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n"
+                f"{value}\r\n".encode()
+            )
+        parts.append(
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="photo"; filename="pane.png"\r\n'
+            f"Content-Type: image/png\r\n\r\n".encode()
+        )
+        parts.append(image)
+        parts.append(f"\r\n--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+
+        request = urllib.request.Request(
+            f"{API_ROOT}/bot{self._token}/sendPhoto",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = json.loads(exc.read().decode()).get("description", "")
+            except Exception:  # noqa: BLE001
+                detail = ""
+            raise TelegramError(f"sendPhoto: {exc.code} {detail or exc.reason}") from exc
+
     def send(
         self,
         chat_id: int,
@@ -430,6 +508,18 @@ class Tmux:
                 continue
             rows.append({"name": parts[0], "windows": parts[1], "attached": parts[2]})
         return rows
+
+    def capture_ansi(self, session: str, lines: int = PEEK_LINES) -> str:
+        """Capture with escape sequences kept, for rendering to an image."""
+        code, out = self._run(
+            "capture-pane", "-p", "-e", "-t", self._pane(session), "-S", f"-{lines}"
+        )
+        if code != 0:
+            raise TmuxError(f"could not read the pane: {out}")
+        trimmed = [line.rstrip() for line in out.splitlines()]
+        while trimmed and not trimmed[-1].strip():
+            trimmed.pop()
+        return "\n".join(trimmed[-lines:])
 
     def running(self, session: str) -> str:
         code, out = self._run(
@@ -527,6 +617,29 @@ class Bridge:
                 return session
         return None
 
+    def post_peek(self, session: str, lines: int = PEEK_LINES) -> None:
+        """Send the pane as an image, falling back to a monospace block."""
+        buttons = ["peek", "yes", "no", "esc"]
+        image = self.render_pane_image(session, lines)
+
+        if image:
+            caption = f"<b>{html.escape(session)}</b> · {html.escape(self.tmux.running(session))}"
+            thread_id = self.topic_for(session)
+            try:
+                self.tg.send_photo(
+                    self.config.chat_id,
+                    image,
+                    caption=caption,
+                    thread_id=thread_id,
+                    buttons=buttons,
+                    session=session,
+                )
+                return
+            except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
+                LOG.warning("could not send the pane image for %s: %s", session, exc)
+
+        self.post(session, self.peek_message(session, lines), buttons=buttons, parse_mode="HTML")
+
     def post(
         self,
         session: str | None,
@@ -622,6 +735,48 @@ class Bridge:
         if resume:
             return f"started {session}, {agent} picking up its last conversation"
         return f"started {session} running {agent}"
+
+    def render_pane_image(self, session: str, lines: int = PEEK_LINES) -> bytes | None:
+        """Render the pane to a PNG, keeping its colour and layout.
+
+        A phone reflows a wide monospace block into noise. An image keeps the
+        columns, the box drawing and the colour, which is most of what makes an
+        agent TUI readable. Returns None when freeze is absent, so the caller
+        falls back to text rather than failing.
+        """
+        freeze = find_freeze()
+        if not freeze:
+            return None
+
+        try:
+            ansi = self.tmux.capture_ansi(session, lines)
+        except TmuxError:
+            return None
+        if not ansi.strip():
+            return None
+
+        with tempfile.TemporaryDirectory() as work:
+            out = os.path.join(work, "pane.png")
+            try:
+                done = subprocess.run(
+                    [
+                        freeze, "--output", out, "--window", "--theme", "charm",
+                        "--font.size", "14", "--padding", "20",
+                    ],
+                    input=ansi.encode(),
+                    capture_output=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                LOG.warning("freeze failed for %s: %s", session, exc)
+                return None
+
+            if done.returncode != 0 or not os.path.exists(out):
+                LOG.warning("freeze produced nothing for %s: %s", session, done.stderr[:200])
+                return None
+
+            with open(out, "rb") as handle:
+                return handle.read()
 
     def peek_message(self, session: str, lines: int = PEEK_LINES) -> str:
         """Render a pane as HTML so Telegram shows it in a monospace block.
@@ -837,12 +992,7 @@ class Bridge:
                 self.post(target, self.act(target, "peek"))
                 return
             lines = int(argument) if argument.isdigit() else PEEK_LINES
-            self.post(
-                target,
-                self.peek_message(target, lines),
-                buttons=["peek", "yes", "no", "esc"],
-                parse_mode="HTML",
-            )
+            self.post_peek(target, lines)
             return
 
         if command == "say":
@@ -873,11 +1023,11 @@ class Bridge:
         if len(parts) != 3 or parts[0] != "a":
             return
         _, action, session = parts
-        body = self.act(session, action)
-        if action == "peek" and body.startswith("<b>"):
-            self.post(session, body, buttons=["peek", "yes", "no", "esc"], parse_mode="HTML")
-        else:
-            self.post(session, body, buttons=["peek", "yes", "no", "esc"])
+        if action == "peek":
+            if self.config.session_allowed(session) and self.tmux.exists(session):
+                self.post_peek(session)
+                return
+        self.post(session, self.act(session, action), buttons=["peek", "yes", "no", "esc"])
 
     # ── the loop ────────────────────────────────────────────────────────────
 
@@ -964,6 +1114,15 @@ class Bridge:
 
     def serve(self) -> int:
         running = True
+        # Re-exec when this file changes on disk. Deploying a fix and then
+        # forgetting to restart meant the daemon quietly ran old code, which is
+        # a whole class of confusing behaviour that need not exist. State lives
+        # on disk, so a re-exec costs nothing.
+        script = Path(__file__).resolve()
+        try:
+            loaded_mtime = script.stat().st_mtime
+        except OSError:
+            loaded_mtime = None
 
         def stop(_signum: int, _frame: Any) -> None:
             nonlocal running
@@ -1001,6 +1160,17 @@ class Bridge:
                 continue
 
             backoff = 1
+
+            if loaded_mtime is not None:
+                try:
+                    current = script.stat().st_mtime
+                except OSError:
+                    current = loaded_mtime
+                if current != loaded_mtime:
+                    LOG.info("%s changed on disk, restarting into the new version", script.name)
+                    self.state.save()
+                    os.execv(sys.executable, [sys.executable, str(script), "serve"])
+
             if not result.get("ok"):
                 LOG.warning("getUpdates refused: %s", result)
                 time.sleep(5)
