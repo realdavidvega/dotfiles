@@ -58,6 +58,9 @@ extensions. Native Linux Mint uses `os/linux/apt/packages.mint.txt` through the 
 Node LTS, invoke dotly's npm importer for globals, then install uv and
 `langs/python/uv_tools.txt`.
 
+The Mint host runs private Black Cloud services described in `doc/black-cloud.md`.
+`scripts/black-cloud.sh` manages the Obsidian LiveSync CouchDB service.
+
 ### Updating externally-installed tools
 
 `dot package update_all` (`up`) only reaches what the package managers own.
