@@ -229,6 +229,20 @@ The bridge publishes its command menu scoped to the configured chat rather than
 globally, so a token shared with another deployment keeps that deployment's
 menu everywhere else.
 
+### Topic lifecycle
+
+`bridge-state.json` maps session name to `message_thread_id`. Topics outlive
+sessions deliberately: the history is the record, and reusing a name returns to
+the same thread.
+
+Deleting a topic under a live session is the only path with error handling
+worth knowing. `sendMessage` returns 400, `post()` drops the mapping and retries
+in the general chat, and the next call mints a fresh topic. One message lands
+outside a topic before it heals. This path is tested rather than reasoned about.
+
+The bridge never deletes a topic. Removing one is a human decision about
+history.
+
 ### Security
 
 Anything that can type into a pane can run code on the host. Three gates, all
