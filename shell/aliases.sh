@@ -88,6 +88,7 @@ alias oscfg="vim $DOTFILES/shell/os.sh"
 alias aliascfg="vim $DOTFILES/shell/aliases.sh"
 alias ytcfg="vim $DOTFILES/aliases/.youtube-dl-aliases"
 alias dockercfg="vim $DOTFILES/aliases/.docker-aliases"
+alias tmuxcfg="vim $DOTFILES/config/tmux/tmux.conf"
 
 # External aliases
 sourceif "$DOTFILES_PATH/aliases/.docker-aliases"
@@ -95,6 +96,7 @@ sourceif "$DOTFILES_PATH/aliases/.youtube-dl-aliases"
 sourceif "$DOTFILES_PATH/aliases/.kubectl-aliases"
 sourceif "$DOTFILES_PATH/aliases/.terraform-aliases"
 sourceif "$DOTFILES_PATH/aliases/.opencode-aliases"
+sourceif "$DOTFILES_PATH/aliases/.tmux-aliases"
 
 # Apps
 alias subl="sublime"

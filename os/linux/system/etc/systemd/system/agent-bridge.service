@@ -1,0 +1,30 @@
+[Unit]
+Description=Telegram control plane for tmux agent sessions
+Documentation=https://github.com/realdavidvega/dotfiles
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=black
+Group=black
+EnvironmentFile=/srv/services/agents/bridge.env
+ExecStart=/usr/bin/python3 /srv/services/agents/bin/agent-bridge.py serve
+Restart=always
+RestartSec=5
+
+# The bridge talks to the tmux server over its socket in /tmp/tmux-1000, so a
+# private /tmp would hide exactly the thing it exists to control.
+PrivateTmp=false
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+# Outbound HTTPS long-poll only. Nothing listens.
+IPAddressDeny=
+
+[Install]
+WantedBy=multi-user.target

@@ -31,4 +31,5 @@ ripgrep
 shellcheck
 shfmt
 tesseract-ocr
+mosh
 tmux
