@@ -191,14 +191,22 @@ prompt from a phone is then just replying to the message that told you about it.
 | `doctor` | Checks configuration, bot reachability and tmux, and reports ids |
 
 ```text
-/ls          list sessions and whether each is allowed
-/open S      bind a topic to session S
-/peek [n]    show the pane
-/say TEXT    type text and press Enter
-/esc         interrupt
-/enter       press Enter
-/id          report chat, thread and session ids, for setup
+/ls             list sessions and whether each is allowed
+/new S [agent]  start a session through the launcher, default claude
+/bind S         bind a topic to a session that already exists
+/kill S         close a session and its agent
+/peek [n]       show the pane
+/say TEXT       type text and press Enter
+/esc            interrupt
+/enter          press Enter
+/id             report chat, thread and session ids, for setup
+/discover       run on the host, not in chat, to get ids before first start
 ```
+
+`/new` shells out to `agent-session` so a session created from a phone gets the
+same layout as one created at the desk. `/bind` is deliberately not called
+`open`: the launcher's `open` creates a session, and reusing the word for
+"attach a topic to an existing one" was a collision worth removing.
 
 Buttons on a notification cover the same ground without typing: peek, `1`, `2`,
 and interrupt. They send the keystrokes a human would press rather than
