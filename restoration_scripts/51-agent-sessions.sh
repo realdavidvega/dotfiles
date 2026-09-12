@@ -91,12 +91,14 @@ BRIDGE_UNIT="/etc/systemd/system/agent-bridge.service"
 if [ -f "$BRIDGE_UNIT_SOURCE" ]; then
   if [ -f "$BRIDGE_UNIT" ] && cmp -s "$BRIDGE_UNIT_SOURCE" "$BRIDGE_UNIT"; then
     echo "current: $BRIDGE_UNIT"
-  else
-    sudo install -o root -g root -m 0644 "$BRIDGE_UNIT_SOURCE" "$BRIDGE_UNIT" || FAILED=1
+  elif sudo install -o root -g root -m 0644 "$BRIDGE_UNIT_SOURCE" "$BRIDGE_UNIT"; then
     sudo systemctl daemon-reload || FAILED=1
     echo "staged: $BRIDGE_UNIT"
     echo "        enable it once bridge.env is filled in:"
     echo "        sudo systemctl enable --now agent-bridge"
+  else
+    echo "blocked: could not install $BRIDGE_UNIT (needs sudo on a terminal)"
+    FAILED=1
   fi
 fi
 
