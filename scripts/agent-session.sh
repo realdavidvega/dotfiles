@@ -22,6 +22,8 @@ Commands:
 Options for open:
   --agent <a>         claude (default), codex, opencode, or shell
   --dir <path>        Working directory, overriding the resolved default
+  --resume            Pick up the agent's most recent conversation in that
+                      directory instead of starting a blank one
 
 Environment:
   AGENT_SESSION_ROOT  Default working directory
@@ -103,16 +105,36 @@ resolve_root() {
   pwd
 }
 
-agent_command() {
+# The binary, for the on-PATH check. Kept apart from the command line below,
+# which carries arguments.
+agent_binary() {
   case "$1" in
-    claude)   printf 'claude\n' ;;
-    codex)    printf 'codex\n' ;;
-    opencode) printf 'opencode\n' ;;
-    shell)    printf '\n' ;;
+    claude|codex|opencode) printf '%s\n' "$1" ;;
+    shell)                 printf '\n' ;;
     *)
       printf 'Unknown agent: %s (expected claude, codex, opencode or shell)\n' "$1" >&2
       exit 1
       ;;
+  esac
+}
+
+# What gets typed into the pane. With --resume each agent picks up its most
+# recent conversation in this directory rather than starting a blank one, which
+# is what you want after a kill or a reboot.
+agent_command() {
+  local agent="$1" resume="$2"
+
+  if [[ "$resume" != true ]]; then
+    agent_binary "$agent"
+    return
+  fi
+
+  case "$agent" in
+    claude)   printf 'claude --continue\n' ;;
+    codex)    printf 'codex resume --last\n' ;;
+    opencode) printf 'opencode --continue\n' ;;
+    shell)    printf '\n' ;;
+    *)        agent_binary "$agent" ;;
   esac
 }
 
@@ -128,12 +150,13 @@ enter_session() {
 }
 
 cmd_open() {
-  local name="" dir="" agent="claude" agent_cmd
+  local name="" dir="" agent="claude" agent_cmd agent_bin resume=false
 
   while (($# > 0)); do
     case "$1" in
-      --agent) agent="${2:?--agent needs a value}"; shift 2 ;;
-      --dir)   dir="${2:?--dir needs a value}"; shift 2 ;;
+      --agent)  agent="${2:?--agent needs a value}"; shift 2 ;;
+      --dir)    dir="${2:?--dir needs a value}"; shift 2 ;;
+      --resume) resume=true; shift ;;
       -h|--help) usage; exit 0 ;;
       *)
         if [[ -z "$name" ]]; then
@@ -178,11 +201,12 @@ cmd_open() {
     exit 1
   fi
 
-  agent_cmd="$(agent_command "$agent")"
+  agent_bin="$(agent_binary "$agent")"
+  agent_cmd="$(agent_command "$agent" "$resume")"
 
-  if [[ -n "$agent_cmd" ]] && ! command -v "$agent_cmd" >/dev/null 2>&1; then
+  if [[ -n "$agent_bin" ]] && ! command -v "$agent_bin" >/dev/null 2>&1; then
     printf 'Agent %s is not on PATH. Is the home unlocked? See: agent-session.sh unlock\n' \
-      "$agent_cmd" >&2
+      "$agent_bin" >&2
     exit 1
   fi
 
