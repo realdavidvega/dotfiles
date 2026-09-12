@@ -266,8 +266,11 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
 
-  export BLACK_VAULT="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Black Vault"
+  # The vault lives inside its own git checkout since the move off iCloud to
+  # Syncthing, so the work tree and the repo are one path. Keep them derived
+  # from a single value: a stale BLACK_VAULT silently unlinks every vault skill.
   export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/tools/black-vault"
+  export BLACK_VAULT="$BLACK_VAULT_REPO"
 
   # Machines disagree on where checkouts live: some use repos/github/tools/,
   # others a flat github/. Pick the one that exists rather than asserting a

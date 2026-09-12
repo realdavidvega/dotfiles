@@ -166,24 +166,33 @@ cycle and must not be done.
 Staggered versioning on the hub's Syncthing folder is the safety net for this, and is the reason
 it is not optional.
 
-### The LiveSync database is encrypted, the hub's files are not
+### Chunk settings must match on every writer, and encryption is off
 
-The CouchDB copy is end-to-end encrypted with path obfuscation, so neither note contents nor
-folder structure are readable to anyone holding only CouchDB credentials. Content encryption
-without obfuscation would have been half a measure, since document IDs otherwise carry file
-paths and note titles are often as revealing as note bodies.
+Two decisions that look unrelated turned out to be the same problem.
 
-It does not defend against hub compromise. The bridge needs the passphrase in
-`dat/config.json` on the same machine as the database, and Syncthing keeps a plaintext copy of
-the same vault in `/srv/sync/blackvault` regardless. The threat it addresses is narrower: leaked
-CouchDB credentials without filesystem access.
+**Every writer must agree on chunking.** Chunk identifiers derive from content
+**and chunk boundaries**, so a bridge and a plugin using different boundaries produce two
+complete, non-deduplicating chunk sets for identical files. The symptom is a database gaining
+tens of thousands of chunks while the file count does not move, roughly tripling in size each
+time a client connects after a rebuild. It reads like stale state or corruption and is neither.
 
-Losing the passphrase costs a database rebuild rather than the notes, because the plaintext vault
-still exists on every desktop. That makes this a much softer failure than end-to-end encryption
-usually implies, and is why one generated passphrase kept in KeePass is sufficient ceremony.
+The shared values are `customChunkSize` 60, `minimumChunkSize` 20,
+`chunkSplitterVersion` `v3-rabin-karp`, `hashAlg` `xxhash64`. The bridge's copy carries the full
+reasoning in `os/linux/srv/livesync-bridge/dat/config.sample.json`.
 
-Enabling either setting later would require rebuilding the database, so both were set before the
-first client connected.
+**End-to-end encryption is off.** The same vault produced **2,730MB** encrypted and **1,366MB**
+unencrypted, for identical content and an identical document count. Encrypted chunks cannot be
+deduplicated and must each be decrypted during reassembly, which was also what exhausted memory
+on the phone and had iOS killing the app mid-fetch.
+
+What it protected was narrow. The plaintext vault already sits beside CouchDB in
+`/srv/sync/blackvault`, and the passphrase lived on the same host, so it defended only against
+leaked CouchDB credentials without filesystem access. Transport is TLS inside WireGuard either
+way. Turn it back on if CouchDB ever leaves hardware you control, and accept the size.
+
+> [!note] Diagnosing which is which
+> Chunks up with the file count flat means duplication, so check the chunk settings. Chunks up
+> with `i:` or path documents also up is a genuine upload.
 
 ### Hub data lives outside the encrypted home
 
@@ -330,8 +339,8 @@ same content through CouchDB, which `livesync-bridge` keeps in step with the hub
 
 Its operational detail is documented in the vault rather than here, at
 `99 - Meta/Guides/Sync Setup.md` in the `black-vault` repo: the CouchDB and `tailscale serve`
-configuration with its CORS requirements, the bridge's own config, the end-to-end encryption
-settings, and the iPhone client setup.
+configuration with its CORS requirements, the bridge's own config, the chunk settings every
+writer must share, and the iPhone client setup.
 
 It lives there because it stays true regardless of which machines exist, and because that repo is
 private, so it can name hosts and paths this public one should not. What this repo owns is the
@@ -391,7 +400,7 @@ the unit rather than embedded in it.
 - `/srv/services/couchdb/data`, the LiveSync database
 - `/srv/services/syncthing`, the device certificate and folder keys. Losing these means a new
   device ID and re-pairing every device
-- `/srv/services/livesync-bridge/dat`, the bridge config and the encryption passphrase
+- `/srv/services/livesync-bridge/dat`, the bridge config including its chunk settings
 
 Excluded deliberately: `/srv/sync/blackvault/.git`, which is 450MB reconstructible from GitHub,
 and `.stversions`, which is already a versioning layer.
@@ -436,10 +445,10 @@ Three things are deliberately **not** managed here:
 - **Syncthing's own config.** Device IDs and folder keys, machine-specific, rewritten at runtime.
   Back it up rather than symlink it.
 - **`/srv/services/couchdb/.env`.** CouchDB admin credentials, mode 0600.
-- **`/srv/services/livesync-bridge/dat/config.json` and `dat/e2ee.passphrase`.** These hold the
-  CouchDB password and the end-to-end encryption passphrase, both mode 0600. Losing the passphrase
-  costs a database rebuild rather than the notes, since the plaintext vault still exists on every
-  desktop.
+- **`/srv/services/livesync-bridge/dat/config.json`.** Holds the CouchDB password, mode 0600. It
+  also carries the chunk settings every writer must share, which the versioned
+  `config.sample.json` documents. A leftover `dat/e2ee.passphrase` from the encrypted era can be
+  deleted once encryption is confirmed off everywhere.
 
 A guarded `restoration_scripts/` entry follows the same shape as `01-linux-mint-macbook.sh`:
 skip unless Linux, not WSL, `linuxmint`, `MacBookPro12,1`.
@@ -457,7 +466,7 @@ skip unless Linux, not WSL, `linuxmint`, `MacBookPro12,1`.
 | CouchDB 3.5 | loopback only, CORS incl. `capacitor://localhost`, `require_valid_user` |
 | `tailscale serve` | Let's Encrypt certificate on the MagicDNS name, tailnet only |
 | `livesync-bridge` | built from source as uid 1000, boot service |
-| LiveSync database | end-to-end encrypted, with path obfuscation, one shared passphrase |
+| LiveSync database | unencrypted, chunk settings matched across bridge and plugin |
 | Obsidian on the hub | Flatpak, `--filesystem` override for the vault, interactive use only |
 
 Everything on the hub is a boot service. None of it needs the encrypted home unlocked, a
