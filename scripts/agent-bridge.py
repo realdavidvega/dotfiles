@@ -33,6 +33,7 @@ Subcommands
 from __future__ import annotations
 
 import argparse
+import fcntl
 import fnmatch
 import json
 import logging
@@ -51,7 +52,7 @@ from typing import Any
 LOG = logging.getLogger("agent-bridge")
 
 API_ROOT = "https://api.telegram.org"
-POLL_TIMEOUT = 50
+POLL_TIMEOUT = 25
 HTTP_TIMEOUT = POLL_TIMEOUT + 15
 PEEK_LINES = 30
 MAX_MESSAGE = 3500
@@ -246,18 +247,67 @@ class State:
         )
 
     def save(self) -> None:
-        payload = {
-            "offset": self.offset,
-            "topics": self.topics,
-            "guide_message_id": self.guide_message_id,
-        }
+        """Merge into whatever is on disk, rather than overwriting it.
+
+        The daemon keeps state in memory for minutes at a time while one-shot
+        commands (`notify`, `guide`) write the same file. A wholesale write
+        silently discards the other process's work, which is how a pinned guide
+        id went missing. Merge under a lock instead.
+        """
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-            tmp.replace(self.path)
+            with open(self.path, "a+", encoding="utf-8") as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                try:
+                    handle.seek(0)
+                    raw = handle.read()
+                    disk = json.loads(raw) if raw.strip() else {}
+                except ValueError:
+                    disk = {}
+
+                topics = {str(k): int(v) for k, v in (disk.get("topics") or {}).items()}
+                topics.update(self.topics)
+                self.topics = topics
+
+                # The furthest-read offset wins, so a stale in-memory copy
+                # cannot rewind another process past updates it handled.
+                self.offset = max(self.offset, int(disk.get("offset") or 0))
+
+                if self.guide_message_id is None and disk.get("guide_message_id"):
+                    self.guide_message_id = int(disk["guide_message_id"])
+
+                payload = {
+                    "offset": self.offset,
+                    "topics": self.topics,
+                    "guide_message_id": self.guide_message_id,
+                }
+                handle.seek(0)
+                handle.truncate()
+                handle.write(json.dumps(payload, indent=2) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+                fcntl.flock(handle, fcntl.LOCK_UN)
         except OSError as exc:
             LOG.warning("could not persist state: %s", exc)
+
+    def forget_topic(self, session: str) -> None:
+        self.topics.pop(session, None)
+        try:
+            with open(self.path, "a+", encoding="utf-8") as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                handle.seek(0)
+                raw = handle.read()
+                disk = json.loads(raw) if raw.strip() else {}
+                (disk.get("topics") or {}).pop(session, None)
+                disk["topics"] = {
+                    k: v for k, v in (disk.get("topics") or {}).items() if k != session
+                }
+                handle.seek(0)
+                handle.truncate()
+                handle.write(json.dumps(disk, indent=2) + "\n")
+                fcntl.flock(handle, fcntl.LOCK_UN)
+        except (OSError, ValueError) as exc:
+            LOG.warning("could not forget topic %s: %s", session, exc)
 
 
 # ── Telegram ────────────────────────────────────────────────────────────────
@@ -452,17 +502,28 @@ class Bridge:
             self.tg.send(
                 self.config.chat_id, text, thread_id=thread_id, buttons=buttons, session=session
             )
+            return
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            # A deleted topic is the common case. Forget it and retry once in
-            # the general chat so the message is not simply lost.
             LOG.warning("send failed for %s: %s", session, exc)
-            if session and session in self.state.topics:
-                del self.state.topics[session]
-                self.state.save()
-                try:
-                    self.tg.send(self.config.chat_id, text)
-                except Exception:  # noqa: BLE001 - reporting is best effort
-                    LOG.warning("fallback send also failed")
+
+        if not session:
+            return
+
+        # A deleted topic is the common case. Mint a replacement and deliver
+        # there, so deleting a topic in Telegram simply gets you a fresh one
+        # rather than messages appearing in the general chat.
+        self.state.forget_topic(session)
+        thread_id = self.topic_for(session)
+        try:
+            self.tg.send(
+                self.config.chat_id, text, thread_id=thread_id, buttons=buttons, session=session
+            )
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            LOG.warning("could not deliver to a replacement topic for %s: %s", session, exc)
+            try:
+                self.tg.send(self.config.chat_id, text)
+            except Exception:  # noqa: BLE001 - reporting is best effort
+                LOG.warning("fallback send also failed")
 
     # ── command handling ────────────────────────────────────────────────────
 
@@ -632,9 +693,13 @@ class Bridge:
                 return
             if self.tmux.exists(target):
                 self.topic_for(target)
-                self.post(target, f"{target} already exists. Topic bound.")
+                self.post(
+                    target,
+                    f"{target} is already running {self.tmux.running(target)}.\n"
+                    f"To change agent: /kill {target}, then /{command} {target} {agent}.",
+                )
                 return
-            self.post(None, self.launch(target, agent, resume=resume))
+            self.post(target, self.launch(target, agent, resume=resume))
             return
 
         if command in ("kill", "close"):
@@ -866,6 +931,7 @@ class Bridge:
 
             for update in result.get("result", []):
                 self.state.offset = int(update["update_id"]) + 1
+                self.state.save()
                 try:
                     if "message" in update:
                         self.handle_message(update["message"])
