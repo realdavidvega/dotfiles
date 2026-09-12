@@ -453,7 +453,10 @@ class Bridge:
         if not self.config.session_allowed(session):
             return f"session {session} is not in the allowlist"
         if not self.tmux.exists(session):
-            return f"no tmux session named {session}"
+            return (
+                f"no session named {session} is running.\n"
+                f"Start it with /new {session}, and it returns to this topic."
+            )
 
         if action == "peek":
             try:
@@ -578,11 +581,18 @@ class Bridge:
                 self.post(None, f"no tmux session named {target}")
                 return
             error = self.tmux.kill(target)
+            if error:
+                self.post(None, error)
+                return
+            # Posted into the session's own topic, which stays behind as the
+            # record. /new with the same name returns to this topic later.
             self.post(
-                None,
-                error
-                or f"killed {target}. The agent is gone; its conversation can be resumed "
-                f"with `claude --continue` or `codex resume` in a new session.",
+                target,
+                f"killed {target}.\n\n"
+                "This topic stays. /new "
+                f"{target} comes back to it.\n"
+                "The agent is gone but its history is not: `claude --continue` "
+                "or `codex resume` in the new session.",
             )
             return
 
