@@ -295,7 +295,9 @@ if ! command -v tmux >/dev/null 2>&1; then
   exit 1
 fi
 
-command="${1:-ls}"
+# Bare `agent-session` shows usage. Doing something silently on no arguments is
+# a bad default for a tool that creates and kills sessions.
+command="${1:-help}"
 [[ $# -gt 0 ]] && shift
 
 case "$command" in
