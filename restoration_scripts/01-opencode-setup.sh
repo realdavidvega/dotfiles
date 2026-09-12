@@ -34,11 +34,11 @@ if command -v ollama &> /dev/null; then
         echo "Adding Ollama provider to OpenCode config..."
         
         # Use python to safely modify JSON
-        python3 << 'PYEOF'
+        python3 - "$OPENCODE_CONFIG" <<'PYEOF'
 import json
 import sys
 
-config_path = "$HOME/.config/opencode/opencode.json"
+config_path = sys.argv[1]
 
 try:
     with open(config_path, 'r') as f:

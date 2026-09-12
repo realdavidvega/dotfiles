@@ -126,9 +126,9 @@ YT_DLP_COOKIES=~/cookies.txt yta-mp3 <url>
 
 ```bash
 # Full bootstrap from a fresh clone (after configuring the git-crypt key path)
-DOTFILES_PATH="$HOME/.dotfiles" \
-DOTLY_PATH="$DOTFILES_PATH/modules/dotly" \
-  "$DOTLY_PATH/bin/dot" self install
+env DOTFILES_PATH="$HOME/.dotfiles" \
+  DOTLY_PATH="$HOME/.dotfiles/modules/dotly" \
+  "$HOME/.dotfiles/modules/dotly/bin/dot" self install
 ```
 
 `dot self install` runs the numbered scripts in `restoration_scripts/`

@@ -4,8 +4,6 @@ ca-certificates
 cargo
 cmake
 curl
-docker-compose-v2
-docker.io
 fzf
 gh
 git
