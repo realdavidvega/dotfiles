@@ -51,7 +51,8 @@ GIT_CRYPT_KEY_PATH="$HOME/dotfiles-key.bin"  # or wherever your key is
 4. **Run dotly installation:**
 
 ```bash
-DOTFILES_PATH="$HOME/.dotfiles" DOTLY_PATH="$DOTFILES_PATH/modules/dotly" "$DOTLY_PATH/bin/dot" self install
+env DOTFILES_PATH="$HOME/.dotfiles" DOTLY_PATH="$HOME/.dotfiles/modules/dotly" \
+  "$HOME/.dotfiles/modules/dotly/bin/dot" self install
 ```
 
 This will:
