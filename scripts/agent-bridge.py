@@ -56,6 +56,25 @@ HTTP_TIMEOUT = POLL_TIMEOUT + 15
 PEEK_LINES = 30
 MAX_MESSAGE = 3500
 
+# The launcher, used by /new so a Telegram-created session gets the same
+# three-window layout as one made at the desk. The hub copy is preferred
+# because it reads even when the encrypted home does not.
+LAUNCHER_CANDIDATES = (
+    "/srv/services/agents/bin/agent-session",
+    os.path.expanduser("~/.dotfiles/scripts/agent-session.sh"),
+    os.path.expanduser("~/Workspace/repos/github/tools/dotfiles/scripts/agent-session.sh"),
+)
+
+
+def find_launcher() -> str | None:
+    override = os.environ.get("AGENT_SESSION_BIN")
+    if override and os.access(override, os.X_OK):
+        return override
+    for candidate in LAUNCHER_CANDIDATES:
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
 # Button label -> what to send to the pane. Approving is positional in a TUI,
 # so the buttons send the keystrokes a human would press rather than pretending
 # to understand the prompt.
@@ -290,6 +309,10 @@ class Tmux:
         code, out = self._run("send-keys", "-t", self._pane(session), key)
         return out if code != 0 else None
 
+    def kill(self, session: str) -> str | None:
+        code, out = self._run("kill-session", "-t", f"={session}")
+        return out if code != 0 else None
+
     def attached(self, session: str) -> int:
         code, out = self._run("list-clients", "-t", f"={session}", "-F", "#{client_name}")
         if code != 0:
@@ -379,6 +402,32 @@ class Bridge:
             return False
         return True
 
+    def launch(self, session: str, agent: str) -> str:
+        """Create a session through the launcher, so layout stays consistent.
+
+        The launcher tries to attach at the end and fails without a terminal,
+        which is expected here and does not prevent the session being created.
+        """
+        launcher = find_launcher()
+        if not launcher:
+            return "agent-session launcher not found on this host"
+
+        try:
+            subprocess.run(
+                [launcher, "open", session, "--agent", agent],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"could not start {session}: {exc}"
+
+        if not self.tmux.exists(session):
+            return f"{session} did not start. Is the encrypted home unlocked?"
+
+        self.topic_for(session)
+        return f"started {session} running {agent}"
+
     def act(self, session: str, action: str, argument: str = "") -> str:
         if not self.config.session_allowed(session):
             return f"session {session} is not in the allowlist"
@@ -452,16 +501,59 @@ class Bridge:
             self.post(None, "\n".join(lines))
             return
 
-        if command == "open":
+        if command in ("bind", "open"):
+            # `open` is kept as an alias because it was the original name, but
+            # `bind` is the honest one: this attaches a topic to a session that
+            # already exists. Creating one is /new, matching `agent-session open`.
             target = argument or session or ""
             if not target:
-                self.post(None, "Usage: /open <session>")
+                self.post(None, "Usage: /bind <session>")
                 return
             if not self.config.session_allowed(target):
                 self.post(None, f"session {target} is not in the allowlist")
                 return
+            if not self.tmux.exists(target):
+                self.post(None, f"no tmux session named {target}. Create it with /new {target}")
+                return
             self.topic_for(target)
             self.post(target, f"Topic bound to {target}. Reply here to type into its pane.")
+            return
+
+        if command == "new":
+            parts = argument.split()
+            target = parts[0] if parts else ""
+            agent = parts[1] if len(parts) > 1 else "claude"
+            if not target:
+                self.post(None, "Usage: /new <session> [claude|codex|opencode|shell]")
+                return
+            if not self.config.session_allowed(target):
+                self.post(None, f"session {target} is not in the allowlist")
+                return
+            if self.tmux.exists(target):
+                self.topic_for(target)
+                self.post(target, f"{target} already exists. Topic bound.")
+                return
+            self.post(None, self.launch(target, agent))
+            return
+
+        if command in ("kill", "close"):
+            target = argument or session or ""
+            if not target:
+                self.post(None, "Usage: /kill <session>")
+                return
+            if not self.config.session_allowed(target):
+                self.post(None, f"session {target} is not in the allowlist")
+                return
+            if not self.tmux.exists(target):
+                self.post(None, f"no tmux session named {target}")
+                return
+            error = self.tmux.kill(target)
+            self.post(
+                None,
+                error
+                or f"killed {target}. The agent is gone; its conversation can be resumed "
+                f"with `claude --continue` or `codex resume` in a new session.",
+            )
             return
 
         if command == "id":
@@ -480,7 +572,9 @@ class Bridge:
                 "/esc       interrupt\n"
                 "/enter     press Enter\n"
                 "/ls        list sessions\n"
-                "/open S    bind a topic to a session\n"
+                "/new S [a] start a session running claude, codex, opencode or shell\n"
+                "/bind S    bind a topic to an existing session\n"
+                "/kill S    kill a session and its agent\n"
                 "/id        report ids for setup",
             )
             return
