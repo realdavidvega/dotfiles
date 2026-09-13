@@ -42,7 +42,12 @@ is retried every five minutes.
 `/motivate` runs the Claude Code CLI on the host with `ANTHROPIC_API_KEY` and
 `CLAUDECODE` unset, so it uses the host's claude.ai login. It is the copilot's
 only model call and runs on `COPILOT_MOTIVATE_MODEL`, Sonnet by default, rather
-than the CLI's interactive default. It needs the
+than the CLI's interactive default. While the Claude usage cache
+(`~/.cache/agent-limits/claude.json`, the one the agent bridge reads) shows a 5h
+or 7d window at its limit, Claude is skipped. When Claude is skipped or fails,
+`codex exec` writes the passage instead, ephemeral and read-only in an empty
+scratch directory, on `COPILOT_MOTIVATE_FALLBACK` (Codex's default when empty,
+disabled by `off`). The reply header names the model that wrote it. It needs the
 encrypted home unlocked, and falls back to the no-model pick when the call
 fails.
 
