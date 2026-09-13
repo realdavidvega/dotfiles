@@ -145,7 +145,10 @@ them here:
 - **skills-registry**, the content (private, git-crypted).
 - **`~/.skp/`**, local state: `sources` says where skills come from,
   `profiles.json` says what loads where, `skills/` is a rebuildable cache.
-  Neither config file is versioned anywhere, so both are yours to back up.
+  Back up these live files. `config/opencode/skills.profiles.json` is the
+  versioned profile baseline for new machines, not a symlink to live state.
+  `paths.json` maps its named projects to paths on this computer. Local path
+  mappings take precedence over shell variables when skp runs.
 
 What remains here is two pointers:
 
@@ -154,7 +157,8 @@ What remains here is two pointers:
   reads `~/.skp/sources`.
 - `restoration_scripts/31-skp-setup.sh` discovers sibling checkouts, repairs the
   launcher in `~/.local/bin`, seeds missing local configuration, and runs
-  `skp sync`. Existing `~/.skp` configuration remains untouched.
+  `skp sync`. It seeds `paths.json` from discovered checkouts and the vault
+  location. Existing `~/.skp` configuration remains untouched.
 - The `skills` component of `upall`, which fast-forwards both checkouts when it
   is safe to do so and then runs `skp sync`. The pull lives here because
   `skp sync` deliberately does not fetch.

@@ -166,8 +166,13 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
     export SKILLS_REGISTRY_REPO="/mnt/c/Users/david/Workspace/repos/github/tools/skills-registry"
   else
-    export BLACK_VAULT="$HOME/Documents/Black Vault"
-    export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
+    if [ -d "/srv/sync/blackvault/00 - Black" ]; then
+      export BLACK_VAULT="/srv/sync/blackvault"
+      export BLACK_VAULT_REPO="$BLACK_VAULT"
+    else
+      export BLACK_VAULT="$HOME/Documents/Black Vault"
+      export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
+    fi
     export SKILLS_REGISTRY_REPO="$OS_WORKSPACE/repos/github/tools/skills-registry"
   fi
 

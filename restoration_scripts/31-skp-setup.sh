@@ -67,6 +67,45 @@ if [ ! -e "$profiles" ] && [ -f "$baseline" ]; then
   echo "seeded: $profiles"
 fi
 
+export SKP_REPO SKILLS_REGISTRY_REPO DOTFILES_PATH
+paths="$HOME/.skp/paths.json"
+if [ ! -e "$paths" ]; then
+  python3 - "$paths" <<'PYTHON'
+import json
+import os
+import sys
+from pathlib import Path
+
+home = Path.home()
+workspace = Path(os.environ.get("WORKSPACE", home / "Workspace"))
+paths = {
+    "WORKSPACE": str(workspace),
+    "DOTFILES_PATH": os.environ["DOTFILES_PATH"],
+    "SKP_REPO": os.environ["SKP_REPO"],
+    "SKILLS_REGISTRY_REPO": os.environ["SKILLS_REGISTRY_REPO"],
+}
+paths = {name: value for name, value in paths.items() if value}
+for name in ("cortex", "academy", "projects"):
+    key = name.upper() + "_REPO"
+    paths[key] = os.environ.get(key, str(workspace / "repos/work" / name))
+for candidate in (
+    os.environ.get("BLACK_VAULT"),
+    "/srv/sync/blackvault",
+    os.environ.get("BLACK_VAULT_REPO"),
+    str(home / "Documents/Black Vault"),
+    str(workspace / "repos/github/tools/black-vault"),
+):
+    if candidate and (Path(candidate) / "AGENTS.md").is_file() and (
+        Path(candidate) / "00 - Black"
+    ).is_dir():
+        paths["BLACK_VAULT"] = candidate
+        paths["BLACK_VAULT_REPO"] = candidate
+        break
+Path(sys.argv[1]).write_text(json.dumps({"version": 1, "paths": paths}, indent=2) + "\n")
+PYTHON
+  echo "seeded: $paths"
+fi
+
 export SKP_REPO SKILLS_REGISTRY_REPO
 export PATH="$SKP_REPO/bin:$PATH"
 
