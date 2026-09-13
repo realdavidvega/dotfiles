@@ -14,13 +14,13 @@ Keeping them apart keeps each chat's meaning obvious and each allowlist small.
 | When | It runs | And sends |
 |---|---|---|
 | A message in 📓 Journal | `capture.py --text TEXT` | The script's one-line answer, as a reply |
-| `/today`, `/brief`, `/week`, `/level`, `/history` | `capture.py --status`, `brief.py --kind morning`, `brief.py --kind weekly`, `level.py`, `history.py --show` | The script's message |
+| `/today`, `/brief`, `/week`, `/level`, `/missions`, `/history` | `capture.py --status`, `brief.py --kind morning`, `brief.py --kind weekly`, `level.py`, `level.py --missions`, `history.py --show` | The script's message |
 | A mood button is tapped | `capture.py --text "mood N"`, then `brief.py --kind habits` | The answer, then a habit sheet |
 | A habit button is tapped | `capture.py --text "habit FIELD done"`, then `brief.py --kind habits` | The sheet redrawn in place |
 | Every minute | `due_prompts.py --at HH:MM --window 1` | Each due prompt once per day. `brief` and `report` kinds send the computed brief, `checkin` sends mood buttons |
 | Every five minutes | `capture.py --flush`, then `history.py --close` | A line for each capture that landed in a note created since. History writes frozen entries for closed periods and sends nothing |
 | A 🧹 Clear confirmation | `telegram-user.py clear CHAT --thread N --keep MENU` | Nothing. The topic is emptied except its menu |
-| After any capture | `level.py` | A level-up line in System when the level rose |
+| After any capture | `level.py` | A line in System when the level rose, a grade was earned or a rank trial cleared. A grade falling back is recorded silently |
 | `/motivate` | `motivation.py --fresh` | A new Codex-voice passage from one Claude CLI call |
 | A pinned menu button is tapped | The same script as its command | The reply, in the menu's topic. Mood and Habits send the check-in and the habit sheet to Journal |
 
@@ -29,12 +29,12 @@ and an icon from `getForumTopicIconStickers`: Journal 📝, System 🎖 and
 Motivation 🔥. Prompt kinds route to them: `brief` and `checkin` to Journal,
 `report` to System, `motivation` to Motivation. Only messages in Journal are
 captured. A topic deleted by hand is recreated on the next post to it. Topic
-ids, prompts sent, the last announced level and the menu message ids live in
-`system-state.json`, which only the bot writes.
+ids, prompts sent, the last announced level, grades and cleared trials, and the
+menu message ids live in `system-state.json`, which only the bot writes.
 
 Each topic's intro is also its menu: inline buttons for Journal (Brief, Today,
-Mood, Habits, Help, Clear), System (Level, Week, History, Clear) and Motivation
-(Motivate, Clear), pinned in the topic. A topic made before menus existed has its intro, the message right
+Mood, Habits, Help, Clear), System (Level, Missions, Week, History, Clear) and
+Motivation (Motivate, Clear), pinned in the topic. A topic made before menus existed has its intro, the message right
 after the topic's creation, edited into the menu. The menu is edited in place
 when its text or buttons change, and posted again only when it cannot be
 edited. Pinning needs the **Pin messages** administrator right. A refused pin
@@ -114,5 +114,5 @@ python3 scripts/test_black_system.py
 ```
 
 The capture grammar and note edits are tested in the skill, by
-`test_capture.py` against a throwaway vault, and frozen history by
-`test_history.py`.
+`test_capture.py` against a throwaway vault, frozen history by
+`test_history.py`, and grades, fallback and rank trials by `test_missions.py`.
