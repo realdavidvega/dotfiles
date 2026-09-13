@@ -14,11 +14,11 @@ Keeping them apart keeps each chat's meaning obvious and each allowlist small.
 | When | It runs | And sends |
 |---|---|---|
 | A message in 📓 Journal | `capture.py --text TEXT` | The script's one-line answer, as a reply |
-| `/today`, `/brief`, `/week`, `/level`, `/missions`, `/history` | `capture.py --status`, `brief.py --kind morning`, `brief.py --kind weekly`, `level.py`, `level.py --missions`, `history.py --show` | The script's message |
+| `/today`, `/brief`, `/week`, `/level`, `/missions`, `/quests`, `/history` | `capture.py --status`, `brief.py --kind morning`, `brief.py --kind weekly`, `level.py`, `quests.py --view home`, `history.py --show` | The script's message |
 | A mood button is tapped | `capture.py --text "mood N"`, then `brief.py --kind habits` | The answer, then a habit sheet |
 | A habit button is tapped | `capture.py --text "habit FIELD done"`, then `brief.py --kind habits` | The sheet redrawn in place |
 | Every minute | `due_prompts.py --at HH:MM --window 1` | Each due prompt once per day. `brief` and `report` kinds send the computed brief, `checkin` sends mood buttons |
-| Every five minutes | `capture.py --flush`, then `history.py --close` | A line for each capture that landed in a note created since. History writes frozen entries for closed periods and sends nothing |
+| Every five minutes | `capture.py --flush`, `quests.py --flush`, then `history.py --close` | A line for each capture that landed in a note created since. History writes frozen entries for closed periods and sends nothing |
 | A 🧹 Clear confirmation | `telegram-user.py clear CHAT --thread N --keep MENU` | Nothing. The topic is emptied except its menu |
 | After any capture | `level.py` | A line in System when the level rose, a grade was earned or a rank trial cleared. A grade falling back is recorded silently |
 | `/motivate` | `motivation.py --fresh` | A new Codex-voice passage from one Claude CLI call |
@@ -115,4 +115,18 @@ python3 scripts/test_black_system.py
 
 The capture grammar and note edits are tested in the skill, by
 `test_capture.py` against a throwaway vault, frozen history by
-`test_history.py`, and grades, fallback and rank trials by `test_missions.py`.
+`test_history.py`, grades, fallback and rank trials by `test_missions.py`, and quest states, goal scoring, penalties and action receipts by `test_quests.py`.
+
+## Interactive quests
+
+`/missions`, `/quests` and the Missions menu button open the shared quest
+overview. `q:` callbacks select views or accept, complete and abandon side
+quests. Callbacks are authorized by chat and user before running a script.
+The engine returns text, HTML parse mode and inline buttons. Navigation edits
+the existing message. Abandonment has a confirmation showing its cost.
+
+Obsidian queues requests under `99 - Meta/Quest Actions/`. Every five-minute
+flush calls `quests.py --flush`, which serializes actions, records receipts
+atomically with their effect and publishes `quest-state.json`. Replays are
+idempotent. All quest logic stays in the skill. Telegram holds no scoring
+rules. Goal editing stays in the journal notes.
