@@ -14,27 +14,30 @@ Keeping them apart keeps each chat's meaning obvious and each allowlist small.
 | When | It runs | And sends |
 |---|---|---|
 | A message in 📓 Journal | `capture.py --text TEXT` | The script's one-line answer, as a reply |
-| `/today`, `/brief`, `/week`, `/level`, `/missions`, `/quests`, `/history` | `capture.py --status`, `brief.py --kind morning`, `brief.py --kind weekly`, `level.py`, `quests.py --view home`, `history.py --show` | The script's message |
-| A mood button is tapped | `capture.py --text "mood N"`, then `brief.py --kind habits` | The answer, then a habit sheet |
-| A habit button is tapped | `capture.py --text "habit FIELD done"`, then `brief.py --kind habits` | The sheet redrawn in place |
-| Every minute | `due_prompts.py --at HH:MM --window 1` | Each due prompt once per day. `brief` and `report` kinds send the computed brief, `checkin` sends mood buttons |
-| Every five minutes | `capture.py --flush`, `quests.py --flush`, then `history.py --close` | A line for each capture that landed in a note created since. History writes frozen entries for closed periods and sends nothing |
+| `/today`, `/brief`, `/week`, `/level`, `/missions`, `/quests`, `/history` | `capture.py --status`, `brief.py --kind morning`, `brief.py --kind weekly`, `quests.py --view level` for both `/level` and `/missions`, `quests.py --view home`, `history.py --show` | The script's message |
+| `/daily`, `/board`, `/goals`, `/tree` | `quests.py --view daily\|board\|goals\|tree` | The quest view with its buttons. These are the Quests menu's actions and are not published in the command menu |
+| The check-in starts, from the 21:30 prompt or 🌙 Check-in | `checkin.py --start` | One card in Journal. Its `i:` taps run `checkin.py --tap` and edit it in place |
+| A message in Journal while a check-in step waits for text | `checkin.py --text TEXT` | The card, edited to the next step. The message is not captured. After 20 quiet minutes messages are captured again |
+| A habit button is tapped | `capture.py --cycle FIELD`, then `brief.py --kind habits` | The sheet redrawn in place, each button showing its status (✅ done, ⏭️ skipped, 🟡 partial, ❌ relapse, ☐ unlogged) |
+| Every minute | `due_prompts.py --at HH:MM --window 1` | Each due prompt once per day. `brief` and `report` kinds send the computed brief, `quests` sends `quests.py --view daily` with its buttons, `checkin` starts the guided check-in, with the schedule text and mood buttons as the fallback |
+| Every five minutes | `capture.py --flush`, `checkin.py --expire`, `quests.py --flush`, then `history.py --close` | A line for each capture that landed in a note created since. History writes frozen entries for closed periods and sends nothing |
 | A 🧹 Clear confirmation | `telegram-user.py clear CHAT --thread N --keep MENU` | Nothing. The topic is emptied except its menu |
-| After any capture | `level.py` | A line in System when the level rose, a grade was earned or a rank trial cleared. A grade falling back is recorded silently |
+| After any capture | `level.py` | A line in System when the level rose or fell, a grade was earned or a rank trial cleared. A line in Quests, with buttons, when a quest completed, failed or became available, or a penalty posted. A grade falling back is recorded silently |
 | `/motivate` | `motivation.py --fresh` | A new Codex-voice passage from one Claude CLI call |
 | A pinned menu button is tapped | The same script as its command | The reply, in the menu's topic. Mood and Habits send the check-in and the habit sheet to Journal |
 
-In a chat with Topics, the bot creates three topics on start, with plain names
-and an icon from `getForumTopicIconStickers`: Journal 📝, System 🎖 and
-Motivation 🔥. Prompt kinds route to them: `brief` and `checkin` to Journal,
-`report` to System, `motivation` to Motivation. Only messages in Journal are
+In a chat with Topics, the bot creates four topics on start, with plain names
+and an icon from `getForumTopicIconStickers`: Journal 📝, System 🎖, Quests 🏆
+and Motivation 🔥. Prompt kinds route to them: `brief` and `checkin` to Journal,
+`report` to System, `quests` to Quests, `motivation` to Motivation. Only messages in Journal are
 captured. A topic deleted by hand is recreated on the next post to it. Topic
 ids, prompts sent, the last announced level, grades and cleared trials, and the
 menu message ids live in `system-state.json`, which only the bot writes.
 
 Each topic's intro is also its menu: inline buttons for Journal (Brief, Today,
-Mood, Habits, Help, Clear), System (Level, Missions, Week, History, Clear) and
-Motivation (Motivate, Clear), pinned in the topic. A topic made before menus existed has its intro, the message right
+Check-in, Habits, Help, Clear), System (Level, Week, History, Clear),
+Quests (Today, Quest Log, Board, Goals, Tree, Clear) and Motivation (Motivate,
+Clear), pinned in the topic. A topic made before menus existed has its intro, the message right
 after the topic's creation, edited into the menu. The menu is edited in place
 when its text or buttons change, and posted again only when it cannot be
 edited. Pinning needs the **Pin messages** administrator right. A refused pin
@@ -69,7 +72,7 @@ Telethon helper staged by `51-agent-sessions.sh` under `/srv/services/telegram`,
 with its own venv and a `user.env` holding the login, and the agent bridge uses
 the same helper. The button posts a confirmation. Confirming runs
 `telegram-user.py clear` on that topic with the menu's message id kept, and a
-failure is reported in the topic. A topic that is not one of the three is never
+failure is reported in the topic. A topic that is not one of the bot's own is never
 cleared. Without the helper, the button explains what is missing.
 
 ## Deployment
@@ -119,11 +122,24 @@ The capture grammar and note edits are tested in the skill, by
 
 ## Interactive quests
 
-`/missions`, `/quests` and the Missions menu button open the shared quest
-overview. `q:` callbacks select views or accept, complete and abandon side
-quests. Callbacks are authorized by chat and user before running a script.
-The engine returns text, HTML parse mode and inline buttons. Navigation edits
-the existing message. Abandonment has a confirmation showing its cost.
+The Quests topic is where quests are worked. The `quest-brief` prompt posts the
+daily quest brief there each morning: recovery quests, active side quests with
+a Done button for manual ones, weekly targets at stake, goal quests and what
+the board still offers. Its menu opens the same brief, the Quest Log, the
+board, goals and the quest tree. `/quests` opens the Quest Log wherever it is
+used. System keeps progression apart from quests: its Level button, `/level` and
+`/missions` open `quests.py --view level`, the level, the next rank trial and
+each stat's grade with a progress bar, and a button per stat for what its next
+grade needs.
+
+`q:` callbacks select views or accept, complete and abandon side quests, and
+redraw the message they sit on. Quest announcements carry `n:` buttons instead
+(Board, Today's quests, Accept and Details). An `n:` tap posts the view as a
+new message in the same topic, so the announcement keeps its text, and an `n:`
+action that changes state removes the announcement's buttons. Callbacks are
+authorized by chat and user before running a script. The engine returns text,
+HTML parse mode and inline buttons. Abandonment has a confirmation showing its
+cost.
 
 Obsidian queues requests under `99 - Meta/Quest Actions/`. Every five-minute
 flush calls `quests.py --flush`, which serializes actions, records receipts
