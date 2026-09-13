@@ -21,14 +21,23 @@ Keeping them apart keeps each chat's meaning obvious and each allowlist small.
 | Every five minutes | `capture.py --flush` | A line for each capture that landed in a note created since |
 | After any capture | `level.py` | A level-up line in System when the level rose |
 | `/motivate` | `motivation.py --fresh` | A new Codex-voice passage from one Claude CLI call |
+| A pinned menu button is tapped | The same script as its command | The reply, in the menu's topic. Mood and Habits send the check-in and the habit sheet to Journal |
 
 In a chat with Topics, the bot creates three topics on start, with plain names
 and an icon from `getForumTopicIconStickers`: Journal 📝, System 🎖 and
 Motivation 🔥. Prompt kinds route to them: `brief` and `checkin` to Journal,
 `report` to System, `motivation` to Motivation. Only messages in Journal are
 captured. A topic deleted by hand is recreated on the next post to it. Topic
-ids, prompts sent and the last announced level live in `copilot-state.json`,
-which only the bot writes.
+ids, prompts sent, the last announced level and the menu message ids live in
+`copilot-state.json`, which only the bot writes.
+
+Each topic's intro is also its menu: inline buttons for Journal (Brief, Today,
+Mood, Habits, Help), System (Level, Week) and Motivation (Motivate), pinned in
+the topic. A topic made before menus existed has its intro, the message right
+after the topic's creation, edited into the menu. The menu is edited in place
+when its text or buttons change, and posted again only when it cannot be
+edited. Pinning needs the **Pin messages** administrator right. A refused pin
+is retried every five minutes.
 
 `/motivate` runs the Claude Code CLI on the host with `ANTHROPIC_API_KEY` and
 `CLAUDECODE` unset, so it uses the host's claude.ai login. It needs the
