@@ -51,6 +51,11 @@ disabled by `off`). The reply header names the model that wrote it. It needs the
 encrypted home unlocked, and falls back to the no-model pick when the call
 fails.
 
+A script result that carries `parse_mode` is sent with it. The briefs use HTML
+so their habit sections arrive as an aligned monospace table. When Telegram
+cannot parse a formatted message, the bot resends it as plain text with the tags
+removed, so formatting never costs the message.
+
 Sent prompts are recorded in `copilot-state.json` and logged with
 `append_inbox.py --kind prompt-sent`. The schedule's `enabled` flags are the only
 arming gate, so a fresh install sends nothing unprompted.
