@@ -68,6 +68,39 @@ else
   stage_plaintext_copy \
     "$DOTFILES_PATH/scripts/agent-bridge.py" \
     "$AGENT_ROOT/bin/agent-bridge.py" 0755 || FAILED=1
+
+fi
+
+# telegram-user.py acts as your Telegram account where a bot cannot: it mutes a
+# fresh topic and clears topics, for this bridge and for Black System alike.
+# Telethon lives in its own venv so both bots stay stdlib only, and under /srv
+# so a boot service can read it. The session is written by
+# `telegram-user.py login`, never by this script.
+TELEGRAM_ROOT="/srv/services/telegram"
+TELEGRAM_VENV="$TELEGRAM_ROOT/venv"
+
+if mkdir -p "$TELEGRAM_ROOT/bin"; then
+  stage_plaintext_copy \
+    "$DOTFILES_PATH/scripts/telegram-user.py" \
+    "$TELEGRAM_ROOT/bin/telegram-user.py" 0755 || FAILED=1
+  if [ -f "$TELEGRAM_ROOT/user.env" ]; then
+    echo "current: $TELEGRAM_ROOT/user.env (left alone, it holds a session)"
+  else
+    install -m 0600 "$DOTFILES_PATH/os/linux/srv/telegram/user.env.sample" "$TELEGRAM_ROOT/user.env" \
+      && echo "seeded: $TELEGRAM_ROOT/user.env (add the app id and hash, then run telegram-user.py login)" \
+      || FAILED=1
+  fi
+else
+  echo "blocked: cannot create $TELEGRAM_ROOT/bin"
+  FAILED=1
+fi
+
+if [ -x "$TELEGRAM_VENV/bin/python" ] && "$TELEGRAM_VENV/bin/python" -c "import telethon" 2>/dev/null; then
+  echo "current: $TELEGRAM_VENV (telethon)"
+elif python3 -m venv "$TELEGRAM_VENV" && "$TELEGRAM_VENV/bin/python" -m pip install --quiet telethon; then
+  echo "staged: $TELEGRAM_VENV (telethon)"
+else
+  echo "Optional: could not build $TELEGRAM_VENV with telethon. Topics will not be muted or cleared."
 fi
 
 # Optional PNG renderer. Keep it outside the encrypted home for the service.

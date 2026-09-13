@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location('bridge', Path(__file__).with_name('agent-bridge.py'))
 b = importlib.util.module_from_spec(spec)
@@ -24,6 +24,94 @@ class BridgeTests(unittest.TestCase):
         self.tmux = Mock()
         self.tmux.exists.return_value = True
         self.bridge = b.Bridge(b.Config('fake', -1, {2}, ['vault'], self.path), self.state, self.tg, self.tmux)
+
+    def helper(self, run=None, popen=None):
+        patches = [patch.object(b, 'find_user_command', return_value=['py', 'helper'])]
+        if run is not None:
+            patches.append(patch.object(b.subprocess, 'run', run))
+        if popen is not None:
+            patches.append(patch.object(b.subprocess, 'Popen', popen))
+        for active in patches:
+            active.start()
+            self.addCleanup(active.stop)
+
+    @staticmethod
+    def replies(stdout='{"ok": true}'):
+        return Mock(return_value=Mock(returncode=0, stdout=stdout, stderr=''))
+
+    def callback(self, data):
+        return {'id': 'q', 'data': data, 'from': {'id': 2}, 'message': {'chat': {'id': -1}, 'message_id': 30}}
+
+    def test_fresh_topic_is_muted_once_and_reuse_never_mutes(self):
+        run = self.replies()
+        self.helper(run)
+        self.assertEqual(self.bridge.topic_for('vault'), 6)
+        self.assertEqual(self.bridge.topic_for('api'), 7)
+        self.assertEqual(self.bridge.topic_for('api'), 7)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ['py', 'helper', 'mute', '-1', '7'])
+
+    def test_failed_mute_still_creates_the_topic(self):
+        self.helper(Mock(side_effect=b.subprocess.TimeoutExpired('mute', 30)))
+        self.assertEqual(self.bridge.topic_for('api'), 7)
+        self.assertEqual(b.State.load(self.path).topics['api'], 7)
+
+    def test_topics_start_unmuted_without_the_user_helper(self):
+        run = Mock()
+        with patch.object(b, 'find_user_command', return_value=None), patch.object(b.subprocess, 'run', run):
+            self.assertEqual(self.bridge.topic_for('api'), 7)
+        run.assert_not_called()
+
+    def test_clear_asks_first_then_clears_the_topic_and_keeps_the_guide(self):
+        self.state.guide_message_id = 20
+        self.state.save()
+        run = self.replies('{"ok": true, "deleted": 3}')
+        self.helper(run)
+        self.bridge.handle_command('clear', '', 'vault', 6)
+        run.assert_not_called()
+        asked = self.tg.send.call_args.kwargs
+        self.assertEqual(asked['thread_id'], 6)
+        self.assertEqual([button['callback_data'] for button in asked['markup']['inline_keyboard'][0]], ['k:6', 'k:-'])
+        self.bridge.handle_callback(self.callback('k:6'))
+        self.assertEqual(run.call_args.args[0], ['py', 'helper', 'clear', '-1', '--thread', '6', '--keep', '20'])
+
+    def test_clear_in_general_touches_only_general(self):
+        run = self.replies()
+        self.helper(run)
+        self.bridge.handle_command('clear', '', None, None)
+        self.assertIsNone(self.tg.send.call_args.kwargs['thread_id'])
+        self.bridge.handle_callback(self.callback('k:0'))
+        self.assertEqual(run.call_args.args[0], ['py', 'helper', 'clear', '-1', '--general'])
+
+    def test_cancel_removes_the_question_and_clears_nothing(self):
+        run = Mock()
+        self.helper(run)
+        self.bridge.handle_callback(self.callback('k:-'))
+        run.assert_not_called()
+        self.tg.call.assert_any_call('deleteMessage', chat_id=-1, message_id=30)
+
+    def test_a_finished_turn_offers_clear_for_its_own_topic_only(self):
+        self.assertIn('clear', b.NOTIFY_BUTTONS['stop'])
+        self.helper(Mock())
+        self.bridge.handle_callback(self.callback('a:clear:vault'))
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 6)
+        self.tg.send.reset_mock()
+        self.bridge.handle_callback(self.callback('a:clear:unknown'))
+        self.tg.send.assert_not_called()
+
+    def test_prune_covers_every_topic_in_the_background_one_run_at_a_time(self):
+        self.state.topics['@limits'] = 12
+        self.state.guide_message_id = 20
+        self.state.save()
+        child = Mock()
+        child.poll.return_value = None
+        popen = Mock(return_value=child)
+        self.helper(popen=popen)
+        self.bridge.start_prune()
+        self.bridge.start_prune()
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(popen.call_args.args[0], ['py', 'helper', 'clear', '-1', '--general', '--older-than-days', '7',
+                                                   '--thread', '6', '--thread', '12', '--keep', '20'])
 
     def test_stale_offset_writer_cannot_resurrect_deleted_topic(self):
         stale = b.State.load(self.path)

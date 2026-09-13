@@ -252,6 +252,7 @@ prompt from a phone is then just replying to the message that told you about it.
 /say TEXT       type text and press Enter
 /esc            interrupt
 /enter          press Enter
+/clear          delete this topic's messages, after a confirmation
 /limits         Claude Code and Codex usage windows
 /id             report chat, thread and session ids, for setup
 /discover       run on the host, not in chat, to get ids before first start
@@ -401,8 +402,8 @@ history.
 
 ### The Limits topic
 
-Journal capture is not the bridge's job. It belongs to Black Copilot, see
-`doc/black-copilot.md`.
+Journal capture is not the bridge's job. It belongs to Black System, see
+`doc/black-system.md`.
 
 Neither Claude Code nor Codex raises a usage-limit event, so the
 daemon reads what each records locally, once a minute:
@@ -463,6 +464,25 @@ Single-file stdlib Python was chosen for one reason: no pip, no venv, no
 runtime to keep current, and it runs identically on a Mac and on a headless hub
 whose home is encrypted at boot. That reason is worth re-examining when any of
 the following changes.
+
+Two jobs sit outside that rule, because a bot cannot do them. Muting a topic is
+a per-account setting, and clearing one needs its history, which the Bot API
+does not expose, and the right to delete messages older than 48 hours.
+`scripts/telegram-user.py` does both as the user over MTProto with Telethon,
+from `/srv/services/telegram`, which Black System shares.
+
+The bridge mutes only right after `createForumTopic`, never on reuse, so a
+fresh topic starts muted and one you unmute stays unmuted. `/clear`, or
+🧹 Clear on a finished turn, deletes a topic's messages after a confirmation.
+Once a day a background run deletes messages older than 7 days from every
+topic and General, since the agents keep their own transcripts. The pinned
+guide is always kept. Without the helper, topics start unmuted and nothing is
+deleted.
+
+Log in once with
+`/srv/services/telegram/venv/bin/python /srv/services/telegram/bin/telegram-user.py login`.
+It refuses a bot token, and writes the session into
+`/srv/services/telegram/user.env` without printing it.
 
 | Option | Why not now | Revisit when |
 |---|---|---|

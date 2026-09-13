@@ -10,7 +10,10 @@ is implied, so a plain reply is typed into that session's pane. That is how a
 permission prompt gets answered from a phone.
 
 Deliberately stdlib only: no pip install, no venv, no runtime to keep current.
-It runs identically on a Mac and on a headless hub. See the module docstring in
+It runs identically on a Mac and on a headless hub. The exceptions are kept out
+of this file: muting a fresh topic and deleting messages need the user's
+account, so telegram-user.py does them with Telethon from its own venv, and the
+bridge works the same without it. See the module docstring in
 `doc/remote-agent-sessions.md` for the alternatives considered and when to
 revisit them.
 
@@ -28,7 +31,7 @@ session's directory is under AGENT_BRIDGE_CONTENT_ROOTS, so a work repository
 can be driven from the phone without its screen leaving the machine.
 
 One topic is not a session. ⏳ Limits reports Claude Code and Codex usage
-windows. Journal capture is not this bridge's job, see black-copilot.py.
+windows. Journal capture is not this bridge's job, see black-system.py.
 
 Subcommands
 -----------
@@ -109,6 +112,26 @@ def find_launcher() -> str | None:
             return candidate
     return None
 
+
+# Muting and clearing need the user's account, which the Bot API cannot act as,
+# so both go through telegram-user.py, a Telethon helper with its own venv that
+# Black System shares. Without it topics start unmuted and nothing is cleared.
+USER_ROOT = "/srv/services/telegram"
+USER_PYTHON = f"{USER_ROOT}/venv/bin/python"
+USER_HELPER = f"{USER_ROOT}/bin/telegram-user.py"
+USER_ENV = f"{USER_ROOT}/user.env"
+USER_TIMEOUT = 30
+CLEAR_TIMEOUT = 300
+# The agents' own transcripts hold everything, so the chat keeps a week.
+PRUNE_DAYS = 7
+PRUNE_INTERVAL = 24 * 3600
+
+
+def find_user_command() -> list[str] | None:
+    if os.access(USER_PYTHON, os.X_OK) and os.path.isfile(USER_HELPER) and os.path.isfile(USER_ENV):
+        return [USER_PYTHON, USER_HELPER]
+    return None
+
 # Button label -> what to send to the pane. Approving is positional in a TUI,
 # so the buttons send the keystrokes a human would press rather than pretending
 # to understand the prompt. Numbers mean different things per prompt: on a
@@ -121,6 +144,7 @@ BUTTONS: dict[str, tuple[str, str]] = {
     "yes": ("1 · Yes", "1"),
     "enter": ("⏎ Enter", ""),
     "esc": ("⎋ Esc", ""),
+    "clear": ("🧹 Clear", ""),
 }
 
 # Topics that are not tmux sessions. The "@" prefix cannot collide with a
@@ -144,6 +168,7 @@ GUIDE = """\u2301 BLACK AGENTS - operating guide
 Each topic with the \U0001F916 icon is one tmux session on the hub. The session
 keeps running when you close Telegram, the terminal, or your laptop. A session gets its topic the
 moment it starts, whether from here or from ags new at a terminal.
+A new topic starts muted. Unmute one and it stays unmuted.
 
 \u2500\u2500 DAILY \u2500\u2500
 /ls          what is running, with a button that opens each session's topic
@@ -151,6 +176,7 @@ moment it starts, whether from here or from ags new at a terminal.
 /say TEXT    type into the pane and press Enter
 /esc         interrupt the agent
 /enter       press Enter in the pane
+/clear       delete this topic's messages, after a confirmation
 
 Inside a session topic, a plain message is typed into the pane as well.
 In General, include the session: /peek vault, /say vault TEXT, /esc vault.
@@ -158,7 +184,7 @@ At a terminal use the same verbs: ags peek vault, ags say vault "TEXT".
 If plain messages stop arriving, privacy mode was turned back on. Use /say.
 
 General stays quiet. Plain messages there are ignored. Tasks, mood and notes
-for the journal go to Black Copilot, not here.
+for the journal go to Black System, not here.
 
 \u2500\u2500 LIMITS \u2500\u2500
 The Limits topic gets a message when Claude or Codex nears or reaches its 5-hour
@@ -185,9 +211,14 @@ Network errors never replace a topic. /bind NAME inside a topic reuses it.
 \u2500\u2500 BUTTONS \u2500\u2500
 Peek and Esc come with every notification. A permission prompt also gets
 1 \u00b7 Yes. Esc declines it. A question arrives as a card listing its options.
-Answer it at the terminal.
+Answer it at the terminal. A finished turn gets \U0001F9F9 Clear.
 Buttons send the keystrokes a human would press and do not read the prompt, so
 /peek before approving something you did not watch happen.
+
+\u2500\u2500 CLEARING \u2500\u2500
+Every day, messages older than 7 days are deleted from every topic. The agents
+keep their own transcripts, so nothing is lost. /clear or \U0001F9F9 Clear empties
+a topic now, after asking. This pinned guide always stays.
 
 \u2500\u2500 WHEN IT GOES QUIET \u2500\u2500
 No pings while a terminal is attached to the session. That is intended.
@@ -855,6 +886,7 @@ class Bridge:
         self.tg = tg
         self.tmux = tmux
         self.limits = UsageLimits(config)
+        self._prune: subprocess.Popen[str] | None = None
 
     def topic_for(self, session: str, create: bool = True) -> int | None:
         with self.state.locked(".topics.lock"):
@@ -882,7 +914,94 @@ class Bridge:
         thread_id = int(result["result"]["message_thread_id"])
         self.state.topics[session] = thread_id
         self.state.save()
+        # Only here, never on reuse, so a topic unmuted in Telegram stays so.
+        # It runs before the caller's first message, which then arrives silent.
+        self.mute_topic(thread_id)
         return thread_id
+
+    def run_user(self, *args: str, timeout: int = USER_TIMEOUT) -> dict[str, Any]:
+        """Run telegram-user.py and return its JSON line. Never raises."""
+        command = find_user_command()
+        if command is None:
+            return {"ok": False, "error": f"the Telegram user helper is not set up under {USER_ROOT}"}
+        try:
+            done = subprocess.run(command + list(args), capture_output=True, text=True, timeout=timeout)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "error": str(exc)}
+        try:
+            return json.loads((done.stdout or "").strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            detail = (done.stderr or done.stdout or "").strip().splitlines()
+            return {"ok": False, "error": detail[-1] if detail else f"exit {done.returncode}"}
+
+    def mute_topic(self, thread_id: int) -> bool:
+        """Mute a topic for the user's account. Best effort."""
+        if find_user_command() is None:
+            return False
+        result = self.run_user("mute", str(self.config.chat_id), str(thread_id))
+        if not result.get("ok"):
+            LOG.warning("topic %s left unmuted: %s", thread_id, result.get("error"))
+        return bool(result.get("ok"))
+
+    def confirm_clear(self, thread_id: int | None) -> None:
+        """Ask before clearing a topic. None, or thread 1, is General."""
+        thread = None if thread_id in (None, 1) else int(thread_id)
+        if find_user_command() is None:
+            self.tg.send(self.config.chat_id, f"Clearing needs the Telegram user helper under {USER_ROOT}.",
+                         thread_id=thread)
+            return
+        where = "this topic" if thread else "General. The pinned guide stays"
+        markup = {"inline_keyboard": [[
+            {"text": "\U0001F9F9 Yes, clear", "callback_data": f"k:{thread or 0}"},
+            {"text": "Cancel", "callback_data": "k:-"},
+        ]]}
+        self.tg.send(self.config.chat_id, f"Delete every message in {where}?", thread_id=thread, markup=markup)
+
+    def finish_clear(self, choice: str, message: dict[str, Any]) -> None:
+        """Act on a confirmation: k:- cancels, k:0 clears General, k:N a topic."""
+        if choice == "-":
+            try:
+                self.tg.call("deleteMessage", chat_id=self.config.chat_id, message_id=message.get("message_id"))
+            except (TelegramError, urllib.error.URLError, OSError):
+                pass
+            return
+        try:
+            thread = int(choice)
+        except ValueError:
+            return
+        args = ["clear", str(self.config.chat_id)]
+        args += ["--thread", str(thread)] if thread else ["--general"]
+        self.state.reload()
+        if self.state.guide_message_id:
+            args += ["--keep", str(self.state.guide_message_id)]
+        result = self.run_user(*args, timeout=CLEAR_TIMEOUT)
+        if not result.get("ok"):
+            self.tg.send(self.config.chat_id, f"Could not clear: {result.get('error')}", thread_id=thread or None)
+
+    def start_prune(self) -> None:
+        """Delete messages older than PRUNE_DAYS from every topic, without blocking the loop."""
+        if self._prune is not None and self._prune.poll() is None:
+            return
+        command = find_user_command()
+        if command is None:
+            return
+        self.state.reload()
+        args = command + ["clear", str(self.config.chat_id), "--general", "--older-than-days", str(PRUNE_DAYS)]
+        for thread in sorted(set(self.state.topics.values())):
+            args += ["--thread", str(thread)]
+        if self.state.guide_message_id:
+            args += ["--keep", str(self.state.guide_message_id)]
+        try:
+            self._prune = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        except OSError as exc:
+            LOG.warning("could not start the prune: %s", exc)
+
+    def reap_prune(self) -> None:
+        if self._prune is None or self._prune.poll() is None:
+            return
+        output = (self._prune.stdout.read() if self._prune.stdout else "").strip()
+        self._prune = None
+        LOG.info("prune: %s", output.splitlines()[-1] if output else "finished with no output")
 
     def session_for(self, thread_id: int | None) -> str | None:
         if thread_id is None:
@@ -1272,6 +1391,10 @@ class Bridge:
             )
             return
 
+        if command == "clear":
+            self.confirm_clear(None if thread_id is None else int(thread_id))
+            return
+
         if command == "id":
             self.post(
                 None,
@@ -1287,6 +1410,7 @@ class Bridge:
                 "/say TEXT  type text\n"
                 "/esc       interrupt\n"
                 "/enter     press Enter\n"
+                "/clear     delete this topic's messages\n"
                 "/ls        list sessions\n"
                 "/new S [a] start a session, blank conversation\n"
                 "/resume S [a] start a session and continue where it left off\n"
@@ -1340,8 +1464,10 @@ class Bridge:
         user_id = callback.get("from", {}).get("id")
         data = callback.get("data") or ""
 
+        clearing = data.startswith("k:") and data != "k:-"
         try:
-            self.tg.call("answerCallbackQuery", callback_query_id=callback.get("id"))
+            self.tg.call("answerCallbackQuery", callback_query_id=callback.get("id"),
+                         text="Clearing…" if clearing else None)
         except Exception:  # noqa: BLE001 - acknowledging is best effort
             pass
 
@@ -1352,12 +1478,22 @@ class Bridge:
             self.open_topic(data[2:])
             return
 
+        if data.startswith("k:"):
+            self.finish_clear(data[2:], message)
+            return
+
         parts = data.split(":", 2)
         if len(parts) != 3 or parts[0] != "a":
             return
         _, action, session = parts
         if action == "peek":
             self.send_peek(session)
+            return
+        if action == "clear":
+            # Only a session with a known topic, so a stale button can never clear General.
+            thread = self.topic_for(session, create=False)
+            if thread is not None:
+                self.confirm_clear(thread)
             return
         body = self.act(session, action)
         self.post(session, body, buttons=["peek", "esc"])
@@ -1374,6 +1510,7 @@ class Bridge:
         ("say", "Type text into the pane and press Enter"),
         ("esc", "Interrupt the agent"),
         ("enter", "Press Enter in the pane"),
+        ("clear", "Delete this topic's messages, after a confirmation"),
         ("limits", "Claude and Codex usage and reset times"),
         ("help", "Show these commands"),
     ]
@@ -1512,6 +1649,9 @@ class Bridge:
 
         backoff = 1
         next_limits = 0.0
+        # A minute in, then daily. A prune only deletes what is already a week old,
+        # so running again after a redeploy costs nothing.
+        next_prune = time.time() + 60
         while running:
             if loaded_mtime is not None and script.stat().st_mtime != loaded_mtime:
                 LOG.info("bridge file changed, reloading")
@@ -1523,6 +1663,10 @@ class Bridge:
                     self.limits.check(lambda text: self.post(LIMITS, text))
                 except Exception as exc:  # noqa: BLE001 - limits must never stop the loop
                     LOG.exception("limits check failed: %s", exc)
+            self.reap_prune()
+            if time.time() >= next_prune:
+                next_prune = time.time() + PRUNE_INTERVAL
+                self.start_prune()
             try:
                 result = self.tg.call(
                     "getUpdates",
@@ -1606,7 +1750,7 @@ NOTIFY_BUTTONS = {
     "permission": ["peek", "yes", "esc"],
     "question": ["peek", "esc"],
     "notification": ["peek", "esc"],
-    "stop": ["peek"],
+    "stop": ["peek", "clear"],
 }
 
 
