@@ -25,8 +25,17 @@ class SessionTests(unittest.TestCase):
             fake.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$AGENT_TEST_RECORD"\ncat\n')
             fake.chmod(0o755)
             record = root / 'invocations'
+            # A fake bridge, so the test never reaches the real Telegram group.
+            announced = root / 'announced'
+            bridge = root / 'bridge.py'
+            bridge.write_text('import sys\nwith open(%r, "a") as handle:\n'
+                              '    handle.write(" ".join(sys.argv[1:]) + "\\n")\n' % str(announced))
+            bridge_env = root / 'bridge.env'
+            bridge_env.write_text('')
             env = dict(os.environ, HOME=directory, TMUX='', TMUX_TMPDIR=directory,
-                       AGENT_SESSION_ROOT=directory, AGENT_TEST_RECORD=str(record))
+                       AGENT_SESSION_ROOT=directory, AGENT_TEST_RECORD=str(record),
+                       AGENT_BRIDGE_BIN=str(bridge), AGENT_BRIDGE_ENV=str(bridge_env))
+            env.pop('AGENT_BRIDGE_QUIET', None)
             def cli(*args, check=True):
                 return subprocess.run(['bash', str(SCRIPT), *args], env=env, check=check,
                                       capture_output=True, text=True, timeout=10)
@@ -42,6 +51,8 @@ class SessionTests(unittest.TestCase):
                 result = cli('new', 'fixture', 'codex')
                 self.assertIn('Started fixture', result.stdout)
                 wait_for(lambda: record.exists())
+                wait_for(lambda: announced.exists())
+                self.assertTrue(announced.read_text().startswith('topic fixture --text '))
                 pane = tmux('display-message', '-p', '-t', 'fixture:agent', '#{pane_id}')
                 tmux('select-window', '-t', 'fixture:shell')
                 marker = 'C-c; $(touch ' + str(root / 'must-not-exist') + ')'
@@ -63,6 +74,13 @@ class SessionTests(unittest.TestCase):
                 self.assertEqual(record.read_text().splitlines(), ['', 'resume --last'])
                 cli('kill', 'fixture')
                 self.assertEqual(cli('ls').stdout, 'No sessions.\n')
+                wait_for(lambda: announced.read_text().count('--no-create') == 2)
+                before = announced.read_text()
+                subprocess.run(['bash', str(SCRIPT), 'new', 'quiet', 'shell'],
+                               env=dict(env, AGENT_BRIDGE_QUIET='1'), check=True,
+                               capture_output=True, text=True, timeout=10)
+                time.sleep(.3)
+                self.assertEqual(announced.read_text(), before)
             finally:
                 tmux('kill-server', check=False)
 

@@ -109,8 +109,13 @@ except Exception:
 
 if not event:
     hook = str(payload.get("hook_event_name", "")).lower()
-    kind = str(payload.get("type", "")).lower()
-    event = "notification" if hook == "notification" else "stop"
+    if hook == "pretooluse" and payload.get("tool_name") == "AskUserQuestion":
+        event = "question"
+    elif hook == "notification":
+        # Only a permission prompt may be answered with a Yes button.
+        event = "permission" if payload.get("notification_type") == "permission_prompt" else "notification"
+    else:
+        event = "stop"
 
 cwd = payload.get("cwd") or os.getcwd()
 
@@ -146,7 +151,10 @@ may_send_body = allowed(cwd)
 title = ""
 body = ""
 
-if event == "notification":
+questions = []
+if event == "question":
+    questions = [q for q in ((payload.get("tool_input") or {}).get("questions") or []) if isinstance(q, dict)]
+elif event in ("notification", "permission"):
     body = str(payload.get("message", "")).strip()
 else:
     # Codex hands the final message over directly.
@@ -182,7 +190,10 @@ else:
                     break
 
 lines = []
-if event == "notification":
+if event == "question":
+    count = len(questions)
+    lines.append("❓ " + subject + " needs " + ("an answer" if count == 1 else "answers to " + str(count) + " questions"))
+elif event in ("notification", "permission"):
     lines.append("\U0001F514 " + subject + " needs you")
 else:
     lines.append("✅ " + subject + " finished")
@@ -195,6 +206,27 @@ if branch:
     meta.append(branch)
 meta.append(str(changed) + " changed" if changed else "clean")
 lines.append(" · ".join(meta))
+
+
+def flat(value, cap):
+    return " ".join(str(value or "").split())[:cap]
+
+
+# A question card: each question with its numbered options. Options are shown,
+# not offered as buttons, because which keystroke picks an option depends on
+# where the question screen currently is.
+if questions and may_send_body:
+    for number, item in enumerate(questions, 1):
+        header = flat(item.get("header"), 40)
+        lines.append("")
+        lines.append(str(number) + ". " + (header + ": " if header else "") + flat(item.get("question"), 300))
+        for index, option in enumerate(item.get("options") or [], 1):
+            if isinstance(option, dict):
+                lines.append("   " + str(index) + ") " + flat(option.get("label"), 80))
+        if item.get("multiSelect"):
+            lines.append("   (any number of these)")
+    lines.append("")
+    lines.append("Answer at the terminal. /peek shows where it is.")
 
 if body and may_send_body:
     body = " ".join(body.split())
@@ -235,6 +267,10 @@ bridge_env="${AGENT_BRIDGE_ENV:-/srv/services/agents/bridge.env}"
 
 if [[ -n "$bridge" ]] && [[ -r "$bridge_env" ]] && command -v python3 >/dev/null 2>&1; then
   case "$payload" in
+    *'"tool_name":"AskUserQuestion"'*|*'"tool_name": "AskUserQuestion"'*)
+      resolved_event="question" ;;
+    *'"notification_type":"permission_prompt"'*|*'"notification_type": "permission_prompt"'*)
+      resolved_event="permission" ;;
     *'"hook_event_name":"Notification"'*|*'"hook_event_name": "Notification"'*)
       resolved_event="notification" ;;
     *) resolved_event="stop" ;;

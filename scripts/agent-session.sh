@@ -44,7 +44,7 @@ Examples:
 
 Telegram: /new vault codex, /resume vault codex, /kill vault, /ls.
 Inside the vault topic: /peek, /say TEXT, /esc, /enter.
-Use /bind vault in Telegram to associate a topic with a running session.
+On the hub, new, resume and open give a session its Telegram topic.
 
 Environment:
   AGENT_SESSION_ROOT  Default working directory
@@ -124,6 +124,23 @@ resolve_root() {
   done
 
   pwd
+}
+
+# Tell the Telegram bridge about a lifecycle change on this host, so a session
+# started at a terminal gets its topic without a trip through /bind. It runs in
+# the background and says nothing. No bridge, no configuration or no network
+# all mean nothing happens, and the terminal never waits on Telegram. The
+# bridge sets AGENT_BRIDGE_QUIET when it calls this launcher, since it
+# announces its own sessions.
+announce_session() {
+  local bridge="${AGENT_BRIDGE_BIN:-/srv/services/agents/bin/agent-bridge.py}"
+  local env_file="${AGENT_BRIDGE_ENV:-/srv/services/agents/bridge.env}"
+
+  [[ -z "${AGENT_BRIDGE_QUIET:-}" ]] || return 0
+  [[ -r "$bridge" && -r "$env_file" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+
+  ( AGENT_BRIDGE_ENV="$env_file" python3 "$bridge" topic "$@" >/dev/null 2>&1 & ) || true
 }
 
 # The binary, for the on-PATH check. Kept apart from the command line below,
@@ -243,6 +260,12 @@ cmd_open() {
 
   if [[ -n "$agent_cmd" ]]; then
     tmux send-keys -t "$name:agent" "$agent_cmd" Enter
+  fi
+
+  if [[ "$resume" == true ]]; then
+    announce_session "$name" --text "🟢 $name started at a terminal, $agent continuing its last conversation."
+  else
+    announce_session "$name" --text "🟢 $name started at a terminal, running $agent in $dir."
   fi
 
   if [[ "$detached" == true ]]; then
@@ -412,6 +435,14 @@ attached_clients() {
   tmux list-clients -t "=$1" 2>/dev/null | grep -c . || true
 }
 
+cmd_kill() {
+  local name="${1:?A session name is required}"
+
+  tmux kill-session -t "=$name"
+  announce_session "$name" --no-create \
+    --text "killed $name at a terminal. /resume $name picks the conversation up again."
+}
+
 cmd_remote() {
   local host="${AGENT_SESSION_HOST:-mint}" remote_args quoted arg
 
@@ -459,7 +490,7 @@ case "$command" in
   peek|say|esc|enter) cmd_pane "$command" "$@" ;;
   ls|list)     cmd_ls ;;
   mobile)      cmd_mobile "$@" ;;
-  kill)        tmux kill-session -t "=${1:?A session name is required}" ;;
+  kill)        cmd_kill "$@" ;;
   remote)      cmd_remote "$@" ;;
   unlock)      cmd_unlock ;;
   help|-h|--help) usage ;;

@@ -243,7 +243,7 @@ prompt from a phone is then just replying to the message that told you about it.
 | `doctor` | Checks configuration, bot reachability and tmux, and reports ids |
 
 ```text
-/ls             list sessions and whether each is allowed
+/ls             list sessions, with a button that opens or creates each topic
 /new S [agent]  start a session through the launcher, default claude
 /resume S [a]  continue the last conversation if the session is stopped
 /bind S         bind a topic to a session that already exists
@@ -252,6 +252,7 @@ prompt from a phone is then just replying to the message that told you about it.
 /say TEXT       type text and press Enter
 /esc            interrupt
 /enter          press Enter
+/limits         Claude Code and Codex usage windows
 /id             report chat, thread and session ids, for setup
 /discover       run on the host, not in chat, to get ids before first start
 ```
@@ -260,11 +261,32 @@ prompt from a phone is then just replying to the message that told you about it.
 have the same lifecycle behavior as `ags new` and `ags resume`. `/bind` handles
 Telegram topic association. `/open` remains a compatibility alias for `/bind`.
 Inside a topic, the session is inferred. In General, pane commands take the
-same explicit session name as their terminal counterparts.
+same explicit session name as their terminal counterparts. Plain messages in
+General are ignored rather than answered.
 
-Buttons on a notification cover the same ground without typing: peek, `1`, `2`,
-and interrupt. They send the keystrokes a human would press rather than
-pretending to understand the prompt, because approving is positional in a TUI.
+The launcher gives terminal sessions their topics too. When `new`, `resume` or
+`open` creates a session, and when `kill` ends one, `agent-session.sh` runs
+`agent-bridge.py topic NAME --text ...` in the background. It does nothing when
+the staged bridge or `bridge.env` is missing, so machines without a bridge are
+unaffected, and it never makes the terminal wait on Telegram. The bridge sets
+`AGENT_BRIDGE_QUIET` when it calls the launcher, so a `/new` is announced once.
+`AGENT_BRIDGE_BIN` points the launcher at another bridge, which the tests use.
+
+Every notification carries Peek and Esc. Only a Claude Code permission prompt,
+reported by the hook as `notification_type: permission_prompt`, adds `1 · Yes`.
+There is no `2` button: on a permission prompt 2 is "Yes, and don't ask again",
+and on a question it picks an option, so no single label is true for both. Esc
+is the safe No.
+
+A `PreToolUse` hook on `AskUserQuestion`, seeded in `config/claude/settings.json`,
+posts a question card with `--event question`: the number of questions, then
+each with its numbered options, and Peek and Esc. Options are not buttons,
+because the keystroke that picks one depends on the question screen's state.
+Under a non-allowlisted root the card keeps the count and withholds the text.
+
+Buttons send the
+keystrokes a human would press rather than pretending to understand the
+prompt, because approving is positional in a TUI.
 
 ### Privacy mode, and sharing a bot
 
@@ -325,8 +347,13 @@ lock. Writers apply only changed fields against their loaded snapshot, so an
 old polling process cannot restore a deleted mapping or erase a newer one.
 
 `/bind NAME` inside an existing forum topic associates that topic with the
-session. In General it finds or creates the session's topic. This also lets you
-recover an orphaned topic if the state file was lost.
+session. In General it finds or creates the session's topic and replies with a
+link to it, which is also what the ➕ button in `/ls` does. Binding inside a
+topic also recovers an orphaned topic if the state file was lost.
+
+One key in the mapping is not a session. `@limits` holds the Limits topic.
+`session_allowed` refuses any name starting with `@`, so a tmux session can
+never claim it.
 
 ### Pane images and deployment
 
@@ -346,7 +373,8 @@ The hub's staged version is v0.2.2. No binary is committed to dotfiles.
 
 Stage changes with `restoration_scripts/51-agent-sessions.sh`. The daemon
 checks its script modification time between polls and re-executes when it
-changes. The first deployment to a daemon without that check needs a restart:
+changes, rereading `bridge.env` as it does. A configuration-only change needs a
+restart, or a fresh copy of the script. The first deployment to a daemon without that check needs a restart:
 
 ```bash
 sudo systemctl restart agent-bridge
@@ -371,6 +399,29 @@ python3 scripts/test_agent_session.py
 The bridge never deletes a topic. Removing one is a human decision about
 history.
 
+### The Limits topic
+
+Journal capture is not the bridge's job. It belongs to Black Copilot, see
+`doc/black-copilot.md`.
+
+Neither Claude Code nor Codex raises a usage-limit event, so the
+daemon reads what each records locally, once a minute:
+
+| Agent | Source |
+|---|---|
+| Claude Code | `rate_limits.five_hour` and `seven_day`, which Claude Code passes only to the status line. `scripts/agent-statusline.sh` prints them and caches the JSON at `~/.cache/agent-limits/claude.json`. It is seeded as `statusLine` in `config/claude/settings.json` |
+| Codex | `payload.rate_limits` from the last `token_count` event in the newest rollout under `$CODEX_HOME/sessions`, with `limit_id` `codex`. `primary` is the 300-minute window and `secondary` the 10080-minute one |
+
+Topics are created with plain names and an icon from
+`getForumTopicIconStickers`: 🤖 for a session, named after it, and ⚡️ for
+Limits. Each window produces at most three messages in Limits: crossing
+`AGENT_BRIDGE_LIMIT_WARN` (default 90, `0` disables), reaching 100% with the
+reset time, and the reset itself once a reached window's `resets_at` passes. A
+reset time that moves by more than ten minutes starts a new window. What was
+sent lives in `limits-state.json` beside the bridge state, and a failed post is
+retried on the next check rather than recorded. `AGENT_BRIDGE_LIMITS=off`
+disables the watcher, and `agent-bridge.py limits` prints the current windows.
+
 ### Security
 
 Anything that can type into a pane can run code on the host. Three gates, all
@@ -379,6 +430,16 @@ required, all fail closed:
 1. the update's chat must be the configured chat
 2. the sender's Telegram user id must be in `AGENT_BRIDGE_ALLOWED_USER_IDS`
 3. the target session must match `AGENT_BRIDGE_SESSIONS`
+
+On a single-user host, `AGENT_BRIDGE_SESSIONS=*` is reasonable, because the
+first two gates are what exclude other people. A narrower list mostly turns new
+session names into refusals.
+
+Viewing is gated separately from driving. `/peek` and the Peek button render a
+pane only when its directory is under `AGENT_BRIDGE_CONTENT_ROOTS`, which
+defaults to the same personal roots `agent-notify.sh` sends bodies from. A
+session in a work repository accepts `/say`, `/esc` and `/enter`, and its
+screen stays on the host. The check fails closed on an unknown directory.
 
 Text is sent with `tmux send-keys -l`, so a message containing something like
 `C-c` arrives as characters rather than as a key. Enter is always a separate,

@@ -23,10 +23,19 @@ required, all fail closed:
   2. the sender's Telegram user id must be in the allowlist
   3. the target tmux session must match the session allowlist
 
+Pane content has a fourth, narrower gate. /peek renders a pane only when the
+session's directory is under AGENT_BRIDGE_CONTENT_ROOTS, so a work repository
+can be driven from the phone without its screen leaving the machine.
+
+One topic is not a session. ⏳ Limits reports Claude Code and Codex usage
+windows. Journal capture is not this bridge's job, see black-copilot.py.
+
 Subcommands
 -----------
   serve    long-poll Telegram and act on messages and button presses
   notify   post one message into a session's topic, used by agent-notify.sh
+  topic    create or reuse a session's topic, used by agent-session.sh
+  limits   print usage windows, or post due limit messages with --check
   doctor   check configuration, connectivity and tmux, and report ids
 """
 
@@ -52,7 +61,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 LOG = logging.getLogger("agent-bridge")
 
@@ -102,14 +111,29 @@ def find_launcher() -> str | None:
 
 # Button label -> what to send to the pane. Approving is positional in a TUI,
 # so the buttons send the keystrokes a human would press rather than pretending
-# to understand the prompt.
+# to understand the prompt. Numbers mean different things per prompt: on a
+# Claude Code permission prompt 1 is Yes and 2 is "Yes, and don't ask again",
+# and on a question they pick options. So 1 is offered only on a permission
+# prompt, there is no 2 button, and Esc is the safe No. Anything else is
+# answered by typing into the topic.
 BUTTONS: dict[str, tuple[str, str]] = {
     "peek": ("👁 Peek", ""),
-    "yes": ("1 · yes", "1"),
-    "no": ("2 · no", "2"),
+    "yes": ("1 · Yes", "1"),
     "enter": ("⏎ Enter", ""),
-    "esc": ("⎋ Interrupt", ""),
+    "esc": ("⎋ Esc", ""),
 }
+
+# Topics that are not tmux sessions. The "@" prefix cannot collide with a
+# session, because session_allowed refuses it.
+LIMITS = "@limits"
+TOPIC_TITLES = {LIMITS: "Limits"}
+
+# Topic names stay plain and the emoji is the topic's icon. Telegram accepts
+# only icons from getForumTopicIconStickers, so these are those stickers' ids.
+SESSION_ICON = "5309832892262654231"  # 🤖
+TOPIC_ICONS = {LIMITS: "5312016608254762256"}  # ⚡️
+
+LIMITS_INTERVAL = 60
 
 
 # The pinned operating guide. It lives here rather than in a separate file so
@@ -117,23 +141,29 @@ BUTTONS: dict[str, tuple[str, str]] = {
 # same restore step. {sessions} is filled from the live allowlist.
 GUIDE = """\u2301 BLACK AGENTS - operating guide
 
-Each topic is one tmux session on the hub. The session keeps running when you
-close Telegram, the terminal, or your laptop.
+Each topic with the \U0001F916 icon is one tmux session on the hub. The session
+keeps running when you close Telegram, the terminal, or your laptop. A session gets its topic the
+moment it starts, whether from here or from ags new at a terminal.
 
 \u2500\u2500 DAILY \u2500\u2500
-/ls          what is running, and whether anyone is watching
+/ls          what is running, with a button that opens each session's topic
 /peek        show a colour image of the pane (tap to zoom)
 /say TEXT    type into the pane and press Enter
 /esc         interrupt the agent
 /enter       press Enter in the pane
 
+Inside a session topic, a plain message is typed into the pane as well.
 In General, include the session: /peek vault, /say vault TEXT, /esc vault.
 At a terminal use the same verbs: ags peek vault, ags say vault "TEXT".
-ags new vault codex and ags resume vault codex start detached.
-ags open vault attaches your terminal. /bind vault links a Telegram topic.
+If plain messages stop arriving, privacy mode was turned back on. Use /say.
 
-Plain typing does NOT reach me while privacy mode is on. Use /say, or reply
-directly to one of my messages.
+General stays quiet. Plain messages there are ignored. Tasks, mood and notes
+for the journal go to Black Copilot, not here.
+
+\u2500\u2500 LIMITS \u2500\u2500
+The Limits topic gets a message when Claude or Codex nears or reaches its 5-hour
+or weekly limit, with the reset time, and another once that window resets.
+/limits shows current usage.
 
 \u2500\u2500 LIFECYCLE \u2500\u2500
 /resume NAME   start it and continue the last conversation
@@ -153,8 +183,10 @@ Deleting a topic creates one replacement on the next delivery.
 Network errors never replace a topic. /bind NAME inside a topic reuses it.
 
 \u2500\u2500 BUTTONS \u2500\u2500
-Notifications carry: peek \u00b7 1 \u00b7 2 \u00b7 interrupt.
-They send the keystrokes a human would press, and do not read the prompt, so
+Peek and Esc come with every notification. A permission prompt also gets
+1 \u00b7 Yes. Esc declines it. A question arrives as a card listing its options.
+Answer it at the terminal.
+Buttons send the keystrokes a human would press and do not read the prompt, so
 /peek before approving something you did not watch happen.
 
 \u2500\u2500 WHEN IT GOES QUIET \u2500\u2500
@@ -162,7 +194,8 @@ No pings while a terminal is attached to the session. That is intended.
 /ls says "detached" when notifications are live.
 
 Sessions I may touch: {sessions}
-Anything else is refused until AGENT_BRIDGE_SESSIONS is widened on the hub.
+/peek shows a pane only for sessions under a personal root. A work repository
+can be driven from here but not viewed.
 
 \u2500\u2500 AFTER A REBOOT \u2500\u2500
 I come back on my own, but tmux sessions do not, and the agents live in the
@@ -184,12 +217,14 @@ class ConfigError(RuntimeError):
 DEFAULT_ENV_FILE = "/srv/services/agents/bridge.env"
 
 
-def load_env_file(path: str | os.PathLike[str] | None = None) -> None:
-    """Populate os.environ from a KEY=VALUE file, without overriding it.
+def load_env_file(path: str | os.PathLike[str] | None = None, override: bool = False) -> None:
+    """Populate os.environ from a KEY=VALUE file.
 
     systemd passes these through EnvironmentFile, but `notify` is invoked from
     an agent hook that inherits nothing, so it has to find the file itself.
-    Existing variables win, which keeps a shell override working for testing.
+    Existing variables win by default, which keeps a shell override working
+    for testing. `serve` overrides, so a re-exec after a deploy picks up an
+    edited file without a systemd restart.
     """
     candidate = Path(path or os.environ.get("AGENT_BRIDGE_ENV") or DEFAULT_ENV_FILE)
     try:
@@ -202,7 +237,10 @@ def load_env_file(path: str | os.PathLike[str] | None = None) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+        if override:
+            os.environ[key.strip()] = value.strip().strip("'\"")
+        else:
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
 @dataclass
@@ -213,6 +251,12 @@ class Config:
     session_patterns: list[str]
     state_path: Path
     tmux_socket: str | None = None
+    # None means no pane-content gate, which only code constructs. from_env
+    # always yields a list, so a deployed bridge fails closed.
+    content_roots: list[str] | None = None
+    limit_warn: int = 90
+    limits_enabled: bool = False
+    limits_state_path: Path | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -249,10 +293,255 @@ class Config:
             os.environ.get("AGENT_BRIDGE_STATE", "/srv/services/agents/bridge-state.json")
         )
         socket = os.environ.get("AGENT_BRIDGE_TMUX_SOCKET") or None
-        return cls(token, chat_id, users, patterns, state, socket)
+
+        # The same personal roots agent-notify.sh allows a message body from.
+        home = os.path.expanduser("~")
+        raw_roots = os.environ.get("AGENT_BRIDGE_CONTENT_ROOTS", "").strip()
+        roots = [part for part in raw_roots.split(":") if part] if raw_roots else [
+            f"{home}/Workspace/repos/github",
+            f"{home}/Workspace/repos/external",
+            "/srv/sync/blackvault",
+            os.environ.get("DOTFILES_PATH") or f"{home}/.dotfiles",
+        ]
+
+        raw_warn = os.environ.get("AGENT_BRIDGE_LIMIT_WARN", "90").strip() or "0"
+        try:
+            warn = int(raw_warn)
+        except ValueError as exc:
+            raise ConfigError(f"AGENT_BRIDGE_LIMIT_WARN is not an integer: {raw_warn}") from exc
+        limits = os.environ.get("AGENT_BRIDGE_LIMITS", "on").strip().lower() not in (
+            "off", "0", "false", "no",
+        )
+        limits_state = Path(
+            os.environ.get("AGENT_BRIDGE_LIMITS_STATE") or state.with_name("limits-state.json")
+        )
+        return cls(token, chat_id, users, patterns, state, socket, roots,
+                   warn, limits, limits_state)
 
     def session_allowed(self, name: str) -> bool:
+        if name.startswith("@"):
+            return False
         return any(fnmatch.fnmatch(name, pattern) for pattern in self.session_patterns)
+
+    def content_allowed(self, directory: str) -> bool:
+        """Whether a pane rooted here may be shown. Fails closed."""
+        if self.content_roots is None:
+            return True
+        if not directory or directory == "?":
+            return False
+        real = os.path.realpath(directory)
+        for root in self.content_roots:
+            base = os.path.realpath(os.path.expanduser(root))
+            if real == base or real.startswith(base + os.sep):
+                return True
+        return False
+
+
+# ── Usage limits ────────────────────────────────────────────────────────────
+
+
+@dataclass
+class UsageWindow:
+    agent: str
+    window: str
+    used: float
+    resets_at: int
+    observed_at: float
+
+    @property
+    def key(self) -> str:
+        return f"{self.agent.lower()}:{self.window}"
+
+
+def claude_windows(cache: Path) -> list[UsageWindow]:
+    """Windows from the cache that agent-statusline.sh writes.
+
+    Claude Code hands rate_limits to its status line and to nothing else, so
+    the status line is where they are caught.
+    """
+    try:
+        raw = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    limits = raw.get("rate_limits") if isinstance(raw, dict) else None
+    if not isinstance(limits, dict):
+        return []
+    observed = float(raw.get("observed_at") or 0)
+    windows = []
+    for name, label in (("five_hour", "5h"), ("seven_day", "7d")):
+        entry = limits.get(name) or {}
+        try:
+            windows.append(UsageWindow("Claude", label, float(entry["used_percentage"]),
+                                       int(entry["resets_at"]), observed))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return windows
+
+
+def codex_windows(sessions: Path) -> list[UsageWindow]:
+    """Windows from the last token_count event of the newest Codex rollout."""
+    try:
+        days = sorted(path for path in sessions.glob("*/*/*") if path.is_dir())[-2:]
+        rollouts = sorted((f for day in days for f in day.glob("*.jsonl")),
+                          key=lambda f: f.stat().st_mtime)
+    except OSError:
+        return []
+    for rollout in reversed(rollouts[-5:]):
+        try:
+            observed = rollout.stat().st_mtime
+            with open(rollout, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - 512_000))
+                tail = handle.read().decode("utf-8", "replace").splitlines()
+        except OSError:
+            continue
+        for line in reversed(tail):
+            if '"rate_limits"' not in line:
+                continue
+            try:
+                limits = json.loads(line)["payload"]["rate_limits"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            if not isinstance(limits, dict) or limits.get("limit_id") not in (None, "codex"):
+                continue
+            windows = []
+            for slot in ("primary", "secondary"):
+                entry = limits.get(slot) or {}
+                try:
+                    minutes = int(entry["window_minutes"])
+                    label = {300: "5h", 10080: "7d"}.get(minutes, f"{minutes // 60}h")
+                    windows.append(UsageWindow("Codex", label, float(entry["used_percent"]),
+                                               int(entry["resets_at"]), observed))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if windows:
+                return windows
+    return []
+
+
+def describe_reset(resets_at: int, now: float) -> str:
+    moment = time.localtime(resets_at)
+    remaining = max(0, int(resets_at - now))
+    if remaining >= 20 * 3600:
+        return "resets " + time.strftime("%a %d %b %H:%M", moment)
+    hours, minutes = divmod(remaining // 60, 60)
+    span = f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
+    return f"resets {time.strftime('%H:%M', moment)}, in {span}"
+
+
+class UsageLimits:
+    """Report Claude Code and Codex usage windows as they cross thresholds.
+
+    Neither agent raises a limit event that a hook can catch, but both record
+    their windows locally. Each window produces at most three messages: one on
+    crossing the warning threshold, one on reaching the limit, and one when a
+    window that was reached resets.
+    """
+
+    def __init__(
+        self, config: Config,
+        sources: Callable[[], list[UsageWindow]] | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self.config = config
+        self.clock = clock
+        if sources is None:
+            home = Path(os.path.expanduser("~"))
+            cache = Path(os.environ.get("AGENT_LIMITS_CACHE")
+                         or home / ".cache/agent-limits/claude.json")
+            codex = Path(os.environ.get("CODEX_HOME") or home / ".codex") / "sessions"
+            sources = lambda: claude_windows(cache) + codex_windows(codex)  # noqa: E731
+        self.sources = sources
+
+    def _load(self) -> dict[str, dict[str, Any]]:
+        path = self.config.limits_state_path
+        if path is None:
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _save(self, records: dict[str, dict[str, Any]]) -> None:
+        path = self.config.limits_state_path
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=path.parent, prefix=".limits-state-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(records, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            os.replace(name, path)
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+    def check(self, post: Callable[[str], None]) -> None:
+        now = self.clock()
+        records = self._load()
+        changed = False
+
+        def send(text: str) -> bool:
+            try:
+                post(text)
+                return True
+            except Exception as exc:  # noqa: BLE001 - retried on the next check
+                LOG.warning("could not post a limits message: %s", exc)
+                return False
+
+        for record in records.values():
+            due = now >= int(record.get("resets_at", 0))
+            if record.get("reached") and not record.get("reset_sent") and due:
+                if send(f"✅ {record.get('agent')} {record.get('window')} limit has reset. "
+                        "Available again."):
+                    record["reset_sent"] = True
+                    changed = True
+
+        for window in self.sources():
+            if window.resets_at <= now:
+                continue
+            record = records.get(window.key)
+            # Reset times wobble by seconds between reports. A jump means a new window.
+            if record is None or abs(int(record.get("resets_at", 0)) - window.resets_at) > 600:
+                record = {"agent": window.agent, "window": window.window,
+                          "resets_at": window.resets_at, "warned": False,
+                          "reached": False, "reset_sent": False}
+                records[window.key] = record
+                changed = True
+            when = describe_reset(window.resets_at, now)
+            if window.used >= 100 and not record["reached"]:
+                if send(f"⛔ {window.agent} {window.window} limit reached, {when}."):
+                    record.update(reached=True, warned=True)
+                    changed = True
+            elif 0 < self.config.limit_warn <= window.used < 100 and not record["warned"]:
+                if send(f"⚠️ {window.agent} {window.window} at {window.used:.0f}%, {when}."):
+                    record["warned"] = True
+                    changed = True
+
+        for key in [k for k, r in records.items() if int(r.get("resets_at", 0)) < now - 8 * 86400]:
+            records.pop(key)
+            changed = True
+        if changed:
+            self._save(records)
+
+    def report(self) -> str:
+        now = self.clock()
+        windows = self.sources()
+        if not windows:
+            return ("⏳ No usage data yet. Claude reports through its status line and Codex "
+                    "through its session files, so each appears after its first reply.")
+        lines = ["⏳ Usage"]
+        for window in windows:
+            seen = max(0, int((now - window.observed_at) // 60))
+            if window.resets_at <= now:
+                lines.append(f"{window.agent} {window.window}: window has reset (seen {seen}m ago)")
+                continue
+            mark = " ⛔" if window.used >= 100 else (
+                " ⚠️" if 0 < self.config.limit_warn <= window.used else "")
+            lines.append(f"{window.agent} {window.window} {window.used:.0f}%{mark}, "
+                         f"{describe_reset(window.resets_at, now)} (seen {seen}m ago)")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -261,6 +550,14 @@ class State:
     offset: int = 0
     topics: dict[str, int] = field(default_factory=dict)
     guide_message_id: int | None = None
+    # Telegram numbers updates per bot, so an offset only means something
+    # together with the bot it was read from.
+    bot_id: int | None = None
+
+    def __post_init__(self) -> None:
+        self._snapshot = dict(self.topics)
+        self._guide_snapshot = self.guide_message_id
+        self._offset_snapshot = (self.offset, self.bot_id)
 
     @classmethod
     def load(cls, path: Path) -> "State":
@@ -269,15 +566,14 @@ class State:
         except (OSError, ValueError):
             return cls(path=path)
         guide = raw.get("guide_message_id")
-        state = cls(
+        bot = raw.get("bot_id")
+        return cls(
             path=path,
             offset=int(raw.get("offset", 0)),
             topics={str(k): int(v) for k, v in (raw.get("topics") or {}).items()},
             guide_message_id=int(guide) if guide else None,
+            bot_id=int(bot) if bot else None,
         )
-        state._snapshot = dict(state.topics)
-        state._guide_snapshot = state.guide_message_id
-        return state
 
     @contextmanager
     def locked(self, suffix: str):
@@ -307,10 +603,15 @@ class State:
             old_guide = getattr(self, "_guide_snapshot", None)
             if self.guide_message_id != old_guide and fresh.guide_message_id == old_guide:
                 fresh.guide_message_id = self.guide_message_id
+            # The offset belongs to whoever advanced it. A hook holding an old
+            # copy must not write it back, and taking the larger value is wrong
+            # the moment the bot changes, because the new bot counts elsewhere.
+            if (self.offset, self.bot_id) != self._offset_snapshot:
+                fresh.offset, fresh.bot_id = self.offset, self.bot_id
             self.topics = fresh.topics
             self.guide_message_id = fresh.guide_message_id
-            self.offset = max(self.offset, fresh.offset)
-            payload = {"offset": self.offset, "topics": self.topics,
+            self.offset, self.bot_id = fresh.offset, fresh.bot_id
+            payload = {"offset": self.offset, "bot_id": self.bot_id, "topics": self.topics,
                        "guide_message_id": self.guide_message_id}
             fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".bridge-state-")
             try:
@@ -324,11 +625,15 @@ class State:
                 Path(name).unlink(missing_ok=True)
             self._snapshot = dict(self.topics)
             self._guide_snapshot = self.guide_message_id
+            self._offset_snapshot = (self.offset, self.bot_id)
 
     def reload(self) -> None:
         fresh = State.load(self.path)
         self.topics = fresh.topics
-        self.offset = max(self.offset, fresh.offset)
+        # An unsaved local offset wins. Otherwise adopt what is on disk.
+        if (self.offset, self.bot_id) == self._offset_snapshot:
+            self.offset, self.bot_id = fresh.offset, fresh.bot_id
+            self._offset_snapshot = (self.offset, self.bot_id)
         self.guide_message_id = fresh.guide_message_id
         self._snapshot = dict(self.topics)
         self._guide_snapshot = self.guide_message_id
@@ -401,9 +706,9 @@ class Telegram:
         session: str | None = None,
         parse_mode: str | None = None,
         photo: bytes | None = None,
+        markup: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        markup = None
-        if buttons and session:
+        if markup is None and buttons and session:
             row = [
                 {"text": BUTTONS[name][0], "callback_data": f"a:{name}:{session}"}
                 for name in buttons
@@ -549,6 +854,7 @@ class Bridge:
         self.state = state
         self.tg = tg
         self.tmux = tmux
+        self.limits = UsageLimits(config)
 
     def topic_for(self, session: str, create: bool = True) -> int | None:
         with self.state.locked(".topics.lock"):
@@ -563,7 +869,9 @@ class Bridge:
             return None
         try:
             result = self.tg.call(
-                "createForumTopic", chat_id=self.config.chat_id, name=f"⌁ {session}"
+                "createForumTopic", chat_id=self.config.chat_id,
+                name=TOPIC_TITLES.get(session, session),
+                icon_custom_emoji_id=TOPIC_ICONS.get(session, SESSION_ICON),
             )
         except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
             LOG.warning("could not create a topic for %s: %s", session, exc)
@@ -588,6 +896,7 @@ class Bridge:
     def post(
         self, session: str | None, text: str, buttons: list[str] | None = None,
         parse_mode: str | None = None, photo: bytes | None = None,
+        markup: dict[str, Any] | None = None,
     ) -> None:
         # Serialize lookup, delivery and replacement across daemon and hooks.
         # Only an explicit missing-topic response invalidates the mapping.
@@ -597,7 +906,8 @@ class Bridge:
                 raise TelegramError("could not resolve session topic")
             try:
                 self.tg.send(self.config.chat_id, text, thread_id=thread_id,
-                             buttons=buttons, session=session, parse_mode=parse_mode, photo=photo)
+                             buttons=buttons, session=session, parse_mode=parse_mode, photo=photo,
+                             markup=markup)
             except TelegramError as exc:
                 if not session or not exc.missing_topic:
                     raise
@@ -606,7 +916,46 @@ class Bridge:
                 if thread_id is None:
                     raise TelegramError("could not recreate deleted session topic") from exc
                 self.tg.send(self.config.chat_id, text, thread_id=thread_id,
-                             buttons=buttons, session=session, parse_mode=parse_mode, photo=photo)
+                             buttons=buttons, session=session, parse_mode=parse_mode, photo=photo,
+                             markup=markup)
+
+    def topic_link(self, thread_id: int | None) -> str | None:
+        """A t.me link into a topic. Only supergroup ids, which start -100, have one."""
+        raw = str(self.config.chat_id)
+        if thread_id is None or not raw.startswith("-100"):
+            return None
+        return f"https://t.me/c/{raw[4:]}/{thread_id}"
+
+    def topic_button(self, session: str) -> dict[str, str] | None:
+        thread_id = self.state.topics.get(session)
+        link = self.topic_link(thread_id)
+        if link:
+            return {"text": f"💬 {session}", "url": link}
+        data = f"t:{session}"
+        if len(data.encode()) > 64:
+            return None
+        return {"text": f"➕ {session}", "callback_data": data}
+
+    def open_topic(self, session: str) -> None:
+        """Create or reuse a running session's topic, then link to it from General."""
+        if not self.config.session_allowed(session):
+            self.post(None, f"session {session} is not in the allowlist")
+            return
+        if not self.tmux.exists(session):
+            self.post(None, f"no tmux session named {session}. Create it with /new {session}")
+            return
+        self.post(session, f"Topic bound to {session}. Type here to reach its pane.",
+                  buttons=["peek", "esc"])
+        link = self.topic_link(self.topic_for(session, create=False))
+        markup = {"inline_keyboard": [[{"text": f"💬 open {session}", "url": link}]]} if link else None
+        self.post(None, f"{session} has a topic.", markup=markup)
+
+    def pane_visible(self, session: str) -> bool:
+        return self.config.content_allowed(self.tmux.directory(session))
+
+    def withheld(self, session: str) -> str:
+        return (f"{session} runs outside the personal roots, so its pane stays on the hub. "
+                "/say, /esc and /enter still work.")
 
     def render_peek(self, session: str, lines: int) -> bytes:
         renderer = os.environ.get("AGENT_BRIDGE_FREEZE") or shutil.which("freeze")
@@ -633,12 +982,15 @@ class Bridge:
             return output.read_bytes()
 
     def send_peek(self, session: str, lines: int = PEEK_LINES) -> None:
-        buttons = ["peek", "yes", "no", "esc"]
+        buttons = ["peek", "esc"]
         if not self.config.session_allowed(session):
             self.post(None, f"session {session} is not in the allowlist")
             return
         if not self.tmux.exists(session):
             self.post(session, self.act(session, "peek"))
+            return
+        if not self.pane_visible(session):
+            self.post(session, self.withheld(session), buttons=["esc"])
             return
         lines = max(1, min(lines, 60))
         try:
@@ -686,7 +1038,10 @@ class Bridge:
             return "Session names cannot start with '-' or contain '.' or ':'."
         try:
             command = [launcher, "resume" if resume else "new", session, agent]
-            done = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            # The launcher announces sessions it starts. This one announces itself.
+            environment = dict(os.environ, AGENT_BRIDGE_QUIET="1")
+            done = subprocess.run(command, capture_output=True, text=True, timeout=30,
+                                  env=environment)
             if done.returncode:
                 return f"could not start {session}: {(done.stderr or done.stdout).strip()[:500]}"
         except (OSError, subprocess.SubprocessError) as exc:
@@ -742,16 +1097,21 @@ class Bridge:
             )
 
         if action == "peek":
-            return self.peek_message(session)
+            return self.peek_message(session) if self.pane_visible(session) else self.withheld(session)
         if action == "esc":
             error = self.tmux.send_key(session, "Escape")
             return error or f"sent Escape to {session}"
         if action == "enter":
             error = self.tmux.send_key(session, "Enter")
             return error or f"sent Enter to {session}"
-        if action in ("yes", "no"):
+        if action == "yes":
             error = self.tmux.type_text(session, BUTTONS[action][1], enter=True)
             return error or f"sent {BUTTONS[action][1]} to {session}"
+        if action == "no":
+            # Older messages still carry this button. On a permission prompt 2
+            # approves permanently, so it must never send anything.
+            return ("That button is retired, because 2 approves a permission prompt "
+                    "permanently. Use ⎋ Esc to decline.")
         if action == "say":
             if not argument:
                 return "nothing to say"
@@ -766,7 +1126,7 @@ class Bridge:
             return
 
         thread_id = message.get("message_thread_id")
-        session = self.session_for(int(thread_id)) if thread_id is not None else None
+        topic = self.session_for(int(thread_id)) if thread_id is not None else None
         text = (message.get("text") or "").strip()
         if not text:
             return
@@ -775,19 +1135,30 @@ class Bridge:
             parts = text.split(maxsplit=1)
             command = parts[0].split("@", 1)[0].lstrip("/").lower()
             argument = parts[1].strip() if len(parts) > 1 else ""
-            self.handle_command(command, argument, session, thread_id)
+            self.handle_command(command, argument, topic, thread_id, message)
             return
 
         # A plain message inside a session topic is the point of the whole
-        # design: reply to the notification and it lands in the pane.
-        if session:
-            self.post(session, self.act(session, "say", text))
-        else:
-            self.post(None, "Send that inside a session topic, or use /bind <session>.")
+        # design. Reply to the notification and it lands in the pane.
+        if topic and not topic.startswith("@"):
+            self.post(topic, self.act(topic, "say", text))
+            return
+
+        # General, the Limits topic and unbound topics are for people. Replying
+        # to every stray message there would make the bot the loudest member.
+        LOG.debug("ignoring plain text outside a session topic")
 
     def handle_command(
-        self, command: str, argument: str, session: str | None, thread_id: Any
+        self, command: str, argument: str, session: str | None, thread_id: Any,
+        message: dict[str, Any] | None = None,
     ) -> None:
+        if session and session.startswith("@"):
+            session = None
+
+        if command in ("limits", "usage"):
+            self.post(LIMITS, self.limits.report())
+            return
+
         if command in ("ls", "sessions"):
             rows = [r for r in self.tmux.summary() if not r["name"].endswith("-m")]
             if not rows:
@@ -799,6 +1170,8 @@ class Bridge:
                 )
                 return
 
+            self.state.reload()
+            keyboard = []
             lines = [f"{len(rows)} session{'s' if len(rows) != 1 else ''}", ""]
             for row in rows:
                 name = row["name"]
@@ -811,14 +1184,18 @@ class Bridge:
                 lines.append(f"    {detail} · {row['windows']} windows")
                 if allowed:
                     lines.append(f"    {self.tmux.directory(name)}")
+                    button = self.topic_button(name)
+                    if button:
+                        keyboard.append(button)
                 lines.append("")
-            lines.append("Open a session's topic and use /say TEXT or reply to a bot message.")
-            self.post(None, "\n".join(lines))
+            lines.append("💬 opens a session's topic. ➕ creates one.")
+            markup = {"inline_keyboard": [keyboard[i:i + 2] for i in range(0, len(keyboard), 2)]}
+            self.post(None, "\n".join(lines), markup=markup if keyboard else None)
             return
 
         if command in ("bind", "open"):
             # `open` is kept as an alias because it was the original name, but
-            # `bind` is the honest one: this attaches a topic to a session that
+            # `bind` is the honest one. This attaches a topic to a session that
             # already exists. Creating one is /new, matching `ags new`.
             target = argument or session or ""
             if not target:
@@ -829,6 +1206,9 @@ class Bridge:
                 return
             if not self.tmux.exists(target):
                 self.post(None, f"no tmux session named {target}. Create it with /new {target}")
+                return
+            if thread_id is None or int(thread_id) == 1:
+                self.open_topic(target)
                 return
             if thread_id is not None and int(thread_id) != 1:
                 with self.state.locked(".topics.lock"):
@@ -912,10 +1292,11 @@ class Bridge:
                 "/resume S [a] start a session and continue where it left off\n"
                 "/bind S    bind a topic to an existing session\n"
                 "/kill S    kill a session and its agent\n"
+                "/limits    Claude and Codex usage\n"
                 "/id        report ids for setup\n\n"
                 "In General: /peek S, /say S TEXT, /esc S, /enter S.\n"
                 "Terminal: ags followed by the same verb and session name.\n"
-                "ags open S attaches a terminal. /bind S links a Telegram topic.",
+                "ags open S attaches a terminal. Sessions get a topic when they start.",
             )
             return
 
@@ -967,6 +1348,10 @@ class Bridge:
         if not self.authorised(chat_id, user_id if user_id is None else int(user_id)):
             return
 
+        if data.startswith("t:"):
+            self.open_topic(data[2:])
+            return
+
         parts = data.split(":", 2)
         if len(parts) != 3 or parts[0] != "a":
             return
@@ -975,10 +1360,7 @@ class Bridge:
             self.send_peek(session)
             return
         body = self.act(session, action)
-        if action == "peek" and body.startswith("<b>"):
-            self.post(session, body, buttons=["peek", "yes", "no", "esc"], parse_mode="HTML")
-        else:
-            self.post(session, body, buttons=["peek", "yes", "no", "esc"])
+        self.post(session, body, buttons=["peek", "esc"])
 
     # ── the loop ────────────────────────────────────────────────────────────
 
@@ -992,6 +1374,7 @@ class Bridge:
         ("say", "Type text into the pane and press Enter"),
         ("esc", "Interrupt the agent"),
         ("enter", "Press Enter in the pane"),
+        ("limits", "Claude and Codex usage and reset times"),
         ("help", "Show these commands"),
     ]
 
@@ -1072,8 +1455,29 @@ class Bridge:
             f"{pinned.get('description')}. The bot needs the Pin Messages right."
         )
 
+    def drain_updates(self) -> None:
+        """Start a new bot at its newest update instead of replaying its queue.
+
+        An offset stored for a previous token means nothing to this one, and
+        polling with it makes Telegram hand back the same updates on every
+        request. Skipping what queued before the bridge owned the bot keeps
+        keystrokes at-most-once.
+        """
+        offset = 0
+        try:
+            pending = self.tg.call("getUpdates", offset=-1, timeout=0).get("result", [])
+            if pending:
+                offset = int(pending[-1]["update_id"]) + 1
+        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
+            LOG.warning("could not skip queued updates: %s", exc)
+        LOG.info("offset belongs to another bot, starting bot %s at %s", self.bot_id, offset)
+        self.state.offset, self.state.bot_id = offset, self.bot_id
+        self.state.save()
+
     def serve(self) -> int:
         running = True
+        if self.state.bot_id != self.bot_id:
+            self.drain_updates()
         # Re-exec when this file changes on disk. Deploying a fix and then
         # forgetting to restart meant the daemon quietly ran old code, which is
         # a whole class of confusing behaviour that need not exist. State lives
@@ -1107,11 +1511,18 @@ class Bridge:
         )
 
         backoff = 1
+        next_limits = 0.0
         while running:
             if loaded_mtime is not None and script.stat().st_mtime != loaded_mtime:
                 LOG.info("bridge file changed, reloading")
                 self.state.save()
                 os.execv(sys.executable, [sys.executable, str(script), "serve"])
+            if self.config.limits_enabled and time.time() >= next_limits:
+                next_limits = time.time() + LIMITS_INTERVAL
+                try:
+                    self.limits.check(lambda text: self.post(LIMITS, text))
+                except Exception as exc:  # noqa: BLE001 - limits must never stop the loop
+                    LOG.exception("limits check failed: %s", exc)
             try:
                 result = self.tg.call(
                     "getUpdates",
@@ -1161,13 +1572,48 @@ def build(config: Config) -> Bridge:
 
 
 def cmd_serve(_args: argparse.Namespace) -> int:
+    load_env_file(override=True)
     return build(Config.from_env()).serve()
+
+
+def cmd_topic(args: argparse.Namespace) -> int:
+    """Create or reuse a topic, optionally posting into it. Quiet on refusal."""
+    bridge = build(Config.from_env())
+    session = args.session
+    if session not in TOPIC_TITLES and not bridge.config.session_allowed(session):
+        print(f"session {session} is not in the allowlist")
+        return 1
+    if args.no_create and bridge.topic_for(session, create=False) is None:
+        return 0
+    if not args.text:
+        return 0 if bridge.topic_for(session) is not None else 1
+    buttons = ["peek", "esc"] if session not in TOPIC_TITLES and bridge.tmux.exists(session) else None
+    bridge.post(session, args.text, buttons=buttons)
+    return 0
+
+
+def cmd_limits(args: argparse.Namespace) -> int:
+    bridge = build(Config.from_env())
+    if args.check:
+        bridge.limits.check(lambda text: bridge.post(LIMITS, text))
+        return 0
+    print(bridge.limits.report())
+    return 0
+
+
+# A permission prompt is the only notification a button can answer safely.
+NOTIFY_BUTTONS = {
+    "permission": ["peek", "yes", "esc"],
+    "question": ["peek", "esc"],
+    "notification": ["peek", "esc"],
+    "stop": ["peek"],
+}
 
 
 def cmd_notify(args: argparse.Namespace) -> int:
     bridge = build(Config.from_env())
     session = args.session or "agent"
-    buttons = ["peek", "yes", "no", "esc"] if args.event == "notification" else ["peek", "esc"]
+    buttons = NOTIFY_BUTTONS.get(args.event, ["peek"])
     if args.dry_run:
         print(f"[{session}] buttons={buttons}\n{args.text}")
         return 0
@@ -1311,9 +1757,19 @@ def main(argv: list[str] | None = None) -> int:
     notify = sub.add_parser("notify", help="post one message into a session topic")
     notify.add_argument("--session")
     notify.add_argument("--text", required=True)
-    notify.add_argument("--event", default="stop", choices=["stop", "notification"])
+    notify.add_argument("--event", default="stop", choices=sorted(NOTIFY_BUTTONS))
     notify.add_argument("--dry-run", action="store_true")
     notify.set_defaults(func=cmd_notify)
+
+    topic = sub.add_parser("topic", help="create or reuse a session topic")
+    topic.add_argument("session", help="session name, or @limits")
+    topic.add_argument("--text", help="post this into the topic")
+    topic.add_argument("--no-create", action="store_true", help="only post if a topic exists")
+    topic.set_defaults(func=cmd_topic)
+
+    limits = sub.add_parser("limits", help="print Claude and Codex usage windows")
+    limits.add_argument("--check", action="store_true", help="post any due limit messages")
+    limits.set_defaults(func=cmd_limits)
 
     guide = sub.add_parser("guide", help="post, pin or refresh the operating guide")
     guide.add_argument("--pin", action="store_true", help="post and pin it if none exists yet")

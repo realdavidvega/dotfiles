@@ -32,6 +32,46 @@ class BridgeTests(unittest.TestCase):
         stale.save()
         self.assertEqual(b.State.load(self.path).topics, {})
 
+    def test_new_bot_skips_the_queue_instead_of_replaying_it(self):
+        stale = b.State.load(self.path)
+        stale.offset = 916563601
+        stale.save()
+        bridge = b.Bridge(b.Config('123:secret', -1, {2}, ['vault'], self.path), b.State.load(self.path), self.tg, self.tmux)
+        self.tg.call.return_value = {'ok': True, 'result': [{'update_id': 50}]}
+        bridge.drain_updates()
+        saved = b.State.load(self.path)
+        self.assertEqual((saved.offset, saved.bot_id), (51, 123))
+        self.assertEqual(self.tg.call.call_args.kwargs['offset'], -1)
+
+    def test_hook_with_an_old_copy_cannot_restore_a_stale_offset(self):
+        before = b.State.load(self.path)
+        before.offset, before.bot_id = 916563601, 999
+        before.save()
+        hook = b.State.load(self.path)
+        daemon = b.State.load(self.path)
+        daemon.offset, daemon.bot_id = 51, 123
+        daemon.save()
+        hook.topics['api'] = 12
+        hook.save()
+        hook.reload()
+        saved = b.State.load(self.path)
+        self.assertEqual((saved.offset, saved.bot_id), (51, 123))
+        self.assertEqual(saved.topics, {'vault': 6, 'api': 12})
+        daemon.offset = 52
+        daemon.reload()
+        self.assertEqual(daemon.offset, 52)
+
+    def test_only_permission_prompts_offer_approval(self):
+        self.assertEqual(b.NOTIFY_BUTTONS['permission'], ['peek', 'yes', 'esc'])
+        self.assertNotIn('yes', b.NOTIFY_BUTTONS['notification'])
+        self.assertNotIn('no', b.BUTTONS)
+
+    def test_retired_no_button_sends_nothing(self):
+        reply = self.bridge.act('vault', 'no')
+        self.assertIn('retired', reply)
+        self.tmux.type_text.assert_not_called()
+        self.tmux.send_key.assert_not_called()
+
     def test_stale_writer_preserves_replacement_and_guide(self):
         stale = b.State.load(self.path)
         self.state.topics['vault'] = 8
@@ -210,6 +250,108 @@ class BridgeTests(unittest.TestCase):
         tmux._pane.assert_called_once_with('vault')
         self.assertEqual(tmux._run.call_args_list[0].args, ('send-keys', '-t', '%7', '-l', '--', 'C-c; literal text'))
         self.assertEqual(tmux._run.call_args_list[1].args, ('send-keys', '-t', '%7', 'Enter'))
+
+    def test_ls_links_bound_topics_and_offers_creation(self):
+        bridge = b.Bridge(b.Config('fake', -1001234, {2}, ['*'], self.path), self.state, self.tg, self.tmux)
+        self.tmux.summary.return_value = [
+            {'name': 'vault', 'windows': '3', 'attached': '0'},
+            {'name': 'api', 'windows': '3', 'attached': '1'},
+            {'name': 'api-m', 'windows': '3', 'attached': '1'},
+        ]
+        self.tmux.running.return_value = 'claude'
+        self.tmux.directory.return_value = '/srv/sync/blackvault'
+        bridge.handle_command('ls', '', None, None)
+        rows = self.tg.send.call_args.kwargs['markup']['inline_keyboard']
+        self.assertEqual(rows, [[{'text': '💬 vault', 'url': 'https://t.me/c/1234/6'},
+                                 {'text': '➕ api', 'callback_data': 't:api'}]])
+
+    def test_create_button_makes_topic_and_links_it(self):
+        bridge = b.Bridge(b.Config('fake', -1001234, {2}, ['*'], self.path), self.state, self.tg, self.tmux)
+        bridge.handle_callback({'id': 'q', 'data': 't:api', 'from': {'id': 2},
+                                'message': {'chat': {'id': -1001234}}})
+        self.assertEqual(b.State.load(self.path).topics, {'vault': 6, 'api': 7})
+        last = self.tg.send.call_args.kwargs
+        self.assertIsNone(last['thread_id'])
+        self.assertEqual(last['markup']['inline_keyboard'][0][0]['url'], 'https://t.me/c/1234/7')
+
+    def test_reserved_topic_names_are_never_sessions(self):
+        config = b.Config('fake', -1, {2}, ['*'], self.path)
+        self.assertFalse(config.session_allowed('@limits'))
+        self.assertTrue(config.session_allowed('anything'))
+
+    def test_general_plain_text_is_ignored(self):
+        self.bridge.handle_message({'chat': {'id': -1}, 'from': {'id': 2}, 'text': 'tasks for later'})
+        self.tg.send.assert_not_called()
+        self.tmux.type_text.assert_not_called()
+
+    def test_plain_text_in_a_reserved_topic_is_ignored(self):
+        self.state.topics[b.LIMITS] = 30
+        self.state.save()
+        self.bridge.handle_message({'chat': {'id': -1}, 'from': {'id': 2}, 'text': 'call the bank',
+                                    'message_id': 5, 'message_thread_id': 30})
+        self.tmux.type_text.assert_not_called()
+        self.tg.send.assert_not_called()
+
+    def test_peek_withheld_outside_content_roots(self):
+        self.bridge.config.content_roots = ['/srv/sync/blackvault']
+        self.tmux.directory.return_value = '/home/black/Workspace/repos/work/client'
+        self.bridge.render_peek = Mock()
+        self.bridge.send_peek('vault')
+        self.bridge.render_peek.assert_not_called()
+        self.tmux.capture.assert_not_called()
+        self.assertIn('stays on the hub', self.tg.send.call_args.args[1])
+
+    def test_limits_warn_reach_and_reset_once_each(self):
+        now = [1000.0]
+        observed = []
+        config = b.Config('fake', -1, {2}, ['*'], self.path, limit_warn=90,
+                          limits_state_path=Path(self.tmp.name) / 'limits.json')
+        limits = b.UsageLimits(config, sources=lambda: observed, clock=lambda: now[0])
+        sent = []
+        observed[:] = [b.UsageWindow('Codex', '5h', 50, 5000, 1000)]
+        limits.check(sent.append)
+        observed[:] = [b.UsageWindow('Codex', '5h', 93, 5000, 1000)]
+        limits.check(sent.append)
+        limits.check(sent.append)
+        observed[:] = [b.UsageWindow('Codex', '5h', 100, 5010, 1000)]
+        limits.check(sent.append)
+        limits.check(sent.append)
+        now[0] = 5100
+        limits.check(sent.append)
+        limits.check(sent.append)
+        self.assertEqual([m.split()[0] for m in sent], ['⚠️', '⛔', '✅'])
+        self.assertIn('Codex 5h limit reached', sent[1])
+
+    def test_failed_limit_post_is_retried(self):
+        config = b.Config('fake', -1, {2}, ['*'], self.path,
+                          limits_state_path=Path(self.tmp.name) / 'limits.json')
+        limits = b.UsageLimits(config, sources=lambda: [b.UsageWindow('Claude', '5h', 100, 9000, 0)],
+                               clock=lambda: 1000.0)
+        def refuse(_text):
+            raise OSError('offline')
+        limits.check(refuse)
+        sent = []
+        limits.check(sent.append)
+        self.assertEqual(len(sent), 1)
+
+    def test_usage_sources_parse_claude_cache_and_codex_rollout(self):
+        base = Path(self.tmp.name)
+        cache = base / 'claude.json'
+        cache.write_text(json.dumps({'observed_at': 5, 'rate_limits': {
+            'five_hour': {'used_percentage': 42.4, 'resets_at': 100},
+            'seven_day': {'used_percentage': 18, 'resets_at': 200}}}))
+        self.assertEqual([(w.window, w.used, w.resets_at) for w in b.claude_windows(cache)],
+                         [('5h', 42.4, 100), ('7d', 18.0, 200)])
+        day = base / 'sessions/2026/09/12'
+        day.mkdir(parents=True)
+        codex = {'limit_id': 'codex', 'primary': {'used_percent': 100.0, 'window_minutes': 300, 'resets_at': 300},
+                 'secondary': {'used_percent': 31.0, 'window_minutes': 10080, 'resets_at': 400}}
+        premium = {'limit_id': 'premium', 'primary': None, 'secondary': None}
+        lines = [{'type': 'event_msg', 'payload': {'type': 'token_count', 'rate_limits': codex}},
+                 {'type': 'event_msg', 'payload': {'type': 'token_count', 'rate_limits': premium}}]
+        (day / 'rollout.jsonl').write_text('\n'.join(json.dumps(line) for line in lines) + '\n')
+        self.assertEqual([(w.window, w.used, w.resets_at) for w in b.codex_windows(base / 'sessions')],
+                         [('5h', 100.0, 300), ('7d', 31.0, 400)])
 
 if __name__ == '__main__':
     unittest.main()
