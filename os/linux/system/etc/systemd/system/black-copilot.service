@@ -1,0 +1,26 @@
+[Unit]
+Description=Black Copilot, the journal copilot's Telegram transport
+Documentation=https://github.com/realdavidvega/dotfiles
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=black
+Group=black
+EnvironmentFile=/srv/services/copilot/copilot.env
+ExecStart=/usr/bin/python3 /srv/services/copilot/bin/black-copilot.py serve
+Restart=always
+RestartSec=5
+
+# The poll is 15 seconds with a 30 second socket timeout.
+TimeoutStopSec=40
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
