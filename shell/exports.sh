@@ -271,11 +271,19 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
 
-  # The vault lives inside its own git checkout since the move off iCloud to
-  # Syncthing, so the work tree and the repo are one path. Keep them derived
-  # from a single value: a stale BLACK_VAULT silently unlinks every vault skill.
-  export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/tools/black-vault"
-  export BLACK_VAULT="$BLACK_VAULT_REPO"
+  # The vault moved off iCloud to a plain git checkout carried by Syncthing and
+  # Obsidian LiveSync, so the old Mobile Documents path no longer exists. Probe
+  # rather than assert: a wrong BLACK_VAULT silently disables every vault skill.
+  for _candidate in \
+    "$OS_WORKSPACE/github/black-vault" \
+    "$OS_WORKSPACE/repos/github/tools/black-vault" \
+    "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Black Vault"
+  do
+    [ -d "$_candidate" ] && export BLACK_VAULT="$_candidate" && break
+  done
+  # Work tree and git dir are the same directory now. The split layout, with
+  # GIT_DIR held outside the tree, was abandoned along with iCloud.
+  export BLACK_VAULT_REPO="${BLACK_VAULT:-}"
 
   # Machines disagree on where checkouts live: some use repos/github/tools/,
   # others a flat github/. Pick the one that exists rather than asserting a
