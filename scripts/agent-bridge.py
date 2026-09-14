@@ -30,8 +30,8 @@ Pane content has a fourth, narrower gate. /peek renders a pane only when the
 session's directory is under AGENT_BRIDGE_CONTENT_ROOTS, so a work repository
 can be driven from the phone without its screen leaving the machine.
 
-One topic is not a session. ⏳ Limits reports Claude Code and Codex usage
-windows. Journal capture is not this bridge's job, see black-system.py.
+Control and Limits are not sessions. Control holds the pinned action panel.
+Limits reports Claude Code and Codex usage windows. Journal capture is not this bridge's job, see black-system.py.
 
 Subcommands
 -----------
@@ -150,7 +150,8 @@ BUTTONS: dict[str, tuple[str, str]] = {
 # Topics that are not tmux sessions. The "@" prefix cannot collide with a
 # session, because session_allowed refuses it.
 LIMITS = "@limits"
-TOPIC_TITLES = {LIMITS: "Limits"}
+CONTROL = "@control"
+TOPIC_TITLES = {LIMITS: "Limits", CONTROL: "Control"}
 
 # Topic names stay plain and the emoji is the topic's icon. Telegram accepts
 # only icons from getForumTopicIconStickers, so these are those stickers' ids.
@@ -183,7 +184,7 @@ In General, include the session: /peek vault, /say vault TEXT, /esc vault.
 At a terminal use the same verbs: ags peek vault, ags say vault "TEXT".
 If plain messages stop arriving, privacy mode was turned back on. Use /say.
 
-General stays quiet. Plain messages there are ignored. Tasks, mood and notes
+Control lists sessions directly. Select one for its controls, or use New session.\n/control restores it. General stays quiet. Plain messages there are ignored. Tasks, mood and notes
 for the journal go to Black System, not here.
 
 \u2500\u2500 LIMITS \u2500\u2500
@@ -218,7 +219,7 @@ Buttons send the keystrokes a human would press and do not read the prompt, so
 \u2500\u2500 CLEARING \u2500\u2500
 Every day, messages older than 7 days are deleted from every topic. The agents
 keep their own transcripts, so nothing is lost. /clear or \U0001F9F9 Clear empties
-a topic now, after asking. This pinned guide always stays.
+a topic now, after asking. This pinned guide and the Control panel always stay.
 
 \u2500\u2500 WHEN IT GOES QUIET \u2500\u2500
 No pings while a terminal is attached to the session. That is intended.
@@ -887,6 +888,207 @@ class Bridge:
         self.tmux = tmux
         self.limits = UsageLimits(config)
         self._prune: subprocess.Popen[str] | None = None
+        self.control_path = state.path.with_name("control-panel.json")
+        try:
+            self.control_state = json.loads(self.control_path.read_text())
+        except (OSError, ValueError):
+            self.control_state = {}
+        self.limits_panel_path = state.path.with_name("limits-panel.json")
+        try:
+            self.limits_panel_state = json.loads(self.limits_panel_path.read_text())
+        except (OSError, ValueError):
+            self.limits_panel_state = {}
+        self.control_actions: dict[str, tuple[str, str, str]] = {}
+        self.control_pending: dict[int, tuple[int, str, float]] = {}
+
+    def publish_limits_panel(self) -> None:
+        thread = self.topic_for(LIMITS)
+        if thread is None:
+            raise TelegramError("could not create Limits topic")
+        text = "⏳ Limits\n\n" + self.limits.report()
+        markup = {"inline_keyboard": [[
+            {"text": "🔄 Refresh", "callback_data": "l:refresh"},
+            {"text": "🧹 Clear", "callback_data": "l:clear"},
+        ]]}
+        mid = self.limits_panel_state.get("message_id") if self.limits_panel_state.get("thread_id") == thread else None
+        if mid:
+            try:
+                self.tg.call("editMessageText", chat_id=self.config.chat_id, message_id=mid,
+                             text=text, reply_markup=markup)
+            except TelegramError as exc:
+                if "not modified" not in str(exc).lower():
+                    if "message to edit not found" not in str(exc).lower():
+                        raise
+                    mid = None
+        if not mid:
+            sent = self.tg.send(self.config.chat_id, text, thread_id=thread, markup=markup)
+            mid = int(sent["result"]["message_id"])
+            self.limits_panel_state = {"thread_id": thread, "message_id": mid}
+            fd, name = tempfile.mkstemp(dir=self.limits_panel_path.parent, prefix=".limits-panel-")
+            with os.fdopen(fd, "w") as handle:
+                json.dump(self.limits_panel_state, handle)
+            os.replace(name, self.limits_panel_path)
+        self.tg.call("pinChatMessage", chat_id=self.config.chat_id, message_id=mid, disable_notification=True)
+
+    def control_button(self, label: str, action: str, session: str = "", agent: str = "") -> dict[str, str]:
+        key = "c:" + uuid.uuid4().hex[:16]
+        self.control_actions[key] = (action, session, agent)
+        return {"text": label, "callback_data": key}
+
+    def control_panel(self, page: str = "home", session: str = "", notice: str = "") -> None:
+        """Render one pinned panel. Tokens from superseded screens expire."""
+        thread = self.topic_for(CONTROL)
+        if thread is None:
+            raise TelegramError("could not create Control topic")
+        self.control_actions.clear()
+        self.control_pending.clear()
+        b = self.control_button
+        rows = []
+        title = "💻 Black Agents"
+        if page == "home":
+            self.state.reload()
+            running = {r["name"] for r in self.tmux.summary() if not r["name"].endswith("-m")}
+            names = sorted(n for n in running | set(self.state.topics)
+                           if self.config.session_allowed(n) and not n.endswith("-m"))
+            body = "Choose a session or create a new one." if names else "Create your first session."
+            for name in names:
+                label = ("🟢 " + name + " · " + self.tmux.running(name)
+                         if name in running else "⚪ " + name + " · Stopped")
+                rows.append([b(label, "session", name)])
+            rows += [[b("➕ New session", "new"), b("❓ Help", "help")],
+                     [b("🔄 Refresh", "home"), b("🧹 Clear", "clear-control")]]
+        elif page == "new":
+            body = "Reply to the prompt below with a new session name."
+        elif page in ("new-agent", "resume-agent"):
+            title += " · " + session
+            body = "Choose the agent. " + ("Starts a blank conversation." if page == "new-agent" else "Continues its last conversation.")
+            rows = [[b(a.title(), page.replace("-agent", "-run"), session, a)]
+                    for a in ("claude", "codex", "opencode", "shell")]
+        elif page in ("session", "manage"):
+            title += " · " + session
+            running = self.tmux.exists(session)
+            body = ("🟢 " + self.tmux.running(session)) if running else "⚪ Stopped"
+            if page == "manage":
+                body += " · Manage"
+                if running:
+                    rows.append([b("🔗 Bind topic", "bind", session), b("⏹ Kill session", "kill", session)])
+                rows.append([b("🧹 Clear", "clear", session)])
+            else:
+                link = self.topic_link(self.topic_for(session, create=False))
+                if link:
+                    rows.append([{"text": "💬 Open topic", "url": link}])
+                if running:
+                    rows += [[b("👀 Peek", "peek", session), b("✉️ Send", "send", session)],
+                             [b("⎋ Escape", "esc", session), b("↵ Enter", "enter", session)]]
+                else:
+                    rows += [[b("▶️ Resume conversation", "resume-agent", session)],
+                             [b("✨ Start fresh", "new-agent", session)]]
+                rows.append([b("⚙️ Manage", "manage", session)])
+        elif page == "kill":
+            title += " · " + session
+            body = "Stop this session and its agent? The topic and saved conversation remain."
+            rows = [[b("⏹ Yes, kill " + session, "kill-confirm", session), b("Cancel", "session", session)]]
+        else:
+            body = ("Choose a session on the main panel to open its controls. Manage holds bind, kill and clear."
+                    "\nNew session asks for a new name. Stopped sessions offer Resume conversation and Start fresh."
+                    "\nSend requires a reply to the named prompt within five minutes. Back cancels it."
+                    "\n/ls /new /resume /bind /kill /peek /say /esc /enter /clear remain available."
+                    "\nIn Control, include the session name for terminal commands."
+                    "\nLimits stays in its own topic. /control restores this panel."
+                    f"\nSetup: chat {self.config.chat_id}, Control thread {thread}.")
+        if page != "home":
+            parent = "session" if page in ("manage", "kill", "new-agent", "resume-agent") else "home"
+            if page == "new-agent" and session not in self.state.topics:
+                parent = "new"
+            rows.append([b("⬅ Back", parent, session if parent == "session" else ""),
+                         b("🔄 Refresh", page, session)])
+        text = title + "\n\n" + (notice + "\n\n" if notice else "") + body
+        markup = {"inline_keyboard": rows}
+        mid = self.control_state.get("message_id") if self.control_state.get("thread_id") == thread else None
+        if mid:
+            try:
+                self.tg.call("editMessageText", chat_id=self.config.chat_id, message_id=mid,
+                             text=text, reply_markup=markup)
+            except TelegramError as exc:
+                if "not modified" not in str(exc).lower():
+                    if "message to edit not found" not in str(exc).lower():
+                        raise
+                    mid = None
+        if not mid:
+            sent = self.tg.send(self.config.chat_id, text, thread_id=thread, markup=markup)
+            mid = int(sent["result"]["message_id"])
+            self.control_state = {"thread_id": thread, "message_id": mid}
+            fd, name = tempfile.mkstemp(dir=self.control_path.parent, prefix=".control-")
+            with os.fdopen(fd, "w") as handle:
+                json.dump(self.control_state, handle)
+            os.replace(name, self.control_path)
+        self.tg.call("pinChatMessage", chat_id=self.config.chat_id, message_id=mid, disable_notification=True)
+
+    def handle_control(self, data: str, message: dict[str, Any], user: int) -> None:
+        if (message.get("message_id") != self.control_state.get("message_id") or
+                message.get("message_thread_id") != self.state.topics.get(CONTROL)):
+            return
+        choice = self.control_actions.pop(data, None)
+        if choice is None:
+            return
+        action, session, agent = choice
+        if session and not self.config.session_allowed(session):
+            self.control_panel(notice="This session is no longer allowed.")
+            return
+        if action in ("home", "help", "new-agent", "resume-agent", "session", "manage", "kill"):
+            self.control_panel(action, session)
+        elif action == "new":
+            self.prompt_new_session(user)
+        elif action in ("new-run", "resume-run"):
+            if self.tmux.exists(session):
+                result = f"{session} is already running. Stop it first to change its conversation."
+            else:
+                result = self.launch(session, agent, resume=action == "resume-run")
+            self.control_panel("session", session, result)
+        elif action == "kill-confirm":
+            result = self.tmux.kill(session) if self.tmux.exists(session) else "Session is already stopped."
+            self.control_panel("home", notice=result or f"Stopped {session}.")
+        elif action == "send":
+            self.control_panel("session", session, "Reply to the Send prompt below. Back cancels.")
+            sent = self.tg.send(self.config.chat_id, f"✉️ Send to {session}: reply to this message with the text to type and submit.",
+                                thread_id=self.state.topics[CONTROL],
+                                markup={"force_reply": True, "input_field_placeholder": f"Send to {session}"[:64]})
+            self.control_pending[user] = (int(sent["result"]["message_id"]), session, time.time() + 300)
+        elif action in ("peek", "esc", "enter"):
+            if action == "peek":
+                self.send_peek(session)
+                result = f"Peek sent to {session}'s topic."
+            else:
+                result = self.act(session, action)
+            self.control_panel("session", session, result)
+        elif action == "bind":
+            self.open_topic(session)
+            self.control_panel("session", session)
+        elif action in ("clear", "clear-control"):
+            self.control_panel("session" if session else "home", session)
+            thread = self.topic_for(session or CONTROL, create=False)
+            if thread is not None:
+                self.confirm_clear(thread)
+
+    def prompt_new_session(self, user: int, notice: str = "") -> None:
+        self.control_panel("new", notice=notice)
+        sent = self.tg.send(self.config.chat_id,
+                            "➕ New session: reply with a new name, using letters, numbers, hyphens or underscores.",
+                            thread_id=self.state.topics[CONTROL],
+                            markup={"force_reply": True, "input_field_placeholder": "New session name"})
+        self.control_pending[user] = (int(sent["result"]["message_id"]), "", time.time() + 300)
+
+    def accept_new_session(self, user: int, name: str) -> None:
+        self.state.reload()
+        if (not name or len(name) > 64 or not name[0].isascii() or not name[0].isalnum()
+                or not all(c.isascii() and (c.isalnum() or c in "-_") for c in name)):
+            self.prompt_new_session(user, "Use up to 64 letters, numbers, hyphens or underscores, starting with a letter or number.")
+        elif not self.config.session_allowed(name):
+            self.prompt_new_session(user, "That name is not allowed by the session configuration.")
+        elif name in self.state.topics or self.tmux.exists(name):
+            self.prompt_new_session(user, f"{name} already exists. Choose it from the main panel, or enter a different name.")
+        else:
+            self.control_panel("new-agent", name)
 
     def topic_for(self, session: str, create: bool = True) -> int | None:
         with self.state.locked(".topics.lock"):
@@ -950,7 +1152,9 @@ class Bridge:
             self.tg.send(self.config.chat_id, f"Clearing needs the Telegram user helper under {USER_ROOT}.",
                          thread_id=thread)
             return
-        where = "this topic" if thread else "General. The pinned guide stays"
+        where = "this topic. The pinned Control panel stays" if thread == self.state.topics.get(CONTROL) else ("this topic" if thread else "General. The pinned guide stays")
+        if thread == self.state.topics.get(LIMITS):
+            where = "this topic. The pinned Limits panel stays"
         markup = {"inline_keyboard": [[
             {"text": "\U0001F9F9 Yes, clear", "callback_data": f"k:{thread or 0}"},
             {"text": "Cancel", "callback_data": "k:-"},
@@ -974,6 +1178,10 @@ class Bridge:
         self.state.reload()
         if self.state.guide_message_id:
             args += ["--keep", str(self.state.guide_message_id)]
+        if self.control_state.get("message_id"):
+            args += ["--keep", str(self.control_state["message_id"])]
+        if self.limits_panel_state.get("message_id"):
+            args += ["--keep", str(self.limits_panel_state["message_id"])]
         result = self.run_user(*args, timeout=CLEAR_TIMEOUT)
         if not result.get("ok"):
             self.tg.send(self.config.chat_id, f"Could not clear: {result.get('error')}", thread_id=thread or None)
@@ -991,6 +1199,10 @@ class Bridge:
             args += ["--thread", str(thread)]
         if self.state.guide_message_id:
             args += ["--keep", str(self.state.guide_message_id)]
+        if self.control_state.get("message_id"):
+            args += ["--keep", str(self.control_state["message_id"])]
+        if self.limits_panel_state.get("message_id"):
+            args += ["--keep", str(self.limits_panel_state["message_id"])]
         try:
             self._prune = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         except OSError as exc:
@@ -1017,6 +1229,8 @@ class Bridge:
         parse_mode: str | None = None, photo: bytes | None = None,
         markup: dict[str, Any] | None = None,
     ) -> None:
+        self.state.reload()
+        session = session or (CONTROL if CONTROL in self.state.topics else None)
         # Serialize lookup, delivery and replacement across daemon and hooks.
         # Only an explicit missing-topic response invalidates the mapping.
         with self.state.locked(".topics.lock"):
@@ -1250,6 +1464,19 @@ class Bridge:
         if not text:
             return
 
+        if topic == CONTROL:
+            pending = self.control_pending.get(int(user_id))
+            reply = message.get("reply_to_message") or {}
+            if pending and reply.get("message_id") == pending[0] and time.time() < pending[2]:
+                self.control_pending.pop(int(user_id), None)
+                if pending[1]:
+                    self.post(CONTROL, self.act(pending[1], "say", text))
+                else:
+                    self.accept_new_session(int(user_id), text)
+                return
+            if not text.startswith("/"):
+                return
+
         if text.startswith("/"):
             parts = text.split(maxsplit=1)
             command = parts[0].split("@", 1)[0].lstrip("/").lower()
@@ -1274,8 +1501,14 @@ class Bridge:
         if session and session.startswith("@"):
             session = None
 
+        if command == "control":
+            self.control_panel()
+            return
+        if self.session_for(thread_id) == CONTROL and command in ("help", "start"):
+            self.control_panel("help")
+            return
         if command in ("limits", "usage"):
-            self.post(LIMITS, self.limits.report())
+            self.publish_limits_panel()
             return
 
         if command in ("ls", "sessions"):
@@ -1326,7 +1559,7 @@ class Bridge:
             if not self.tmux.exists(target):
                 self.post(None, f"no tmux session named {target}. Create it with /new {target}")
                 return
-            if thread_id is None or int(thread_id) == 1:
+            if thread_id is None or int(thread_id) == 1 or self.session_for(int(thread_id)) in TOPIC_TITLES:
                 self.open_topic(target)
                 return
             if thread_id is not None and int(thread_id) != 1:
@@ -1474,6 +1707,21 @@ class Bridge:
         if not self.authorised(chat_id, user_id if user_id is None else int(user_id)):
             return
 
+        if data in ("l:refresh", "l:clear"):
+            self.state.reload()
+            if (message.get("message_id") != self.limits_panel_state.get("message_id") or
+                    message.get("message_thread_id") != self.state.topics.get(LIMITS)):
+                return
+            if data == "l:refresh":
+                self.publish_limits_panel()
+            else:
+                self.confirm_clear(self.state.topics[LIMITS])
+            return
+
+        if data.startswith("c:"):
+            self.handle_control(data, message, int(user_id))
+            return
+
         if data.startswith("t:"):
             self.open_topic(data[2:])
             return
@@ -1501,6 +1749,7 @@ class Bridge:
     # ── the loop ────────────────────────────────────────────────────────────
 
     COMMANDS = [
+        ("control", "Open the Control panel"),
         ("ls", "List sessions and what each is running"),
         ("new", "Start a session with a blank conversation: /new NAME [agent]"),
         ("resume", "Start a session and continue its last conversation: /resume NAME [agent]"),
@@ -1634,6 +1883,14 @@ class Bridge:
         signal.signal(signal.SIGINT, stop)
 
         self.publish_commands()
+        try:
+            self.publish_limits_panel()
+        except (TelegramError, OSError, ValueError):
+            LOG.exception("could not publish Limits panel")
+        try:
+            self.control_panel()
+        except (TelegramError, OSError, ValueError):
+            LOG.exception("could not publish Control panel")
 
         if self.state.guide_message_id:
             try:

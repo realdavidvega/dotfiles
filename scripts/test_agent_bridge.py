@@ -13,6 +13,9 @@ spec.loader.exec_module(b)
 
 class BridgeTests(unittest.TestCase):
     def setUp(self):
+        offline = patch.object(b, "find_user_command", return_value=None)
+        offline.start()
+        self.addCleanup(offline.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'state.json'
@@ -294,6 +297,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_general_commands_accept_explicit_session(self):
         self.tmux.type_text.return_value = None
+        self.tmux.kill.return_value = None
         self.bridge.handle_command('say', 'vault continue with tests', None, None)
         self.tmux.type_text.assert_called_once_with('vault', 'continue with tests', enter=True)
         self.bridge.send_peek = Mock()
@@ -302,6 +306,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_topic_message_keeps_session_like_first_word(self):
         self.tmux.type_text.return_value = None
+        self.tmux.kill.return_value = None
         self.bridge.handle_command('say', 'vault needs documentation', 'vault', 6)
         self.tmux.type_text.assert_called_once_with('vault', 'vault needs documentation', enter=True)
 
@@ -440,6 +445,191 @@ class BridgeTests(unittest.TestCase):
         (day / 'rollout.jsonl').write_text('\n'.join(json.dumps(line) for line in lines) + '\n')
         self.assertEqual([(w.window, w.used, w.resets_at) for w in b.codex_windows(base / 'sessions')],
                          [('5h', 100.0, 300), ('7d', 31.0, 400)])
+
+
+class ControlTests(unittest.TestCase):
+    callback = BridgeTests.callback
+    helper = BridgeTests.helper
+    replies = staticmethod(BridgeTests.replies)
+    def setUp(self):
+        BridgeTests.setUp(self)
+        self.state.topics[b.CONTROL] = 40
+        self.state.topics[b.LIMITS] = 41
+        self.state.save()
+        self.tg.send.return_value = {'ok': True, 'result': {'message_id': 50}}
+        self.tmux.summary.return_value = [{'name': 'vault'}]
+        self.tmux.running.return_value = 'claude'
+        self.tmux.type_text.return_value = None
+        self.tmux.kill.return_value = None
+        self.bridge.control_panel()
+
+    def click(self, action, session=''):
+        key = next(k for k, v in self.bridge.control_actions.items() if v[:2] == (action, session))
+        cb = self.callback(key)
+        cb['message'].update(message_id=50, message_thread_id=40)
+        self.bridge.handle_callback(cb)
+        return cb
+
+    def test_panel_reuses_pin_and_limits_is_absent(self):
+        self.bridge.control_panel()
+        self.assertEqual(self.tg.send.call_count, 1)
+        self.assertFalse(any('limit' in v[0] for v in self.bridge.control_actions.values()))
+        self.assertEqual(json.loads(self.bridge.control_path.read_text())['message_id'], 50)
+
+    def test_kill_requires_confirmation_and_old_button_cannot_repeat(self):
+        self.click('session', 'vault')
+        self.click('manage', 'vault')
+        self.click('kill', 'vault')
+        self.tmux.kill.assert_not_called()
+        cb = self.click('kill-confirm', 'vault')
+        self.bridge.handle_callback(cb)
+        self.tmux.kill.assert_called_once_with('vault')
+
+    def test_send_requires_matching_reply_and_is_consumed(self):
+        self.bridge.control_panel('session', 'vault')
+        self.click('send', 'vault')
+        msg = {'chat': {'id': -1}, 'from': {'id': 2}, 'message_thread_id': 40, 'text': 'hello'}
+        self.bridge.handle_message(msg)
+        self.tmux.type_text.assert_not_called()
+        msg['reply_to_message'] = {'message_id': 49}
+        self.bridge.handle_message(msg)
+        self.tmux.type_text.assert_not_called()
+        msg['reply_to_message'] = {'message_id': 50}
+        self.bridge.handle_message(msg)
+        self.bridge.handle_message(msg)
+        self.tmux.type_text.assert_called_once_with('vault', 'hello', enter=True)
+
+    def test_back_cancels_send(self):
+        self.bridge.control_panel('session', 'vault')
+        self.click('send', 'vault')
+        self.click('home')
+        self.assertFalse(self.bridge.control_pending)
+
+    def test_bind_cannot_reassign_control_topic(self):
+        self.bridge.handle_command('bind', 'vault', b.CONTROL, 40)
+        self.assertEqual(b.State.load(self.path).topics['vault'], 6)
+        self.assertEqual(b.State.load(self.path).topics[b.CONTROL], 40)
+
+    def test_unauthorised_control_callback_is_ignored(self):
+        cb = self.callback(next(iter(self.bridge.control_actions)))
+        cb['message'].update(message_id=50, message_thread_id=40)
+        cb['from']['id'] = 999
+        self.tg.reset_mock()
+        self.bridge.handle_callback(cb)
+        self.tg.send.assert_not_called()
+        self.tmux.kill.assert_not_called()
+
+    def test_launch_uses_selected_agent_and_resume_mode(self):
+        self.tmux.exists.return_value = False
+        self.bridge.launch = Mock(return_value='started')
+        self.click('session', 'vault')
+        self.click('resume-agent', 'vault')
+        key = next(k for k, v in self.bridge.control_actions.items() if v == ('resume-run', 'vault', 'codex'))
+        cb = self.callback(key)
+        cb['message'].update(message_id=50, message_thread_id=40)
+        self.bridge.handle_callback(cb)
+        self.bridge.launch.assert_called_once_with('vault', 'codex', resume=True)
+
+    def test_home_lists_sessions_without_duplicate_lifecycle_pickers(self):
+        actions = list(self.bridge.control_actions.values())
+        self.assertIn(('session', 'vault', ''), actions)
+        self.assertNotIn(('resume', '', ''), actions)
+        self.assertNotIn(('sessions', '', ''), actions)
+
+    def test_stopped_session_has_resume_and_fresh_without_terminal_actions(self):
+        self.tmux.exists.return_value = False
+        self.click('session', 'vault')
+        actions = {v[0] for v in self.bridge.control_actions.values()}
+        self.assertIn('resume-agent', actions)
+        self.assertIn('new-agent', actions)
+        self.assertNotIn('send', actions)
+
+    def test_new_name_then_agent_does_not_send_name_to_terminal(self):
+        self.bridge.config.session_patterns = ['*']
+        self.tmux.exists.return_value = False
+        self.click('new')
+        self.bridge.handle_message({'chat': {'id': -1}, 'from': {'id': 2},
+            'message_thread_id': 40, 'text': 'research', 'reply_to_message': {'message_id': 50}})
+        self.assertIn(('new-run', 'research', 'codex'), self.bridge.control_actions.values())
+        self.tmux.type_text.assert_not_called()
+
+    def test_new_rejects_existing_and_invalid_names(self):
+        self.bridge.config.session_patterns = ['*']
+        for name in ('vault', '../bad', 'a b', '@limits', '-option'):
+            self.bridge.accept_new_session(2, name)
+            self.assertFalse(any(v[0] == 'new-run' for v in self.bridge.control_actions.values()))
+        self.tmux.type_text.assert_not_called()
+
+    def test_limits_shortcut_is_absent_and_cleanup_label_is_clear(self):
+        self.bridge.config.chat_id = -100123
+        self.bridge.control_panel()
+        markup = next(c.kwargs['reply_markup'] for c in reversed(self.tg.call.call_args_list)
+                      if c.args[0] == 'editMessageText')
+        buttons = [button for row in markup['inline_keyboard'] for button in row]
+        self.assertFalse(any('Limits' in button['text'] for button in buttons))
+        self.bridge.control_panel('manage', 'vault')
+        markup = next(c.kwargs['reply_markup'] for c in reversed(self.tg.call.call_args_list)
+                      if c.args[0] == 'editMessageText')
+        self.assertEqual([button['text'] for row in markup['inline_keyboard'] for button in row
+                          if 'Clear' in button['text']], ['🧹 Clear'])
+
+    def test_clear_keeps_panel(self):
+        run = self.replies()
+        self.helper(run)
+        self.bridge.finish_clear('40', {})
+        self.assertIn('--keep', run.call_args.args[0])
+        self.assertEqual(run.call_args.args[0][-1], '50')
+
+class LimitsPanelTests(unittest.TestCase):
+    callback = BridgeTests.callback
+    helper = BridgeTests.helper
+    replies = staticmethod(BridgeTests.replies)
+
+    def setUp(self):
+        BridgeTests.setUp(self)
+        self.state.topics[b.LIMITS] = 41
+        self.state.save()
+        self.tg.send.return_value = {'ok': True, 'result': {'message_id': 60}}
+        self.bridge.limits.report = Mock(return_value='Usage: 25%')
+        self.bridge.publish_limits_panel()
+
+    def press(self, action, thread=41, user=2):
+        cb = self.callback('l:' + action)
+        cb['message'].update(message_id=60, message_thread_id=thread)
+        cb['from']['id'] = user
+        self.bridge.handle_callback(cb)
+
+    def test_refresh_edits_existing_panel(self):
+        self.bridge.limits.report.return_value = 'Usage: 30%'
+        self.press('refresh')
+        self.assertEqual(self.tg.send.call_count, 1)
+        self.tg.call.assert_any_call('editMessageText', chat_id=-1, message_id=60,
+            text='⏳ Limits\n\nUsage: 30%', reply_markup={'inline_keyboard': [[
+                {'text': '🔄 Refresh', 'callback_data': 'l:refresh'},
+                {'text': '🧹 Clear', 'callback_data': 'l:clear'}]]})
+
+    def test_clear_asks_first_and_preserves_panel(self):
+        run = self.replies()
+        self.helper(run)
+        self.press('clear')
+        run.assert_not_called()
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 41)
+        self.bridge.finish_clear('41', {})
+        self.assertEqual(run.call_args.args[0][-4:], ['--thread', '41', '--keep', '60'])
+
+    def test_prune_preserves_limits_panel(self):
+        child = Mock()
+        child.poll.return_value = None
+        popen = Mock(return_value=child)
+        self.helper(popen=popen)
+        self.bridge.start_prune()
+        self.assertEqual(popen.call_args.args[0][-2:], ['--keep', '60'])
+
+    def test_wrong_topic_and_unauthorised_user_cannot_refresh(self):
+        self.bridge.limits.report.reset_mock()
+        self.press('refresh', thread=40)
+        self.press('refresh', user=999)
+        self.bridge.limits.report.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

@@ -243,6 +243,7 @@ prompt from a phone is then just replying to the message that told you about it.
 | `doctor` | Checks configuration, bot reachability and tmux, and reports ids |
 
 ```text
+/control        restore the pinned Control panel
 /ls             list sessions, with a button that opens or creates each topic
 /new S [agent]  start a session through the launcher, default claude
 /resume S [a]  continue the last conversation if the session is stopped
@@ -261,9 +262,29 @@ prompt from a phone is then just replying to the message that told you about it.
 `/new` and `/resume` call the launcher's matching detached commands, so they
 have the same lifecycle behavior as `ags new` and `ags resume`. `/bind` handles
 Telegram topic association. `/open` remains a compatibility alias for `/bind`.
-Inside a topic, the session is inferred. In General, pane commands take the
-same explicit session name as their terminal counterparts. Plain messages in
-General are ignored rather than answered.
+Inside a session topic, the session is inferred. In General and Control, pane
+commands take the same explicit session name as their terminal counterparts.
+General messages are ignored. Control accepts terminal text only as a reply
+to an active Send prompt. Command results without a session target go to Control.
+
+The Control topic holds one pinned panel listing running and stopped sessions.
+Select a running session for Open topic, Peek, Send, Escape and Enter. Manage
+holds Bind topic, Kill session and Clear. A stopped session offers Resume
+conversation and Start fresh, followed by an agent picker.
+
+New session asks for a new name, then the agent. Existing names return a prompt
+to choose that session from the main panel or enter a different name. The main
+panel also has Refresh, Help and Clear. Limits is accessed through its own topic. Cleanup
+buttons are labelled Clear in every topic.
+
+Menus edit the pinned message in place. Back and Refresh cancel pending input.
+New session and Send accept one reply from the initiating user within
+five minutes, Send names the target and accepts slash-prefixed terminal input. Kill asks for confirmation.
+Clear asks for confirmation and preserves the panel, as does daily pruning.
+Terminal output stays in the target session topic. `/control` restores the
+panel, and setup ids appear under Help. The daemon stores the panel message
+and thread ids in `control-panel.json` beside the bridge state. Button tokens
+and pending input expire when the menu changes or the daemon restarts.
 
 The launcher gives terminal sessions their topics too. When `new`, `resume` or
 `open` creates a session, and when `kill` ends one, `agent-session.sh` runs
@@ -348,11 +369,12 @@ lock. Writers apply only changed fields against their loaded snapshot, so an
 old polling process cannot restore a deleted mapping or erase a newer one.
 
 `/bind NAME` inside an existing forum topic associates that topic with the
-session. In General it finds or creates the session's topic and replies with a
+session. In General, Control or Limits it finds or creates the session's topic and replies with a
 link to it, which is also what the ➕ button in `/ls` does. Binding inside a
 topic also recovers an orphaned topic if the state file was lost.
 
-One key in the mapping is not a session. `@limits` holds the Limits topic.
+Two keys in the mapping are not sessions. `@limits` holds Limits and
+`@control` holds Control.
 `session_allowed` refuses any name starting with `@`, so a tmux session can
 never claim it.
 
@@ -401,6 +423,12 @@ The bridge never deletes a topic. Removing one is a human decision about
 history.
 
 ### The Limits topic
+
+The pinned Limits panel shows current usage. Refresh updates it in place, and
+Clear asks for confirmation before deleting other messages in that topic.
+Manual clearing and daily cleanup preserve the panel. `/limits` also refreshes
+it. Its message and thread ids are stored in `limits-panel.json` beside the
+bridge state.
 
 Journal capture is not the bridge's job. It belongs to Black System, see
 `doc/black-system.md`.
