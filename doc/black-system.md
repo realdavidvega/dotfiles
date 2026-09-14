@@ -1,9 +1,13 @@
 # Black System
 
-`scripts/black-system.py` is the Telegram transport for Black System.
-Black System's logic lives in the `black-system` skill in the private skills
-registry. This script moves text between Telegram and that skill's scripts and
-decides nothing itself.
+The Telegram transport for Black System is versioned in the private
+`realdavidvega/black-system` repository, checked out beside dotfiles at
+`~/Workspace/repos/github/tools/black-system`. Black System's logic lives in the
+`black-system` skill in the private skills registry. The transport moves text
+between Telegram and that skill's scripts and decides nothing itself.
+
+`scripts/black-system.py` here is the legacy copy that predates that repository.
+It is not what runs on the hub, and a machine restore must not deploy from it.
 
 It is a separate bot from the agent bridge on purpose. The bridge controls tmux
 sessions, and anything it types runs on the host. Black System writes a journal.
@@ -77,26 +81,35 @@ cleared. Without the helper, the button explains what is missing.
 
 ## Deployment
 
-`restoration_scripts/52-black-system.sh` stages plaintext copies under
-`/srv/services/system/`, because the host's home is encrypted and a boot
-service cannot read it:
+`restoration_scripts/52-black-system.sh` no longer stages anything itself. It
+finds the private transport checkout, refuses to run off the Mint tailnet, and
+delegates to that repository's `deploy/install.sh`. Everything below is what the
+installer produces, under `/srv/services/system/` because the host's home is
+encrypted and a boot service cannot read it:
 
 ```text
 /srv/services/system/bin/black-system.py
 /srv/services/system/black-system/scripts/*.py   (tests excluded)
 /srv/services/system/system.env                    (seeded once, mode 0600)
-/etc/systemd/system/black-system.service            (installed, not enabled)
+/srv/services/system/deployment-manifest.json      (source commits and file hashes)
+/srv/services/system/deploy/black-system.service   (rendered, installed by root)
 ```
 
-Re-run it after changing the bot or the skill. The daemon re-executes when its
-own file changes and rereads `system.env` as it does. Skill scripts run as
+Re-run it after changing the transport or the skill. The daemon re-executes when
+its own file changes and rereads `system.env` as it does. Skill scripts run as
 fresh processes, so a staged change applies to the next message.
 
 ```bash
 /srv/services/system/bin/black-system.py discover   # chat and user ids
 /srv/services/system/bin/black-system.py doctor
+sudo install -m 0644 /srv/services/system/deploy/black-system.service /etc/systemd/system/black-system.service
+sudo systemctl daemon-reload
 sudo systemctl enable --now black-system
 ```
+
+The deployment runbook and the host-ownership rules live in the transport repo,
+in `docs/adopting-the-transport.md`, `docs/mint-deployment.md` and
+`docs/host-lock.md`.
 
 ## One bot, one poller
 

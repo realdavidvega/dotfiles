@@ -17,8 +17,6 @@ fi
 
 DOTFILES_PATH="${DOTFILES_PATH:-$HOME/.dotfiles}"
 BLACK_SYSTEM_ROOT="/srv/services/system"
-SYSTEM_ROOT="$DOTFILES_PATH/os/linux/system"
-FAILED=0
 
 find_checkout() {
   local name="$1" candidate
@@ -34,52 +32,37 @@ find_checkout() {
   return 1
 }
 
-# Plaintext copies under /srv, not links into the encrypted home, so the
-# service works at boot before anyone logs in. Same reasoning as the bridge.
-echo "Staging Black System under $BLACK_SYSTEM_ROOT..."
-mkdir -p "$BLACK_SYSTEM_ROOT/bin" "$BLACK_SYSTEM_ROOT/black-system/scripts" || FAILED=1
-
-install -m 0755 "$DOTFILES_PATH/scripts/black-system.py" "$BLACK_SYSTEM_ROOT/bin/black-system.py" \
-  && echo "staged: $BLACK_SYSTEM_ROOT/bin/black-system.py" || FAILED=1
 
 SKILLS_REGISTRY_REPO="${SKILLS_REGISTRY_REPO:-$(find_checkout skills-registry || true)}"
-SKILL_SCRIPTS="$SKILLS_REGISTRY_REPO/skills/obsidian/black-system/scripts"
-if [ -d "$SKILL_SCRIPTS" ]; then
-  for script in "$SKILL_SCRIPTS"/*.py; do
-    case "$(basename "$script")" in test_*) continue ;; esac
-    install -m 0644 "$script" "$BLACK_SYSTEM_ROOT/black-system/scripts/" || FAILED=1
-  done
-  echo "staged: black-system scripts from $SKILL_SCRIPTS"
-else
-  echo "blocked: no black-system scripts at $SKILL_SCRIPTS"
-  FAILED=1
-fi
-
-ENV_FILE="$BLACK_SYSTEM_ROOT/system.env"
-if [ -f "$ENV_FILE" ]; then
-  echo "current: $ENV_FILE (left alone, it holds a token)"
-else
-  install -m 0600 "$DOTFILES_PATH/os/linux/srv/system/system.env.sample" "$ENV_FILE" \
-    && echo "seeded: $ENV_FILE (fill it in, then enable black-system.service)" || FAILED=1
-fi
-
-# Installed, not enabled. Enabling gives a chat write access to the vault.
-UNIT_SOURCE="$SYSTEM_ROOT/etc/systemd/system/black-system.service"
-UNIT="/etc/systemd/system/black-system.service"
-if [ -f "$UNIT" ] && cmp -s "$UNIT_SOURCE" "$UNIT"; then
-  echo "current: $UNIT"
-elif sudo install -o root -g root -m 0644 "$UNIT_SOURCE" "$UNIT"; then
-  sudo systemctl daemon-reload || FAILED=1
-  echo "staged: $UNIT"
-  echo "        enable it once system.env is filled in:"
-  echo "        sudo systemctl enable --now black-system"
-else
-  echo "blocked: could not install $UNIT (needs sudo on a terminal)"
-  FAILED=1
-fi
-
-if [ "$FAILED" -ne 0 ]; then
-  echo "Black System setup finished with problems. Review the output above."
+BLACK_SYSTEM_REPO="${BLACK_SYSTEM_REPO:-$(find_checkout black-system || true)}"
+if [ ! -x "$BLACK_SYSTEM_REPO/deploy/install.sh" ]; then
+  echo 'blocked: clone the private realdavidvega/black-system repo beside dotfiles first'
   return 1 2>/dev/null || exit 1
 fi
-echo "Black System setup complete."
+if ! bash "$SKILLS_REGISTRY_REPO/skills/engineering/repo-sneakernet/scripts/host-context.sh" --require-push; then
+  echo 'blocked: reconnect to the Mint tailnet before deploying Black System'
+  return 1 2>/dev/null || exit 1
+fi
+if ! bash "$BLACK_SYSTEM_REPO/deploy/install.sh" \
+  --root "$BLACK_SYSTEM_ROOT" \
+  --skills-dir "$SKILLS_REGISTRY_REPO/skills/obsidian/black-system/scripts" \
+  --user "$(id -un)" --python /usr/bin/python3; then
+  return 1 2>/dev/null || exit 1
+fi
+UNIT_SOURCE="$BLACK_SYSTEM_ROOT/deploy/black-system.service"
+UNIT="/etc/systemd/system/black-system.service"
+if ! systemd-analyze verify "$UNIT_SOURCE"; then
+  echo 'blocked: generated unit did not pass systemd verification'
+  return 1 2>/dev/null || exit 1
+fi
+if [ -f "$UNIT" ] && cmp -s "$UNIT_SOURCE" "$UNIT"; then
+  echo "current: $UNIT"
+elif sudo -n install -o root -g root -m 0644 "$UNIT_SOURCE" "$UNIT"; then
+  sudo -n systemctl daemon-reload || { return 1 2>/dev/null || exit 1; }
+  echo "installed: $UNIT (activation remains explicit)"
+else
+  echo "staged only: sudo install -m 0644 $UNIT_SOURCE $UNIT"
+  echo 'then: sudo systemctl daemon-reload && sudo systemctl restart black-system'
+  return 1 2>/dev/null || exit 1
+fi
+echo 'Black System deployed from its private repository. See its deployment runbook.'
