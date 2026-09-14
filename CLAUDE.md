@@ -245,7 +245,7 @@ sessions at the tmux layer, so it covers Claude Code, Codex and OpenCode alike:
 one forum topic per session, reply to type into the pane. Muting a fresh topic,
 `/clear` and the daily prune of week-old messages act as the user through
 `scripts/telegram-user.py`, a Telethon helper run from `/srv/services/telegram`,
-so the bridge and `scripts/black-system.py` stay stdlib only. Both interfaces share
+so the bridge and the Black System transport in its own private repo stay stdlib only. Both interfaces share
 `ls`, `new`, `resume`, `kill`, `peek`, `say`, `esc` and `enter`. The terminal
 requires a session name, while Telegram can infer it from the topic. Pane
 commands target the `agent` window even when a different window is selected.

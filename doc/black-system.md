@@ -6,8 +6,8 @@ The Telegram transport for Black System is versioned in the private
 `black-system` skill in the private skills registry. The transport moves text
 between Telegram and that skill's scripts and decides nothing itself.
 
-`scripts/black-system.py` here is the legacy copy that predates that repository.
-It is not what runs on the hub, and a machine restore must not deploy from it.
+This repository no longer carries a copy of the transport. Restoration finds the
+private checkout and delegates to its installer.
 
 It is a separate bot from the agent bridge on purpose. The bridge controls tmux
 sessions, and anything it types runs on the host. Black System writes a journal.
@@ -125,8 +125,11 @@ else on the host.
 
 ## Tests
 
+The transport's own tests live in its repository:
+
 ```bash
-python3 scripts/test_black_system.py
+cd ~/Workspace/repos/github/tools/black-system
+uv run --no-project --with pytest pytest -q
 ```
 
 The capture grammar and note edits are tested in the skill, by
