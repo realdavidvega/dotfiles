@@ -138,6 +138,27 @@ tooling writes to this vault directly, so that dependency is unacceptable.
 by the plugin's own author. Running it on the hub makes the hub the single translation point:
 every device talks only to the hub, and nothing waits on a peer.
 
+The pinned bridge applies `includeInternal` only while reading CouchDB. The hub applies
+`internal-sync.patch` so the same allowlist also governs filesystem uploads and writes
+allowed hidden files with LiveSync's `i:` IDs. Selected `.obsidian` plugin and settings
+paths enter CouchDB. Git
+internals, agent settings and other hidden files stay outside the mobile sync layer.
+The bridge also keeps `.obsidian/plugins/obsidian-livesync/` device-local because its
+`data.json` contains CouchDB connection settings. Other allowed plugins still sync.
+The patch also stops chokidar from watching paths the allowlist excludes, and keeps the
+process alive when a watched file vanishes before its watcher attaches. Without both, git
+locks and Syncthing temp files crash the bridge several times an hour.
+
+`livesync_doctor.py` is a read-only health report for this layer: containers, the phone
+endpoint, whether the bridge carries its patch, hidden records outside the allowlist, and
+failed bridge uploads. It exits non-zero on any failure.
+
+`cleanup_internal.py` removes unwanted internal-file records and their unshared chunks from an
+affected CouchDB database. It reads the allowlist from the bridge config and its dry run prints
+the exact scope. Apply mode requires the iPhone's Hidden file synchronization to be off so its
+local cache cannot re-upload those records. Cleaning the server does not clean the phone, which
+must then rebuild its local database from the remote.
+
 > [!warning] It carries no license
 > `gh api repos/vrtmrz/livesync-bridge` returns `"license": null`, and upstream ships no image,
 > so the hub builds it from source. This is the same standard applied to `athNdev/obsidian-sync`
@@ -188,7 +209,9 @@ on the phone and had iOS killing the app mid-fetch.
 What it protected was narrow. The plaintext vault already sits beside CouchDB in
 `/srv/sync/blackvault`, and the passphrase lived on the same host, so it defended only against
 leaked CouchDB credentials without filesystem access. Transport is TLS inside WireGuard either
-way. Turn it back on if CouchDB ever leaves hardware you control, and accept the size.
+way. This assumes the bridge's internal-file allowlist remains active so credentials and
+encryption keys do not enter CouchDB. Turn E2EE back on if CouchDB ever leaves hardware you
+control, and accept the size.
 
 > [!note] Diagnosing which is which
 > Chunks up with the file count flat means duplication, so check the chunk settings. Chunks up
@@ -418,21 +441,18 @@ verifies the repository itself, which is a different question from whether a res
 
 ## Managed files
 
-Following the pattern in `linux-mint-macbook.md`, once implemented:
+The hub service files are managed from these versioned paths:
 
 ```text
 /etc/systemd/system/syncthing@black.service.d/override.conf
-                                    -> os/linux/system/syncthing/override.conf
-/srv/services/couchdb/compose.yaml  -> os/linux/home/couchdb/compose.yaml
+                                    -> os/linux/srv/syncthing/override.conf
+/srv/services/couchdb/compose.yaml  -> os/linux/srv/couchdb/compose.yaml
 /srv/services/livesync-bridge/Dockerfile.hub
-                                    -> os/linux/home/livesync-bridge/Dockerfile.hub
+                                    -> os/linux/srv/livesync-bridge/Dockerfile.hub
 /srv/services/livesync-bridge/compose.yaml
-                                    -> os/linux/home/livesync-bridge/compose.yaml
-~/.config/systemd/user/personal-backup.service
-                                    -> os/linux/home/systemd/personal-backup.service
-~/.config/systemd/user/personal-backup.timer
-                                    -> os/linux/home/systemd/personal-backup.timer
-~/.local/bin/personal-backup        -> os/linux/home/personal-backup.sh
+                                    -> os/linux/srv/livesync-bridge/compose.yaml
+/srv/services/livesync-bridge internal sync
+                                    -> os/linux/srv/livesync-bridge/internal-sync.patch
 ```
 
 The Syncthing override is what points its config at `/srv/services/syncthing`, which is what makes

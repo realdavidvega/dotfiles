@@ -147,6 +147,17 @@ fi
 if [ -d /srv/services/livesync-bridge/.git ]; then
   git -C /srv/services/livesync-bridge fetch --quiet origin || true
   git -C /srv/services/livesync-bridge checkout --quiet "$BRIDGE_COMMIT" || FAILED=1
+  for BRIDGE_PATCH in \
+    "$SRV_ROOT/livesync-bridge/internal-sync.patch"; do
+    if git -C /srv/services/livesync-bridge apply --reverse --check "$BRIDGE_PATCH" 2>/dev/null; then
+      : # Patch is already applied.
+    elif git -C /srv/services/livesync-bridge apply --check "$BRIDGE_PATCH"; then
+      git -C /srv/services/livesync-bridge apply "$BRIDGE_PATCH" || FAILED=1
+    else
+      echo "FAILED: livesync-bridge patch does not apply: $BRIDGE_PATCH"
+      FAILED=1
+    fi
+  done
   install -m 0644 "$SRV_ROOT/livesync-bridge/Dockerfile.hub" \
     /srv/services/livesync-bridge/Dockerfile.hub
   install -m 0644 "$SRV_ROOT/livesync-bridge/compose.yaml" \

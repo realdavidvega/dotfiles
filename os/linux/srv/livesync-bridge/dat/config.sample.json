@@ -19,9 +19,13 @@
     "E2EE protected only against leaked CouchDB credentials without filesystem",
     "access. Turn it back on if CouchDB ever leaves this hardware.",
     "",
-    "includeInternal is a DOWNLOAD filter only. The bridge can materialise",
-    "hidden files that a plugin uploaded, but it can never upload them itself.",
-    "Plugins therefore reach the phone via the Mac, not via the bridge."
+    "includeInternal is an allowlist in both directions, and both peers MUST",
+    "carry the same list. Upstream applies it when reading CouchDB. The hub's",
+    "internal-sync.patch also applies it before filesystem uploads, stores",
+    "allowed hidden files with i: IDs, keeps obsidian-livesync's own settings",
+    "device-local, and stops the watcher from touching excluded paths. Git and",
+    "agent settings stay out of CouchDB. cleanup_internal.py and",
+    "livesync_doctor.py read this list from the live config."
   ],
   "peers": [
     {
@@ -39,6 +43,7 @@
         ".obsidian/app.json",
         ".obsidian/appearance.json",
         ".obsidian/core-plugins.json",
+        ".obsidian/core-plugins-migration.json",
         ".obsidian/community-plugins.json",
         ".obsidian/hotkeys.json",
         ".obsidian/graph.json",
@@ -47,7 +52,8 @@
         ".obsidian/types.json",
         ".obsidian/bookmarks.json",
         ".obsidian/backlink.json",
-        ".obsidian/page-preview.json"
+        ".obsidian/page-preview.json",
+        ".obsidian/zk-prefixer.json"
       ]
     },
     {
@@ -73,6 +79,7 @@
         ".obsidian/app.json",
         ".obsidian/appearance.json",
         ".obsidian/core-plugins.json",
+        ".obsidian/core-plugins-migration.json",
         ".obsidian/community-plugins.json",
         ".obsidian/hotkeys.json",
         ".obsidian/graph.json",
@@ -81,7 +88,8 @@
         ".obsidian/types.json",
         ".obsidian/bookmarks.json",
         ".obsidian/backlink.json",
-        ".obsidian/page-preview.json"
+        ".obsidian/page-preview.json",
+        ".obsidian/zk-prefixer.json"
       ]
     }
   ]
