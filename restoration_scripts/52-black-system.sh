@@ -10,8 +10,19 @@ fi
 OS_ID="$(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}")"
 PRODUCT_NAME="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
 
-if [ "$OS_ID" != "linuxmint" ] || [ "$PRODUCT_NAME" != "MacBookPro12,1" ]; then
-  echo "Skipping Black System setup: requires Linux Mint on MacBookPro12,1."
+if [ "$OS_ID" != "linuxmint" ]; then
+  echo "Skipping Black System setup: requires Linux Mint."
+  return 0 2>/dev/null || exit 0
+fi
+
+# Which machines carry the transport is a declaration, not a hardware match, so
+# a second hub can exist. MacBookPro12,1 is accepted without a marker so the
+# original hub keeps provisioning itself unchanged.
+ROLE_FILE="${BLACK_SYSTEM_ROLE_FILE:-/etc/black-system-role}"
+ROLE="${BLACK_SYSTEM_ROLE:-$([ -r "$ROLE_FILE" ] && tr -d '[:space:]' <"$ROLE_FILE")}"
+if [ "$ROLE" != "hub" ] && [ "$PRODUCT_NAME" != "MacBookPro12,1" ]; then
+  echo "Skipping Black System setup: this host is not declared a hub."
+  echo "Declare it with: echo hub | sudo tee $ROLE_FILE"
   return 0 2>/dev/null || exit 0
 fi
 
@@ -45,7 +56,6 @@ if ! bash "$SKILLS_REGISTRY_REPO/skills/engineering/repo-sneakernet/scripts/host
 fi
 if ! bash "$BLACK_SYSTEM_REPO/deploy/install.sh" \
   --root "$BLACK_SYSTEM_ROOT" \
-  --skills-dir "$SKILLS_REGISTRY_REPO/skills/obsidian/black-system/scripts" \
   --user "$(id -un)" --python /usr/bin/python3; then
   return 1 2>/dev/null || exit 1
 fi
