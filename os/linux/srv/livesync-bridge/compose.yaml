@@ -5,7 +5,12 @@ services:
       dockerfile: Dockerfile.hub
     image: localhost/livesync-bridge:hub
     container_name: livesync-bridge
-    restart: unless-stopped
+    # Never unless-stopped. The bridge is a singleton, and the lease decides
+    # which host runs it. A container that restarts itself would outvote that,
+    # and two bridges authoring the same document ids into a replicated
+    # database produce conflict revisions rather than contention.
+    # leased-service.sh starts and stops it.
+    restart: "no"
     volumes:
       - ./dat:/app/dat
       - /srv/sync/blackvault:/app/data/blackvault
