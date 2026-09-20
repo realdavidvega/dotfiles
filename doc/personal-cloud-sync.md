@@ -284,7 +284,7 @@ that recoverable, so it is part of the design rather than an addition to it.
 | `documents` | all four | Send and receive | Papers, scans, reference |
 | `media` | Mint, Mac, Windows | Send and receive | Music, own images and videos already stored as files. **Excluded from iPhone** on space grounds |
 | `camera` | iPhone, Mint | **Receive only** on hub | Designed, disabled in phase 1. Set `ignoreDelete` when enabled |
-| `blackvault` | Mint, Mac, Windows | Send and receive | The whole Obsidian vault, ~585MB over 3241 files. Hub path `/srv/sync/blackvault`. **Not shared with the iPhone**, which reaches it through CouchDB instead |
+| `blackvault` | Mint, Mac, Windows | Send and receive | Full vault on Mint and Windows. The Xebia Mac includes only lease claims because LiveSync owns its content path. Hub path `/srv/sync/blackvault`. **Not shared with the iPhone**, which reaches it through CouchDB instead |
 
 **File versioning on the hub:** staggered versioning on `vault`, `documents` and `blackvault`,
 365 days. This is the local undo for an accidental delete before the nightly backup runs, and on
@@ -302,7 +302,8 @@ that recoverable, so it is part of the design rather than an addition to it.
 
 The `(?d)` prefix lets Syncthing delete these locally when they disappear remotely.
 
-`blackvault`, anchored at the vault root so nested directories of the same name still sync:
+Full-content `blackvault` peers, anchored at the vault root so nested directories
+of the same name still sync:
 
 ```
 /.git
@@ -318,6 +319,22 @@ The `(?d)` prefix lets Syncthing delete these locally when they disappear remote
 
 `.codex/cache` alone is 310MB of regenerable agent state. The leading `/` matters: without it,
 `99 - Meta/Skills/.opencode/` would be excluded too, and that is real vault content.
+
+The Xebia Mac receives content through LiveSync. Its machine-local `.stignore`
+keeps only the independent coordination path that the singleton leases require:
+
+```
+!/99 - Meta
+!/99 - Meta/Agent State
+!/99 - Meta/Agent State/leases
+!/99 - Meta/Agent State/leases/**
+**
+```
+
+The include rules must precede `**` because Syncthing uses the first matching
+pattern. Do not replace this with the full-content rules while LiveSync is
+enabled on the same vault; delivering one write through both mechanisms creates
+byte-identical `.sync-conflict-*` copies.
 
 > [!warning] Avoid `: ? | * < > "` in note titles
 > The bridge splits paths on `:` and drops the file. All of these are also illegal in Windows
@@ -357,11 +374,13 @@ maintained.
 The vault lives at `$WORKSPACE/repos/github/tools/black-vault` on all three desktops, and that
 directory is the git working tree itself.
 
-Syncthing carries the whole tree between the three desktops and the hub. The iPhone reaches the
-same content through CouchDB, which `livesync-bridge` keeps in step with the hub's copy.
+Syncthing carries the whole tree between the hub and full-content desktop peers.
+The Xebia Mac and iPhone reach the same content through CouchDB, which
+`livesync-bridge` keeps in step with the hub's copy. Syncthing still carries
+lease claims to the Xebia Mac so the bridge lease does not depend on the bridge.
 
 Its operational detail is documented in the vault rather than here, at
-`99 - Meta/Guides/Sync Setup.md` in the `black-vault` repo: the CouchDB and `tailscale serve`
+`96 - Manual/Sync Setup.md` in the `black-vault` repo: the CouchDB and `tailscale serve`
 configuration with its CORS requirements, the bridge's own config, the chunk settings every
 writer must share, and the iPhone client setup.
 
