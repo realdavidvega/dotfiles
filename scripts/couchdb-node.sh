@@ -3,6 +3,7 @@
 # Bring up a CouchDB node of the personal cloud on this machine.
 #
 #   couchdb-node.sh init|start|stop|status|endpoint|logs
+#   couchdb-node.sh replicate <peer-host>
 #
 # CouchDB is the one component here that is not a singleton: multi-master
 # replication is what it is for, so every host may hold a copy and the phone
@@ -112,6 +113,63 @@ node_name() {
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'
 }
 
+# Pair this node with a peer, both directions, continuously. Replication is the
+# whole reason a second node is worth having: without the push, a write made
+# against this node while the peer is unreachable would stay here and never
+# reach the vault.
+#
+# The documents live in _replicator, which lives in the data volume. A rebuilt
+# volume loses them silently, so this is a provisioning step rather than a
+# one-off command, and it is safe to rerun.
+replicate() {
+  local peer="$1"
+  [ -n "$peer" ] || die "usage: $0 replicate <peer-host>"
+  require_credentials
+  COUCHDB_PEER="$peer" COUCHDB_PEER_SHORT="${peer%%.*}" python3 - "$DATABASE" <<'PYTHON'
+import base64, json, os, subprocess, sys
+
+database = sys.argv[1]
+peer = os.environ["COUCHDB_PEER"]
+short = os.environ["COUCHDB_PEER_SHORT"]
+user, password = os.environ["COUCHDB_USER"], os.environ["COUCHDB_PASSWORD"]
+header = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+
+local = {"url": f"http://127.0.0.1:5984/{database}", "headers": {"Authorization": header}}
+remote = {"url": f"https://{peer}/{database}", "headers": {"Authorization": header}}
+
+
+def couch(method, path, body=None):
+    # curl rather than urllib: the framework python on macOS carries its own
+    # trust store and rejects the tailscale certificate that curl accepts.
+    command = ["curl", "--silent", "--user", f"{user}:{password}",
+               "-X", method, f"http://127.0.0.1:5984{path}"]
+    if body is not None:
+        command += ["-H", "Content-Type: application/json", "-d", json.dumps(body)]
+    out = subprocess.run(command, capture_output=True, text=True).stdout
+    try:
+        return json.loads(out)
+    except ValueError:
+        return {"error": "unreadable", "reason": out[:200]}
+
+
+for name, source, target in (("pull-" + short, remote, local),
+                             ("push-" + short, local, remote)):
+    wanted = {"_id": name, "source": source, "target": target, "continuous": True}
+    current = couch("GET", "/_replicator/" + name)
+    if "error" not in current:
+        same = all(current.get(k) == v for k, v in wanted.items() if k != "_id")
+        if same:
+            print(f"current: {name}")
+            continue
+        wanted["_rev"] = current["_rev"]
+    result = couch("PUT", "/_replicator/" + name, wanted)
+    if not result.get("ok"):
+        print(f"failed: {name}: {result}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"installed: {name}")
+PYTHON
+}
+
 case "${1:-}" in
   init)
     stage
@@ -136,7 +194,8 @@ case "${1:-}" in
       "http://127.0.0.1:5984/_up" || printf 'CouchDB is not answering locally\n'
     printf '\n'
     ;;
+  replicate) replicate "${2:-}" ;;
   endpoint) printf 'https://%s\n' "$(node_name)" ;;
   logs)   compose logs --follow couchdb ;;
-  *) sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
