@@ -61,45 +61,6 @@ link_user_file() {
   echo "created: $target -> $source"
 }
 
-link_system_file() {
-  local source="$1"
-  local target="$2"
-  local changed_flag="$3"
-  local backup="${target}.pre-dotfiles"
-
-  if [ ! -f "$source" ]; then
-    echo "Missing managed source: $source"
-    return 1
-  fi
-
-  if [ -L "$target" ]; then
-    if [ "$(readlink -f "$target")" = "$(readlink -f "$source")" ]; then
-      echo "linked: $target"
-      return 0
-    fi
-    echo "blocked: $target is a symlink to another source"
-    return 1
-  fi
-
-  if [ -e "$target" ]; then
-    if ! cmp -s "$source" "$target"; then
-      echo "blocked: $target differs from the managed copy"
-      echo "review both files and reconcile them before linking"
-      return 1
-    fi
-    if [ -e "$backup" ] || [ -L "$backup" ]; then
-      echo "blocked: backup already exists at $backup"
-      return 1
-    fi
-    sudo mv "$target" "$backup" || return 1
-  fi
-
-  sudo mkdir -p "$(dirname "$target")" || return 1
-  sudo ln -s "$source" "$target" || return 1
-  printf -v "$changed_flag" '%s' 1
-  echo "created: $target -> $source"
-}
-
 install_system_file() {
   local source="$1"
   local target="$2"
@@ -144,7 +105,10 @@ link_user_file "$HOME_ROOT/keyd/app.conf" "$HOME/.config/keyd/app.conf" || FAILE
 link_user_file "$HOME_ROOT/keyd-application-mapper.desktop" \
   "$HOME/.config/autostart/keyd-application-mapper.desktop" || FAILED=1
 
-link_system_file "$SYSTEM_ROOT/etc/udev/rules.d/95-monitor-hotplug.rules" \
+# Installed rather than linked: the source lives in the encrypted home, which
+# only unlocks on an interactive login. A symlink is therefore dangling on every
+# unattended boot, so the rule silently never applies on a headless start.
+install_system_file "$SYSTEM_ROOT/etc/udev/rules.d/95-monitor-hotplug.rules" \
   /etc/udev/rules.d/95-monitor-hotplug.rules CHANGED_UDEV || FAILED=1
 install_system_file "$SYSTEM_ROOT/etc/keyd/default.conf" \
   /etc/keyd/default.conf CHANGED_KEYD || FAILED=1
@@ -158,7 +122,10 @@ install_system_file "$SYSTEM_ROOT/etc/systemd/system/rustdesk.service.d/10-dotfi
   /etc/systemd/system/rustdesk.service.d/10-dotfiles.conf CHANGED_RUSTDESK || FAILED=1
 install_system_file "$SYSTEM_ROOT/etc/systemd/logind.conf.d/lid.conf" \
   /etc/systemd/logind.conf.d/lid.conf CHANGED_LOGIND || FAILED=1
-link_system_file "$SYSTEM_ROOT/etc/default/grub" \
+# Installed rather than linked, for the same reason. A dangling /etc/default/grub
+# leaves update-grub unable to run at all until somebody unlocks the home, which
+# is exactly when a kernel parameter needs changing on a machine you cannot reach.
+install_system_file "$SYSTEM_ROOT/etc/default/grub" \
   /etc/default/grub CHANGED_GRUB || FAILED=1
 
 if [ "$CHANGED_UDEV" -eq 1 ]; then
