@@ -7,7 +7,12 @@ GRUB_DEFAULT=0
 GRUB_TIMEOUT_STYLE=hidden
 GRUB_TIMEOUT=0
 GRUB_DISTRIBUTOR=`( . /etc/os-release; echo ${NAME:-Ubuntu} ) 2>/dev/null || echo Ubuntu`
-GRUB_CMDLINE_LINUX_DEFAULT="quiet splash usbcore.autosuspend=-1"
+# loglevel=3 keeps error-level kernel lines off the console. The Broadcom
+# 43602 has no redistributable clm_blob, so every boot logs a firmware load
+# failure and an ARP offload error over the login prompt, on a machine whose
+# console nobody watches. It must come after `quiet`, which sets 4, because
+# the last value on the line wins. journalctl and dmesg still record everything.
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash usbcore.autosuspend=-1 loglevel=3"
 GRUB_CMDLINE_LINUX=""
 
 # If your computer has multiple operating systems installed, then you
