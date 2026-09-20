@@ -71,6 +71,22 @@ stage() {
   git -C "$ROOT" fetch --quiet origin || true
   git -C "$ROOT" checkout --quiet "$BRIDGE_COMMIT" || die "could not pin $BRIDGE_COMMIT"
 
+  # The pinned bridge applies includeInternal only when READING CouchDB, so
+  # without this patch it uploads every hidden file in the vault, .git and the
+  # git-crypt key included, and dies whenever a watched file vanishes under a
+  # git lock or a Syncthing temp file. Never run an unpatched bridge.
+  for patch in "$SOURCE_DIR"/*.patch; do
+    [ -f "$patch" ] || continue
+    if git -C "$ROOT" apply --reverse --check "$patch" 2>/dev/null; then
+      continue                                   # already applied
+    elif git -C "$ROOT" apply --check "$patch" 2>/dev/null; then
+      git -C "$ROOT" apply "$patch" || die "could not apply $(basename "$patch")"
+      printf 'applied %s\n' "$(basename "$patch")"
+    else
+      die "patch does not apply to $BRIDGE_COMMIT: $(basename "$patch")"
+    fi
+  done
+
   # Upstream's own compose file makes "compose" ambiguous about which to use.
   [ -f "$ROOT/docker-compose.yml" ] && mv "$ROOT/docker-compose.yml" "$ROOT/docker-compose.yml.upstream"
 
