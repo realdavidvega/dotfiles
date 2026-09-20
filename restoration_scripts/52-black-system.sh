@@ -29,9 +29,14 @@ fi
 DOTFILES_PATH="${DOTFILES_PATH:-$HOME/.dotfiles}"
 BLACK_SYSTEM_ROOT="/srv/services/system"
 
+# /srv is searched first because it is the only location readable on an
+# unattended boot. $HOME is ecryptfs and stays locked until someone logs in,
+# so a checkout there cannot be deployed from without physical access, which
+# is the opposite of what an always-on hub needs.
 find_checkout() {
   local name="$1" candidate
   for candidate in \
+    "/srv/services/$name" \
     "$(dirname "$(readlink -f "$DOTFILES_PATH")")/$name" \
     "$HOME/Workspace/repos/github/tools/$name" \
     "$HOME/workspace/repos/github/tools/$name"; do
