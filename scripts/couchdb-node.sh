@@ -33,6 +33,16 @@ ENV_FILE="$ROOT/.env"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
+# Every image here is public. The user's ~/.docker/config.json may name
+# credential helpers that fail, and a failing helper turns an anonymous pull
+# into an authentication error rather than falling back. Point both clients at
+# a clean, empty auth file so a public pull stays a public pull.
+AUTH_DIR="${REGISTRY_AUTH_DIR:-$HOME/.local/share/personal-cloud/registry-auth}"
+mkdir -p "$AUTH_DIR" && printf '{}' > "$AUTH_DIR/config.json"
+export DOCKER_CONFIG="$AUTH_DIR"
+export REGISTRY_AUTH_FILE="$AUTH_DIR/config.json"
+
+
 # Prefer whichever runtime actually answers. A docker CLI with no daemon is
 # the normal state on a Mac that has podman, and silently failing on it wastes
 # the most time of anything here.
