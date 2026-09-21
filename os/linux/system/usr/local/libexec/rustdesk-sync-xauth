@@ -13,6 +13,16 @@ if [ -z "$TARGET_HOME" ]; then
   exit 1
 fi
 
+# An ecryptfs home is a bare mountpoint until its owner logs in. Writing the
+# cookie there blocks in xauth's lock retry for twenty seconds and then fails the
+# unit, which is how a boot to the greeter used to cost a third of a minute. There
+# is nothing to sync before a login anyway: RustDesk reaches the greeter through
+# the LightDM cookie it already reads as root. Wait for the session instead.
+if [ -e "$TARGET_HOME/.Private" ] && ! mountpoint -q "$TARGET_HOME"; then
+  echo "Home for $TARGET_USER is not unlocked yet, deferring cookie sync"
+  exit 0
+fi
+
 for _ in $(seq 1 50); do
   [ -r "$SOURCE_AUTHORITY" ] && break
   sleep 0.2
@@ -36,5 +46,6 @@ else
   chmod 0600 "$TARGET_AUTHORITY"
 fi
 
+# -b breaks a lock left behind by a killed xauth rather than retrying into a stall.
 printf '%s\n' "$cookie_data" |
-  runuser -u "$TARGET_USER" -- xauth -f "$TARGET_AUTHORITY" nmerge -
+  runuser -u "$TARGET_USER" -- xauth -b -f "$TARGET_AUTHORITY" nmerge -

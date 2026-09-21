@@ -20,8 +20,8 @@ flowchart TD
   keyboard --> keyd[keyd captures both keyboards]
   keyd --> mapper[Application mapper provides Command shortcuts]
   display --> xprofile[.xprofile invokes the display helper]
-  display --> dummy[Xorg dummy output for RustDesk]
-  dummy --> profile[Saved remote display profile]
+  display --> panel[eDP-1 driven by the autoconfigured Intel driver]
+  panel --> profile[Remote profile scales the X screen on the real output]
   displaymanager[LightDM restart] --> xauth[Refresh user X11 cookie]
   xauth --> rustdesk[RustDesk service]
   hotplug[DRM hotplug event] --> udev[udev rule]
@@ -39,11 +39,61 @@ flowchart TD
 
 | Layer | Purpose | Managed files |
 |---|---|---|
-| Display | Physical hotplug plus selectable RustDesk dummy resolutions | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/home/rustdesk-display.sh`, `os/linux/home/display-lid-watch.desktop`, `os/linux/system/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
+| Display | Physical hotplug on the real panel and any external head | `os/linux/home/.xprofile`, `os/linux/home/display-hotplug.sh`, `os/linux/home/rustdesk-display.sh`, `os/linux/home/display-lid-watch.desktop`, `os/linux/system/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.disabled`, `os/linux/system/etc/udev/rules.d/95-monitor-hotplug.rules` |
 | Remote access | Keep RustDesk ordered after LightDM with a current X11 cookie | `os/linux/system/usr/local/libexec/rustdesk-sync-xauth`, `os/linux/system/etc/systemd/system/rustdesk.service.d/10-dotfiles.conf` |
 | Keyboard | macOS-style Command shortcuts with native terminal Ctrl | `os/linux/system/etc/keyd/default.conf`, `os/linux/home/keyd/app.conf`, `os/linux/home/keyd-application-mapper.desktop` |
 | Gestures and scrolling | Three-finger workspace navigation and smoother two-finger scrolling | Cinnamon `org.cinnamon.gestures` settings, Touchégg, `os/linux/system/etc/X11/xorg.conf.d/90-bcm5974.conf` |
 | Power | Clamshell mode and USB reconnect reliability | `os/linux/system/etc/systemd/logind.conf.d/lid.conf`, `os/linux/system/etc/default/grub` |
+
+## The parked dummy output
+
+`99-rustdesk-dummy.conf` is installed with a `.disabled` suffix and Xorg only parses `*.conf`,
+so it has no effect. It defines a `Monitor`, a `Device` with `Driver "dummy"` and a `Screen`.
+A `Screen` section anywhere under `xorg.conf.d` suppresses autoconfiguration, so Xorg builds
+its layout from that screen alone and the Iris 6100 on `eDP-1` never joins the server. The
+laptop then boots to a greeter rendered on a 2048x1536 virtual head while the panel keeps
+showing the last line the kernel console printed. Typing a password into a login screen you
+cannot see is what that looks like from the keyboard.
+
+RustDesk does not need it here. This machine has a built-in panel that is always connected, so
+RustDesk shares the real screen. Rename the file to `.conf` only for a genuinely headless host,
+and expect the physical output to go dark when you do.
+
+## Lid closed and the remote framebuffer
+
+Switching the only output off leaves the X screen with no framebuffer, and RustDesk then has
+nothing to capture. That emptiness is what the dummy head used to cover. With the lid shut and
+no external monitor, `display-hotplug.sh` now reapplies the saved remote profile on `eDP-1`
+rather than running `xrandr --output eDP-1 --off`, so a real framebuffer always exists.
+
+The panel is blanked with DPMS rather than switched off, so nothing is lit inside a closed
+clamshell while the framebuffer stays intact. Measured at the iphone profile:
+
+| Approach | X screen | `xwd -root` capture |
+|---|---|---|
+| `xrandr --output eDP-1 --off` | 320x200 | 259 KB |
+| brightness 0 | 1600x736 | 4.71 MB |
+| `xset dpms force off` | 1600x736 | 4.71 MB |
+
+Switching the output off collapses the screen to its minimum and leaves a remote client with
+nothing worth capturing. Brightness 0 captures fine but `systemd-backlight@.service` saves it at
+shutdown and restores it at boot, so the machine comes up with an invisible login screen, the
+exact failure this path exists to prevent. DPMS keeps no state across a reboot and any input
+undoes it, so it cannot strand the panel dark. It held for 30s under Cinnamon without being
+overridden, and Cinnamon blanks on its own after `sleep-display-ac`, 1800s.
+
+Remote input wakes the panel, so it lights up behind the shut lid while a session is active and
+blanks again on idle. That is ordinary laptop behaviour and costs nothing worth reclaiming.
+
+The lid watcher acts on lid transitions only. It previously also reran the whole path once a
+second for as long as the lid was shut and `eDP-1` was still enabled, to undo something
+re-enabling the panel behind a closed lid. Keeping `eDP-1` enabled with the lid shut is now the
+intended state, so that condition would match forever and reapply the profile every second,
+fighting anything else touching the screen.
+
+`display-hotplug.sh` must be executable. Both callers, the udev DRM rule and the
+`display-lid-watch` autostart, invoke it by path, and `.xprofile` swallows its errors, so a lost
+execute bit disables the whole display path in silence.
 
 ## Restore
 
@@ -70,7 +120,7 @@ The installer copies these early-boot files as root-owned regular files:
 ```text
 /etc/keyd/default.conf
 /etc/X11/xorg.conf.d/90-bcm5974.conf
-/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf
+/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.disabled
 /etc/systemd/logind.conf.d/lid.conf
 /etc/systemd/system/rustdesk.service.d/10-dotfiles.conf
 /usr/local/libexec/rustdesk-sync-xauth
@@ -111,14 +161,28 @@ bash -c 'read -r -s -p "Permanent RustDesk password: " rustdesk_password; printf
 sudo /usr/bin/rustdesk --get-id
 ```
 
-`99-rustdesk-dummy.conf` exposes modes below the dummy driver's default 300 MHz pixel-clock
-ceiling. The ultrawide profile uses 50 Hz to keep 3440 by 1440 within that limit:
+`rustdesk-display` drives the real panel. The profile geometry becomes the X screen through
+`xrandr --fb W\xH --output eDP-1 --mode <native> --scale-from W\xH`, and RustDesk captures that
+screen. The panel keeps its own 2560 by 1600 timing and the driver scales between the two, so a
+profile that is not 16:10 looks stretched locally and arrives correct at the remote client. The
+lid is shut whenever a remote profile is in use, so the local stretch is never seen.
 
-| Profile | Dummy mode | Use |
+Each call detaches the output with `--output eDP-1 --off` before setting the new geometry.
+`RRSetScreenSize` refuses any screen size that no longer contains every active output, and with
+a transform in play that refusal fires even at an exact fit, so shrinking the screen while the
+output is live cannot be made to work. Two further traps are worth knowing: a bare `xrandr --fb`
+is silently ignored and reports success, so `--fb` only takes effect alongside an `--output`
+action, and RandR applies asynchronously, so the result has to be read back rather than assumed.
+`set_geometry` verifies the screen size and retries, and falls back to `--auto` so a failed
+change can never leave the panel detached and dark.
+
+| Profile | X screen | Use |
 |---|---|---|
 | `macbook` | 1920 by 1248 | Readable text on the 3024 by 1964 Retina client |
 | `macbook-hires` | 2560 by 1662 | More remote workspace with the same MacBook aspect ratio |
-| `ultrawide` | 3440 by 1440 at 50 Hz | Home external monitor |
+| `ultrawide` | 3440 by 1440 | Ultrawide-shaped remote canvas |
+| `iphone` | 1600 by 736 | iPhone 17 Pro landscape ratio |
+| `native` | 2560 by 1600 | The panel's own resolution, unscaled. Not saved as the profile |
 
 Switch profiles without `sudo` or a display-manager restart:
 
@@ -146,27 +210,10 @@ sudo systemctl restart display-manager
 sudo systemctl restart rustdesk
 ```
 
-The dummy Xorg device replaces the physical Intel outputs while enabled. Restore physical
-`eDP-1` and `DP-2` operation by disabling the file and restarting the display manager:
-
-```bash
-sudo mv /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
-  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.disabled
-sudo systemctl restart display-manager
-```
-
-On the first managed install, an existing hand-written
-`/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf` intentionally blocks replacement. Compare it,
-preserve it as the one-time backup, and rerun restoration:
-
-```bash
-sudo diff -u /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
-  "$HOME/.dotfiles/os/linux/system/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf" || true
-sudo mv /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
-  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.pre-dotfiles
-DOTFILES_PATH="$HOME/.dotfiles" \
-  bash "$HOME/.dotfiles/restoration_scripts/10-linux-mint-macbook.sh"
-```
+The dummy Xorg device replaces the physical Intel outputs whenever it is active, so it ships
+parked. See [The parked dummy output](#the-parked-dummy-output). The restore script installs it
+as `.disabled` and deletes any active `.conf` copy an older run left behind, so physical `eDP-1`
+and `DP-2` operation is the state you get without doing anything.
 
 ## Display resolution
 
@@ -487,7 +534,7 @@ cat /proc/cmdline | grep 'usbcore.autosuspend=-1'
 readlink -f ~/.xprofile ~/.local/bin/display-hotplug.sh
 readlink -f ~/.local/bin/rustdesk-display
 sudo stat -c '%U:%G:%a %n' \
-  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf \
+  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.disabled \
   /etc/systemd/system/rustdesk.service.d/10-dotfiles.conf \
   /usr/local/libexec/rustdesk-sync-xauth
 systemctl is-enabled rustdesk

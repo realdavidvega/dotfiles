@@ -114,8 +114,17 @@ install_system_file "$SYSTEM_ROOT/etc/keyd/default.conf" \
   /etc/keyd/default.conf CHANGED_KEYD || FAILED=1
 install_system_file "$SYSTEM_ROOT/etc/X11/xorg.conf.d/90-bcm5974.conf" \
   /etc/X11/xorg.conf.d/90-bcm5974.conf CHANGED_XORG || FAILED=1
-install_system_file "$SYSTEM_ROOT/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf" \
-  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf CHANGED_RUSTDESK || FAILED=1
+# Parked, not active. A Screen section in xorg.conf.d suppresses autoconfiguration,
+# so Xorg binds the dummy driver and the Iris 6100 panel on eDP-1 never joins the
+# server. The laptop then boots to a greeter nobody can see. Installed with the
+# .disabled suffix because Xorg only parses *.conf, so the file stays one rename
+# away for a genuinely headless host. Remove any active copy left by an older run.
+install_system_file "$SYSTEM_ROOT/etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.disabled" \
+  /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf.disabled CHANGED_RUSTDESK || FAILED=1
+if [ -e /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf ]; then
+  sudo rm -f /etc/X11/xorg.conf.d/99-rustdesk-dummy.conf || FAILED=1
+  CHANGED_RUSTDESK=1
+fi
 install_system_file "$SYSTEM_ROOT/usr/local/libexec/rustdesk-sync-xauth" \
   /usr/local/libexec/rustdesk-sync-xauth CHANGED_RUSTDESK 0755 || FAILED=1
 install_system_file "$SYSTEM_ROOT/etc/systemd/system/rustdesk.service.d/10-dotfiles.conf" \
