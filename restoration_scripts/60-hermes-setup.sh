@@ -14,7 +14,9 @@ if command -v hermes &> /dev/null; then
     hermes update || true
 else
     echo "Installing Hermes Agent..."
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+    # Keep the restoration run unattended. The installer otherwise treats EOF
+    # as "yes" and launches its interactive API-key wizard behind dotly's log.
+    bash <(curl -fsSL https://hermes-agent.nousresearch.com/install.sh) <<< "n"
     
     # Reload shell so hermes is available immediately
     if [ -n "$ZSH_VERSION" ]; then
