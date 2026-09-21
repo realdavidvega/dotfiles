@@ -63,8 +63,32 @@ sudo mkdir -p /srv/sync/blackvault \
               /srv/services/couchdb/local.d \
               /srv/services/couchdb/data \
               /srv/services/livesync-bridge
+sudo mkdir -p /srv/services/bin
 sudo chown -R "$HUB_USER:$HUB_USER" /srv/sync /srv/services
 sudo chmod 0750 /srv/sync /srv/services
+
+# The lease wrappers. They live outside the encrypted home for the same reason
+# everything else here does: a timer firing on an unattended boot cannot read
+# /home/black. Until now they existed only on the hub and nowhere in this repo,
+# so a rebuild produced a host with no way to start the singletons it owns.
+for LEASE_SCRIPT in leased-service.sh bridge-lease.sh bridge-status.sh; do
+  install -m 0755 "$DOTFILES_PATH/scripts/$LEASE_SCRIPT" \
+    "/srv/services/bin/$LEASE_SCRIPT" || FAILED=1
+done
+
+# ---------------------------------------------------------------------------
+# 1b. inotify headroom
+#
+# The bridge watches the vault through chokidar, which registers one inotify
+# watch per file, and emits an add event for every one of them on start. The
+# default queue of 16384 overflows on that burst, and after an overflow the Deno
+# watcher thread stops delivering events and spins in the kernel instead,
+# burning a core with zero user time and no log output.
+# ---------------------------------------------------------------------------
+echo "==> inotify limits"
+sudo install -m 0644 "$DOTFILES_PATH/os/linux/system/etc/sysctl.d/60-inotify.conf" \
+  /etc/sysctl.d/60-inotify.conf || FAILED=1
+sudo sysctl --quiet --system || FAILED=1
 
 # ---------------------------------------------------------------------------
 # 2. Syncthing
@@ -173,6 +197,10 @@ if [ -d /srv/services/livesync-bridge/.git ]; then
     /srv/services/livesync-bridge/Dockerfile.hub
   install -m 0644 "$SRV_ROOT/livesync-bridge/compose.yaml" \
     /srv/services/livesync-bridge/compose.yaml
+  # Read by the container healthcheck in compose.yaml, so it has to be present
+  # and executable before the container starts.
+  install -m 0755 "$SRV_ROOT/livesync-bridge/healthcheck.sh" \
+    /srv/services/livesync-bridge/healthcheck.sh
   # Upstream's own compose file would otherwise make "docker compose" ambiguous.
   [ -f /srv/services/livesync-bridge/docker-compose.yml ] \
     && mv /srv/services/livesync-bridge/docker-compose.yml \

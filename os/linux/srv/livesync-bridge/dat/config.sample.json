@@ -35,6 +35,10 @@
       "baseDir": "./data/blackvault/",
       "scanOfflineChanges": true,
       "useChokidar": true,
+      "exclude": [
+        "99 - Meta/Agent State/leases",
+        "99 - Meta/Agent State/leases/**"
+      ],
       "includeInternal": [
         ".obsidian/plugins/**",
         ".obsidian/themes/**",

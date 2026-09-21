@@ -110,7 +110,7 @@ index 0f0d9d6..a2c0749 100644
      private readonly result: Promise<IteratorResult<Deno.FsEvent>>;
      private resolveResult!: (result: IteratorResult<Deno.FsEvent>) => void;
 diff --git a/PeerStorage.ts b/PeerStorage.ts
-index 87de897..8068f73 100644
+index 87de897..9cbe5f3 100644
 --- a/PeerStorage.ts
 +++ b/PeerStorage.ts
 @@ -6,6 +6,7 @@ import { format as posixFormat, parse as posixParse } from "@std/path/posix";
@@ -121,13 +121,28 @@ index 87de897..8068f73 100644
  import { walk } from "fs/walk";
  
  import { scheduleTask } from "octagonal-wheels/concurrency/task";
-@@ -24,6 +25,31 @@ export class PeerStorage extends Peer {
+@@ -24,6 +25,48 @@ export class PeerStorage extends Peer {
          super(conf, dispatcher);
      }
  
++    // Excluded paths never sync and, through shouldWatchPath, never get an OS
++    // watcher. Heartbeat files such as the agent leases are rewritten constantly by
++    // every host and are already carried between them by Syncthing, so pushing them
++    // into CouchDB is pure churn: each write costs an inotify event, a chunk upload
++    // and a replication round trip, for a value nothing reads back out of the
++    // database. Watch count is what makes this matter. The kernel queues a bounded
++    // number of inotify events, and once it overflows the Deno watcher thread spins
++    // in the kernel forever rather than recovering.
++    isExcludedPath(normalised: string): boolean {
++        return (this.config.exclude ?? []).some(pattern =>
++            minimatch(normalised, pattern, { dot: true })
++        );
++    }
++
 +    shouldSyncPath(path: string): boolean {
 +        const normalised = this.toPosixPath(path);
 +        if (normalised.startsWith(".obsidian/plugins/obsidian-livesync/")) return false;
++        if (this.isExcludedPath(normalised)) return false;
 +        const isInternal = normalised.split("/").some(part => part.startsWith("."));
 +        if (!isInternal) return true;
 +
@@ -144,6 +159,8 @@ index 87de897..8068f73 100644
 +    shouldWatchPath(path: string): boolean {
 +        const normalised = this.toPosixPath(path);
 +        if (normalised === "" || normalised === ".") return true;
++        // Before the allowlist, so an excluded directory is never walked at all.
++        if (this.isExcludedPath(normalised)) return false;
 +        if (this.shouldSyncPath(normalised)) return true;
 +        return (this.config.includeInternal ?? []).some(pattern =>
 +            minimatch(normalised, pattern, { dot: true, partial: true })
@@ -153,7 +170,7 @@ index 87de897..8068f73 100644
      async delete(pathSrc: string): Promise<boolean> {
          const lp = this.toLocalPath(pathSrc);
          const path = this.toStoragePath(lp);
-@@ -171,6 +197,8 @@ export class PeerStorage extends Peer {
+@@ -171,6 +214,8 @@ export class PeerStorage extends Peer {
          const lP = this.toStoragePath(this.toLocalPath("."));
          const path = this.toPosixPath(relative(lP, pathSrc));
  
@@ -162,7 +179,7 @@ index 87de897..8068f73 100644
          const data = await this.get(path);
  
          if (data === false) return;
-@@ -191,6 +219,8 @@ export class PeerStorage extends Peer {
+@@ -191,6 +236,8 @@ export class PeerStorage extends Peer {
      async dispatchDeleted(pathSrc: string) {
          const lP = this.toStoragePath(this.toLocalPath("."));
          const path = this.toPosixPath(relative(lP, pathSrc));
@@ -171,7 +188,7 @@ index 87de897..8068f73 100644
          await scheduleOnceIfDuplicated(pathSrc, async () => {
              await delay(250);
              if (!await this.isRepeating(path, false)) {
-@@ -326,6 +356,8 @@ export class PeerStorage extends Peer {
+@@ -326,6 +373,8 @@ export class PeerStorage extends Peer {
          this.normalLog(`Scan offline changes: ${this.config.scanOfflineChanges ? "Enabled, now starting..." : "Disabled"}`);
          const watcher = chokidar.watch(lP,
              {
@@ -202,15 +219,21 @@ index bc1754a..48021b0 100644
  defaultLoggerEnv.minLogLevel = LOG_LEVEL_DEBUG;
  const configFile = Deno.env.get(`${KEY}CONFIG`) || "./dat/config.json";
 diff --git a/types.ts b/types.ts
-index f4d3f57..bbfa719 100644
+index f4d3f57..a203637 100644
 --- a/types.ts
 +++ b/types.ts
-@@ -16,6 +16,8 @@ export interface PeerStorageConf {
+@@ -16,6 +16,14 @@ export interface PeerStorageConf {
          args: string[]
      }
      useChokidar?: boolean;
 +    /** Glob patterns for hidden/internal files to sync, e.g. [".obsidian/plugins/**"] */
 +    includeInternal?: string[];
++    /**
++     * Glob patterns that are never synced and never watched, e.g.
++     * ["99 - Meta/Agent State/leases/**"]. Checked before everything else, so it
++     * also overrides includeInternal.
++     */
++    exclude?: string[];
  }
  export interface PeerCouchDBConf extends DirectFileManipulatorOptions {
      /** Glob patterns for i:-prefixed (internal) files to sync, e.g. [".claude/**"] */

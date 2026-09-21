@@ -11,6 +11,16 @@ services:
     # database produce conflict revisions rather than contention.
     # leased-service.sh starts and stops it.
     restart: "no"
+    healthcheck:
+      # A wedged watcher leaves the container up and answering nothing, so
+      # "is it running" is not a liveness signal on its own. healthcheck.sh
+      # watches for the spin itself. start_period covers the offline scan,
+      # which legitimately saturates a core for minutes on every start.
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 300s
     volumes:
       - ./dat:/app/dat
       - /srv/sync/blackvault:/app/data/blackvault
