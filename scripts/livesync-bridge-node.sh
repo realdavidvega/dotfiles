@@ -83,7 +83,22 @@ stage() {
   if [ ! -d "$ROOT/.git" ]; then
     git clone --quiet "$BRIDGE_REPO" "$ROOT" || die "could not clone the bridge"
   fi
+  # A checkout staged before the bridge moved to its own repository still points
+  # at upstream, which has no such branch, so the checkout below would fail with
+  # a pathspec error that says nothing about the cause. Repointing is safe: the
+  # ref is what decides the code, and the remote only decides where it comes from.
+  current="$(git -C "$ROOT" remote get-url origin 2>/dev/null || true)"
+  [ "$current" = "$BRIDGE_REPO" ] || git -C "$ROOT" remote set-url origin "$BRIDGE_REPO"
   git -C "$ROOT" fetch --quiet origin || true
+
+  # That same old layout generated these two beside the checkout, and the branch
+  # tracks them now, so an untracked copy makes the checkout refuse rather than
+  # clobber it. Both are rewritten further down, so dropping a stale one loses
+  # nothing. Once the branch is checked out they are tracked and this is a no-op.
+  for stale in compose.yaml docker-compose.yml.upstream; do
+    git -C "$ROOT" ls-files --error-unmatch "$stale" >/dev/null 2>&1 || rm -f "$ROOT/$stale"
+  done
+
   git -C "$ROOT" checkout --quiet "$BRIDGE_REF" || die "could not check out $BRIDGE_REF"
   git -C "$ROOT" merge --quiet --ff-only "origin/$BRIDGE_REF" 2>/dev/null || true
 
