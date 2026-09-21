@@ -161,18 +161,11 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     alias pyenv="python3 -m venv .venv"
   fi
 
+  # BLACK_VAULT and BLACK_SYSTEM_REPO are discovered below, outside the OS
+  # branches, so every machine resolves them the same way.
   if $IS_WSL; then
-    export BLACK_VAULT="/mnt/c/Users/david/iCloudDrive/iCloud~md~obsidian/Black Vault"
-    export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
     export SKILLS_REGISTRY_REPO="/mnt/c/Users/david/Workspace/repos/github/tools/skills-registry"
   else
-    if [ -d "/srv/sync/blackvault/00 - Black" ]; then
-      export BLACK_VAULT="/srv/sync/blackvault"
-      export BLACK_VAULT_REPO="$BLACK_VAULT"
-    else
-      export BLACK_VAULT="$HOME/Documents/Black Vault"
-      export BLACK_VAULT_REPO="$OS_WORKSPACE/repos/github/docs/black-vault"
-    fi
     export SKILLS_REGISTRY_REPO="$OS_WORKSPACE/repos/github/tools/skills-registry"
   fi
 
@@ -271,20 +264,6 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Daily wallpaper (execute once, node needed)
   # npx --yes bing-wallpaper-daily-mac-multimonitor@latest enable-auto-update
 
-  # The vault moved off iCloud to a plain git checkout carried by Syncthing and
-  # Obsidian LiveSync, so the old Mobile Documents path no longer exists. Probe
-  # rather than assert: a wrong BLACK_VAULT silently disables every vault skill.
-  for _candidate in \
-    "$OS_WORKSPACE/github/black-vault" \
-    "$OS_WORKSPACE/repos/github/tools/black-vault" \
-    "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Black Vault"
-  do
-    [ -d "$_candidate" ] && export BLACK_VAULT="$_candidate" && break
-  done
-  # Work tree and git dir are the same directory now. The split layout, with
-  # GIT_DIR held outside the tree, was abandoned along with iCloud.
-  export BLACK_VAULT_REPO="${BLACK_VAULT:-}"
-
   # Machines disagree on where checkouts live: some use repos/github/tools/,
   # others a flat github/. Pick the one that exists rather than asserting a
   # layout — a wrong path here silently disables skp everywhere.
@@ -305,6 +284,34 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   done
   unset _candidate
 fi
+
+# The vault is a plain git checkout carried by Syncthing and Obsidian LiveSync.
+# Machines disagree on where it lives: the hub serves it out of /srv/sync, other
+# machines keep it with the rest of the checkouts, under repos/github/tools/ or a
+# flat github/. Probe rather than assert, because a wrong BLACK_VAULT silently
+# disables every vault skill. The "00 - Black" marker keeps a half-made directory
+# from winning. Work tree and git dir are the same directory, so BLACK_VAULT_REPO
+# follows BLACK_VAULT. The split layout, with GIT_DIR held outside the tree, was
+# abandoned along with iCloud.
+for _candidate in \
+  "/srv/sync/blackvault" \
+  "${OS_WORKSPACE:-$HOME/Workspace}/repos/github/tools/black-vault" \
+  "${OS_WORKSPACE:-$HOME/Workspace}/github/black-vault"
+do
+  [ -d "$_candidate/00 - Black" ] && export BLACK_VAULT="$_candidate" && break
+done
+unset _candidate
+export BLACK_VAULT_REPO="${BLACK_VAULT:-}"
+
+# black-system is the machinery, the vault is its data. They are separate
+# checkouts and the skills address them by these two variables.
+for _candidate in \
+  "${OS_WORKSPACE:-$HOME/Workspace}/repos/github/tools/black-system" \
+  "${OS_WORKSPACE:-$HOME/Workspace}/github/black-system"
+do
+  [ -d "$_candidate" ] && export BLACK_SYSTEM_REPO="$_candidate" && break
+done
+unset _candidate
 
 # The skp tool is a sibling checkout on managed machines. Keep discovery outside
 # the OS branches so Linux, WSL, and macOS expose the same command.
