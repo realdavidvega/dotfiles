@@ -20,9 +20,11 @@
 set -uo pipefail
 
 DOTFILES_PATH="${DOTFILES_PATH:-$HOME/.dotfiles}"
-SOURCE_DIR="$DOTFILES_PATH/os/linux/srv/livesync-bridge"
-BRIDGE_REPO="https://github.com/vrtmrz/livesync-bridge.git"
-BRIDGE_COMMIT="${BRIDGE_COMMIT:-c3760beaa0851214da4860903445d7f6420ca025}"
+# The private copy, not upstream. It already carries the modifications that used
+# to arrive here as a patch file, so there is one source of truth for them
+# instead of a patch in this repo and a checkout somewhere else.
+BRIDGE_REPO="${LIVESYNC_BRIDGE_REMOTE:-git@github.com:realdavidvega/livesync-bridge.git}"
+BRIDGE_REF="${LIVESYNC_BRIDGE_REF:-hub}"
 NETWORK="personalcloud"
 
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -69,23 +71,14 @@ stage() {
     git clone --quiet "$BRIDGE_REPO" "$ROOT" || die "could not clone the bridge"
   fi
   git -C "$ROOT" fetch --quiet origin || true
-  git -C "$ROOT" checkout --quiet "$BRIDGE_COMMIT" || die "could not pin $BRIDGE_COMMIT"
+  git -C "$ROOT" checkout --quiet "$BRIDGE_REF" || die "could not check out $BRIDGE_REF"
+  git -C "$ROOT" merge --quiet --ff-only "origin/$BRIDGE_REF" 2>/dev/null || true
 
-  # The pinned bridge applies includeInternal only when READING CouchDB, so
-  # without this patch it uploads every hidden file in the vault, .git and the
-  # git-crypt key included, and dies whenever a watched file vanishes under a
-  # git lock or a Syncthing temp file. Never run an unpatched bridge.
-  for patch in "$SOURCE_DIR"/*.patch; do
-    [ -f "$patch" ] || continue
-    if git -C "$ROOT" apply --reverse --check "$patch" 2>/dev/null; then
-      continue                                   # already applied
-    elif git -C "$ROOT" apply --check "$patch" 2>/dev/null; then
-      git -C "$ROOT" apply "$patch" || die "could not apply $(basename "$patch")"
-      printf 'applied %s\n' "$(basename "$patch")"
-    else
-      die "patch does not apply to $BRIDGE_COMMIT: $(basename "$patch")"
-    fi
-  done
+  # No patching step any more. Upstream applies includeInternal only when READING
+  # CouchDB, so an unmodified bridge uploads every hidden file in the vault, the
+  # git-crypt key included, and dies whenever a watched file vanishes under a git
+  # lock or a Syncthing temp file. Those fixes now live in the branch above.
+  # Never run this against upstream directly.
 
   # Upstream's own compose file makes "compose" ambiguous about which to use.
   [ -f "$ROOT/docker-compose.yml" ] && mv "$ROOT/docker-compose.yml" "$ROOT/docker-compose.yml.upstream"
@@ -129,9 +122,9 @@ networks:
     external: true
 COMPOSE
 
+  # dat/config.sample.json arrives with the checkout now, nothing to copy in.
   mkdir -p "$ROOT/dat"
-  [ -f "$ROOT/dat/config.json" ] || cp "$SOURCE_DIR/dat/config.sample.json" "$ROOT/dat/config.sample.json"
-  printf 'staged %s at %s\n' "$BRIDGE_COMMIT" "$ROOT"
+  printf 'staged %s at %s\n' "$(git -C "$ROOT" rev-parse --short HEAD)" "$ROOT"
 }
 
 require_config() {

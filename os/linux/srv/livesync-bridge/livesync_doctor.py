@@ -14,7 +14,10 @@ DB = "http://127.0.0.1:5984/blackvault"
 VAULT = Path("/srv/sync/blackvault")
 BRIDGE_DIR = Path("/srv/services/livesync-bridge")
 BRIDGE_CONFIG = BRIDGE_DIR / "dat/config.json"
-PATCH = Path(__file__).resolve().parent / "internal-sync.patch"
+# The modifications used to arrive as a patch carried in this repo. They live in
+# the private bridge repository now, so what matters is that the checkout is that
+# repository rather than upstream.
+BRIDGE_ORIGIN = "realdavidvega/livesync-bridge"
 
 
 def tailnet_endpoint() -> str:
@@ -75,11 +78,19 @@ def check_services() -> None:
     else:
         report("fail", f"phone endpoint returned '{endpoint.stdout or endpoint.stderr.strip()}', expected '401 0'")
 
-    patched = run(["git", "-C", str(BRIDGE_DIR), "apply", "--reverse", "--check", str(PATCH)])
-    if patched.returncode == 0:
-        report("ok", "bridge source carries internal-sync.patch")
+    origin = run(["git", "-C", str(BRIDGE_DIR), "remote", "get-url", "origin"])
+    if BRIDGE_ORIGIN in origin.stdout:
+        report("ok", f"bridge checkout tracks {BRIDGE_ORIGIN}")
     else:
-        report("fail", "bridge source lacks internal-sync.patch, hidden files are unfiltered on upload")
+        report("fail",
+               f"bridge checkout tracks '{origin.stdout.strip() or 'nothing'}', not {BRIDGE_ORIGIN}. "
+               "An upstream checkout uploads every hidden file in the vault, the git-crypt key included")
+
+    excluded = run(["git", "-C", str(BRIDGE_DIR), "grep", "-q", "isExcludedPath", "HEAD", "--", "PeerStorage.ts"])
+    if excluded.returncode == 0:
+        report("ok", "bridge source carries the internal-file and exclude handling")
+    else:
+        report("fail", "bridge source lacks the exclude handling, hidden files are unfiltered on upload")
 
 
 def load_allowlist() -> list[str]:

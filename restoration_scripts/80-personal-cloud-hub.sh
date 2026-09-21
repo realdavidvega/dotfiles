@@ -44,10 +44,10 @@ fi
 SRV_ROOT="$DOTFILES_PATH/os/linux/srv"
 HUB_USER="${USER:-black}"
 SYNCTHING_VERSION="2.1.3"
-BRIDGE_REPO="https://github.com/vrtmrz/livesync-bridge.git"
-# Pinned: upstream carries no license and ships no image, so the hub builds
-# from source. Bump deliberately, never automatically.
-BRIDGE_COMMIT="c3760beaa0851214da4860903445d7f6420ca025"
+# The branch the hub runs. Upstream work arrives by rebasing this branch in the
+# bridge repository, never by pointing the hub at upstream directly: it ships no
+# license and no image, so the hub builds from our own copy.
+BRIDGE_REF="${LIVESYNC_BRIDGE_REF:-hub}"
 FAILED=0
 
 # ---------------------------------------------------------------------------
@@ -176,42 +176,31 @@ fi
 # 5. livesync-bridge
 # ---------------------------------------------------------------------------
 echo "==> livesync-bridge"
-if [ ! -d /srv/services/livesync-bridge/.git ]; then
-  git clone "$BRIDGE_REPO" /srv/services/livesync-bridge || FAILED=1
-fi
-if [ -d /srv/services/livesync-bridge/.git ]; then
-  git -C /srv/services/livesync-bridge fetch --quiet origin || true
-  git -C /srv/services/livesync-bridge checkout --quiet "$BRIDGE_COMMIT" || FAILED=1
-  for BRIDGE_PATCH in \
-    "$SRV_ROOT/livesync-bridge/internal-sync.patch"; do
-    if git -C /srv/services/livesync-bridge apply --reverse --check "$BRIDGE_PATCH" 2>/dev/null; then
-      : # Patch is already applied.
-    elif git -C /srv/services/livesync-bridge apply --check "$BRIDGE_PATCH"; then
-      git -C /srv/services/livesync-bridge apply "$BRIDGE_PATCH" || FAILED=1
-    else
-      echo "FAILED: livesync-bridge patch does not apply: $BRIDGE_PATCH"
-      FAILED=1
-    fi
-  done
-  install -m 0644 "$SRV_ROOT/livesync-bridge/Dockerfile.hub" \
-    /srv/services/livesync-bridge/Dockerfile.hub
-  install -m 0644 "$SRV_ROOT/livesync-bridge/compose.yaml" \
-    /srv/services/livesync-bridge/compose.yaml
-  # Read by the container healthcheck in compose.yaml, so it has to be present
-  # and executable before the container starts.
-  install -m 0755 "$SRV_ROOT/livesync-bridge/healthcheck.sh" \
-    /srv/services/livesync-bridge/healthcheck.sh
-  # Upstream's own compose file would otherwise make "docker compose" ambiguous.
-  [ -f /srv/services/livesync-bridge/docker-compose.yml ] \
-    && mv /srv/services/livesync-bridge/docker-compose.yml \
-          /srv/services/livesync-bridge/docker-compose.yml.upstream
-
-  if [ ! -f /srv/services/livesync-bridge/dat/config.json ]; then
-    echo "MISSING: /srv/services/livesync-bridge/dat/config.json"
-    NEED_SECRETS=1
+# The bridge is deployed from its own private repository, the same way Black
+# System is. This script does not clone it: cloning needs credentials, and a
+# rebuild is exactly when the hub should not depend on them. The checkout lives
+# under /srv because docker builds the image from it and /home is ecryptfs,
+# unreadable on an unattended boot.
+BRIDGE_CHECKOUT="${LIVESYNC_BRIDGE_REPO:-/srv/services/livesync-bridge}"
+if [ ! -x "$BRIDGE_CHECKOUT/deploy/install.sh" ]; then
+  echo "blocked: clone the private realdavidvega/livesync-bridge repo first"
+  echo "  git clone git@github.com:realdavidvega/livesync-bridge.git $BRIDGE_CHECKOUT"
+  echo "  see its deploy/README.md for the rest"
+  FAILED=1
+else
+  if bash "$BRIDGE_CHECKOUT/deploy/install.sh" --ref "$BRIDGE_REF"; then
+    # A built image is not a running image. The lease leaves a healthy container
+    # alone, so without this stop the hub keeps running the previous build.
+    (cd "$BRIDGE_CHECKOUT" && docker compose stop) >/dev/null 2>&1 || true
+    # Activation stays with the lease. It decides which host runs the singleton,
+    # and a second bridge writing the same document ids into a replicated
+    # database produces conflict revisions rather than contention.
+    /srv/services/bin/bridge-lease.sh || true
   else
-    chmod 600 /srv/services/livesync-bridge/dat/config.json
-    (cd /srv/services/livesync-bridge && docker compose up -d) || FAILED=1
+    case "$?" in
+      3) NEED_SECRETS=1 ;;
+      *) FAILED=1 ;;
+    esac
   fi
 fi
 
@@ -252,7 +241,7 @@ SECRETS REQUIRED. Recover from KeePass, then re-run this script.
       COUCHDB_PASSWORD=...
 
   /srv/services/livesync-bridge/dat/config.json     (0600)
-      from os/linux/srv/livesync-bridge/dat/config.sample.json,
+      from the bridge checkout's dat/config.sample.json,
       replacing username, password, passphrase, obfuscatePassphrase.
       The passphrase must match every LiveSync client exactly.
 =======================================================================

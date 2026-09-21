@@ -138,16 +138,39 @@ tooling writes to this vault directly, so that dependency is unacceptable.
 by the plugin's own author. Running it on the hub makes the hub the single translation point:
 every device talks only to the hub, and nothing waits on a peer.
 
-The pinned bridge applies `includeInternal` only while reading CouchDB. The hub applies
-`internal-sync.patch` so the same allowlist also governs filesystem uploads and writes
-allowed hidden files with LiveSync's `i:` IDs. Selected `.obsidian` plugin and settings
+Upstream applies `includeInternal` only while reading CouchDB. Our copy applies the same
+allowlist to filesystem uploads as well, and writes allowed hidden files with LiveSync's
+`i:` IDs. Selected `.obsidian` plugin and settings
 paths enter CouchDB. Git
 internals, agent settings and other hidden files stay outside the mobile sync layer.
 The bridge also keeps `.obsidian/plugins/obsidian-livesync/` device-local because its
 `data.json` contains CouchDB connection settings. Other allowed plugins still sync.
-The patch also stops chokidar from watching paths the allowlist excludes, and keeps the
-process alive when a watched file vanishes before its watcher attaches. Without both, git
-locks and Syncthing temp files crash the bridge several times an hour.
+It also stops chokidar from watching paths the allowlist excludes, and keeps the process
+alive when a watched file vanishes before its watcher attaches. Without both, git locks and
+Syncthing temp files crash the bridge several times an hour.
+
+An `exclude` list drops paths that generate events nothing reads. The agent leases are
+heartbeat files rewritten constantly by every host and already carried between them by
+Syncthing, so syncing them cost an inotify event, a chunk upload and a replication round trip
+each time, for a value never read back out of CouchDB.
+
+### The bridge is deployed from its own repository
+
+`realdavidvega/livesync-bridge` is private and holds these modifications as real commits on
+the `hub` branch, with upstream as a second remote. It is the source, the hub runs a checkout
+of it, and `deploy/install.sh` inside it does the deploying. Same shape as Black System and
+the vault.
+
+The checkout lives at `/srv/services/livesync-bridge` rather than beside the other repos,
+because docker builds the image from it and `/home` is ecryptfs, unreadable on an unattended
+boot.
+
+Neither `80-personal-cloud-hub.sh` nor `livesync-bridge-node.sh` clones it. Cloning needs
+credentials, and a rebuild is when the hub should depend on them least, so both block with an
+instruction instead. That repository's `deploy/README.md` carries the first-time setup and the
+procedure for taking upstream changes.
+
+Upstream ships no license, which is why this copy stays private and is never published.
 
 `livesync_doctor.py` is a read-only health report for this layer: containers, the phone
 endpoint, whether the bridge carries its patch, hidden records outside the allowlist, and
@@ -466,18 +489,24 @@ The hub service files are managed from these versioned paths:
 /etc/systemd/system/syncthing@black.service.d/override.conf
                                     -> os/linux/srv/syncthing/override.conf
 /srv/services/couchdb/compose.yaml  -> os/linux/srv/couchdb/compose.yaml
-/srv/services/livesync-bridge/Dockerfile.hub
-                                    -> os/linux/srv/livesync-bridge/Dockerfile.hub
-/srv/services/livesync-bridge/compose.yaml
-                                    -> os/linux/srv/livesync-bridge/compose.yaml
-/srv/services/livesync-bridge internal sync
-                                    -> os/linux/srv/livesync-bridge/internal-sync.patch
+/etc/sysctl.d/60-inotify.conf       -> os/linux/system/etc/sysctl.d/60-inotify.conf
+/srv/services/bin/leased-service.sh -> scripts/leased-service.sh
+/srv/services/bin/bridge-lease.sh   -> scripts/bridge-lease.sh
+/srv/services/bin/bridge-status.sh  -> scripts/bridge-status.sh
 ```
 
+The bridge's own files, `Dockerfile.hub`, `compose.yaml` and `healthcheck.sh`, are no longer
+managed from here. They live in the bridge repository, which the hub checks out directly.
+
 The Syncthing override is what points its config at `/srv/services/syncthing`, which is what makes
-the service work at boot without the encrypted home. `Dockerfile.hub` exists because upstream runs
-as uid 1993 while Syncthing writes as uid 1000. Building with `USER 1000` keeps every file on the
-hub owned consistently by `black`.
+the service work at boot without the encrypted home. The lease wrappers live here for the same
+reason: a timer firing on an unattended boot cannot read `/home/black`.
+
+`60-inotify.conf` raises `fs.inotify.max_queued_events` to 131072. chokidar registers roughly one
+inotify watch per file, about 4000 for this vault, and emits an add event for every one of them on
+start. The default queue of 16384 overflows on that burst, and after an overflow Deno's watcher
+thread stops delivering events and spins in the kernel instead, burning a core with no user time
+and no log output until it clears.
 
 Compose files are safe to manage because every credential lives in a sibling file rather than in
 them.
