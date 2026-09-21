@@ -35,6 +35,19 @@ if [ "$(uname -s)" = "Darwin" ]; then
   # wrong here.
   BRIDGE_UID="${BRIDGE_UID:-0}"
   SUDO=""
+elif grep -qi microsoft /proc/version 2>/dev/null; then
+  # WSL. The vault stays on the Windows drive so FreeFileSync backs it up with
+  # the rest of the workspace, which means the storage peer must poll: DrvFs
+  # registers an inotify watch and then never fires it. Set usePolling in
+  # dat/config.json, or the bridge runs looking healthy and deaf.
+  ROOT="${BRIDGE_ROOT:-$HOME/.local/share/personal-cloud/livesync-bridge}"
+  VAULT="${BLACK_VAULT:-$HOME/workspace/repos/github/tools/black-vault}"
+  BRIDGE_UID="${BRIDGE_UID:-1000}"
+  # No sudo. Docker Desktop's WSL integration talks to a per-user pipe, and
+  # sudo would drop the DOCKER_CONFIG set below along with the rest of the
+  # environment. An interactive password prompt is also the last thing a
+  # once-a-minute cron job should depend on.
+  SUDO=""
 else
   ROOT="${BRIDGE_ROOT:-/srv/services/livesync-bridge}"
   VAULT="${BLACK_VAULT:-/srv/sync/blackvault}"
