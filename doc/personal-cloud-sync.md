@@ -349,8 +349,8 @@ keeps only the independent coordination path that the singleton leases require:
 ```
 !/99 - Meta
 !/99 - Meta/Agent State
-!/99 - Meta/Agent State/leases
-!/99 - Meta/Agent State/leases/**
+!/99 - Meta/Agent State/.leases
+!/99 - Meta/Agent State/.leases/**
 **
 ```
 
