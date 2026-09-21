@@ -88,6 +88,12 @@ therefore sets an off timeout for as long as the lid is closed, so the blank re-
 after every wake, and `panel_on` puts the timeouts back to zero so an open lid never blanks on
 a timer of ours.
 
+Cinnamon's screensaver and power stack write DPMS as well, and a restart of either puts the
+timeout back to zero, which silently turns the blank back into a one shot. The lid watcher
+therefore re-checks every 30 seconds while the lid is closed and re-arms the timeout if it has
+drifted. It re-asserts the timeout only, never the blank itself, so it can never darken a panel
+somebody is looking at.
+
 `PANEL_BLANK_SECONDS` controls that timeout and defaults to 60. Remote input keeps the panel lit
 while a session is actively in use and it goes dark a minute after the input stops. Capture is
 unaffected either way.

@@ -42,14 +42,21 @@ lid_state() {
 # Seconds of X input idleness before the panel blanks while the lid is shut.
 PANEL_BLANK_SECONDS="${PANEL_BLANK_SECONDS:-60}"
 
-panel_off() {
-    # This machine runs with no DPMS timeouts at all, xset reports 0 0 0, so a bare
-    # force off is one shot: the next input wakes the panel and nothing ever blanks
-    # it again, which is how the panel ends up lit behind a shut lid hours later.
-    # Give DPMS a short off timeout for as long as the lid is closed, so the blank
-    # re-arms itself after every wake, then go dark now.
-    xset +dpms 2>/dev/null || return 0
+# This machine runs with no DPMS timeouts of its own, xset reports 0 0 0, so a bare
+# force off is one shot: the next input wakes the panel and nothing ever blanks it
+# again, which is how the panel ends up lit behind a shut lid hours later. Arming an
+# off timeout makes the blank re-arm itself after every wake.
+panel_arm_blank() {
+    xset +dpms 2>/dev/null || return 1
     xset dpms 0 0 "$PANEL_BLANK_SECONDS" 2>/dev/null || true
+}
+
+panel_blank_seconds_now() {
+    xset -q 2>/dev/null | awk '/Standby:/ { print $6; exit }'
+}
+
+panel_off() {
+    panel_arm_blank || return 0
     xset dpms force off 2>/dev/null || true
 }
 
@@ -67,17 +74,34 @@ panel_on() {
 watch_lid() {
     local current_state
     local previous_state
+    local ticks
     local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
     exec 9>"$runtime_dir/dotfiles-display-lid.lock"
     flock -n 9 || return 0
 
     previous_state="$(lid_state)"
+    ticks=0
     while sleep 1; do
         current_state="$(lid_state)"
         if [ "$current_state" != "$previous_state" ]; then
             DISPLAY_HOTPLUG_DELAY=0 "$0"
             previous_state="$current_state"
+            ticks=0
+            continue
+        fi
+
+        # Cinnamon's screensaver and power stack write DPMS too, and a restart of
+        # either puts the timeout back to zero, which silently turns the lid-closed
+        # blank back into a one shot. Re-assert the timeout, never the blank itself,
+        # so this can never darken a panel somebody is looking at.
+        ticks=$((ticks + 1))
+        if [ "$ticks" -ge 30 ]; then
+            ticks=0
+            if [ "$current_state" = closed ] &&
+                [ "$(panel_blank_seconds_now)" != "$PANEL_BLANK_SECONDS" ]; then
+                panel_arm_blank || true
+            fi
         fi
     done
 }
