@@ -79,11 +79,18 @@ Switching the output off collapses the screen to its minimum and leaves a remote
 nothing worth capturing. Brightness 0 captures fine but `systemd-backlight@.service` saves it at
 shutdown and restores it at boot, so the machine comes up with an invisible login screen, the
 exact failure this path exists to prevent. DPMS keeps no state across a reboot and any input
-undoes it, so it cannot strand the panel dark. It held for 30s under Cinnamon without being
-overridden, and Cinnamon blanks on its own after `sleep-display-ac`, 1800s.
+undoes it, so it cannot strand the panel dark.
 
-Remote input wakes the panel, so it lights up behind the shut lid while a session is active and
-blanks again on idle. That is ordinary laptop behaviour and costs nothing worth reclaiming.
+This machine runs with no DPMS timeouts at all, `xset` reports `Standby: 0 Suspend: 0 Off: 0`,
+so a bare `xset dpms force off` is one shot. The next input wakes the panel and nothing ever
+blanks it again, which is how the panel ends up lit behind a shut lid hours later. `panel_off`
+therefore sets an off timeout for as long as the lid is closed, so the blank re-arms itself
+after every wake, and `panel_on` puts the timeouts back to zero so an open lid never blanks on
+a timer of ours.
+
+`PANEL_BLANK_SECONDS` controls that timeout and defaults to 60. Remote input keeps the panel lit
+while a session is actively in use and it goes dark a minute after the input stops. Capture is
+unaffected either way.
 
 The lid watcher acts on lid transitions only. It previously also reran the whole path once a
 second for as long as the lid was shut and `eDP-1` was still enabled, to undo something

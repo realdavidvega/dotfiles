@@ -39,12 +39,23 @@ lid_state() {
 # shutdown and restored at boot, which brings the machine up with an invisible login
 # screen. DPMS keeps no state across a reboot and any input undoes it, so it cannot
 # strand the panel dark. It also held for 30s under Cinnamon without being overridden.
+# Seconds of X input idleness before the panel blanks while the lid is shut.
+PANEL_BLANK_SECONDS="${PANEL_BLANK_SECONDS:-60}"
+
 panel_off() {
+    # This machine runs with no DPMS timeouts at all, xset reports 0 0 0, so a bare
+    # force off is one shot: the next input wakes the panel and nothing ever blanks
+    # it again, which is how the panel ends up lit behind a shut lid hours later.
+    # Give DPMS a short off timeout for as long as the lid is closed, so the blank
+    # re-arms itself after every wake, then go dark now.
     xset +dpms 2>/dev/null || return 0
+    xset dpms 0 0 "$PANEL_BLANK_SECONDS" 2>/dev/null || true
     xset dpms force off 2>/dev/null || true
 }
 
 panel_on() {
+    # An open lid must never blank on a timer of ours, so put the timeouts back.
+    xset dpms 0 0 0 2>/dev/null || true
     xset dpms force on 2>/dev/null || true
 }
 
