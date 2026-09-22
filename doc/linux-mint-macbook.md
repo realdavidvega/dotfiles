@@ -102,6 +102,21 @@ the timeout and the flag, never the blank itself, so it can never darken a panel
 looking at. The panel then goes dark on its own once `PANEL_BLANK_SECONDS` of X idle have
 passed.
 
+X also keeps its own idea of the DPMS level, and that bookkeeping can drift away from the
+hardware. Observed on this machine behind a shut lid: `xset` reporting `DPMS is Enabled` and
+`Monitor is Off` while `/sys/class/drm/*-eDP-1/dpms` read `On` and `intel_backlight` sat at 1101
+of 1388 with `bl_power` 0. The panel was lit and every software check looked correct. X issues
+no further blank from there, because as far as it is concerned the panel is already dark, so
+nothing in the session ever recovers on its own. `xset dpms force off` resyncs both and drops
+the backlight to 0.
+
+The connector is the authority, not `xset`. The watcher therefore also compares the two while
+the lid is closed and forces the blank when X believes the panel is dark and the connector says
+it is lit. That condition is the desync itself, so it can never darken a panel somebody is
+looking at, and a remote viewer is unaffected either way because DPMS leaves the framebuffer
+intact. What produces the desync is still unidentified. A modeset through `rustdesk-display
+apply` does not reproduce it.
+
 `PANEL_BLANK_SECONDS` controls that timeout and defaults to 60. Remote input keeps the panel lit
 while a session is actively in use and it goes dark a minute after the input stops. Capture is
 unaffected either way.

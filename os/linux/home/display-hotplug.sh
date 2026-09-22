@@ -65,6 +65,27 @@ panel_blank_state_now() {
     '
 }
 
+# X keeps its own idea of the DPMS level, and a modeset underneath it can relight the
+# panel without that bookkeeping moving. xset then reports Monitor is Off while the
+# connector reads On and the backlight sits at its normal level, measured here at
+# 1101 of 1388 with bl_power 0 behind a shut lid. X issues no further blank in that
+# state, because as far as it is concerned the panel is already dark, so the desync
+# has to be broken from outside. The connector is the authority, not xset.
+panel_hardware_is_lit() {
+    local node
+
+    for node in /sys/class/drm/*-eDP-1/dpms; do
+        [ -r "$node" ] || continue
+        grep -qx 'On' "$node" && return 0
+    done
+
+    return 1
+}
+
+panel_x_thinks_blanked() {
+    xset -q 2>/dev/null | grep -q 'Monitor is Off'
+}
+
 panel_off() {
     panel_arm_blank || return 0
     xset dpms force off 2>/dev/null || true
@@ -109,9 +130,18 @@ watch_lid() {
         ticks=$((ticks + 1))
         if [ "$ticks" -ge 30 ]; then
             ticks=0
-            if [ "$current_state" = closed ] &&
-                [ "$(panel_blank_state_now)" != "$PANEL_BLANK_SECONDS Enabled" ]; then
-                panel_arm_blank || true
+            if [ "$current_state" = closed ]; then
+                if [ "$(panel_blank_state_now)" != "$PANEL_BLANK_SECONDS Enabled" ]; then
+                    panel_arm_blank || true
+                fi
+
+                # Forcing the blank is safe only where X already believes the panel
+                # is dark. That is exactly the desync, and it means no one can be
+                # looking at what this turns off. A remote viewer is unaffected
+                # either way, since DPMS leaves the framebuffer intact.
+                if panel_x_thinks_blanked && panel_hardware_is_lit; then
+                    xset dpms force off 2>/dev/null || true
+                fi
             fi
         fi
     done
