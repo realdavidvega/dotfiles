@@ -101,6 +101,19 @@ for candidate in (
         paths["BLACK_VAULT"] = candidate
         paths["BLACK_VAULT_REPO"] = candidate
         break
+# profiles.json addresses the transport project as $BLACK_SYSTEM_REPO, so an
+# unresolvable value there silently drops its skills with `skip (absent)`.
+# /srv is searched first for the reason 52-black-system.sh gives: on a machine
+# with an encrypted home it is the only location readable before login, so that
+# is where the checkout lives and a $WORKSPACE guess points at nothing.
+for candidate in (
+    os.environ.get("BLACK_SYSTEM_REPO"),
+    "/srv/services/black-system",
+    str(workspace / "repos/github/tools/black-system"),
+):
+    if candidate and (Path(candidate) / "deploy/install.sh").is_file():
+        paths["BLACK_SYSTEM_REPO"] = candidate
+        break
 Path(sys.argv[1]).write_text(json.dumps({"version": 1, "paths": paths}, indent=2) + "\n")
 PYTHON
   echo "seeded: $paths"
