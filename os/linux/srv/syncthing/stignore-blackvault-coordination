@@ -1,0 +1,28 @@
+// blackvault, coordination-only peer. The Xebia Mac.
+//
+// Install as ".stignore" in the vault root on a device whose vault content
+// arrives over LiveSync instead. Syncthing then carries nothing but the lease
+// claims, so the singleton election stays available while the bridge it elects
+// is stopped.
+//
+// Only ever pair this with LiveSync actually enabled on that device. It is an
+// allowlist ending in "**", so a host left with this file and no LiveSync has
+// no content transport at all, in either direction, and Syncthing still reports
+// the folder as in sync.
+//
+// The leading dot in ".leases" is load-bearing. Syncthing matches "*" against
+// dotfiles, so a rule naming the undotted path lets the "Agent State/*" line
+// below it swallow the whole lease tree, and the host then reads every role as
+// unheld.
+//
+// Read this bottom-up. First match wins, and un-ignoring a directory only lets
+// Syncthing descend into it, so each level has to re-ignore its other children
+// before the next "!" line.
+!/99 - Meta/Agent State/.leases/**
+!/99 - Meta/Agent State/.leases
+/99 - Meta/Agent State/*
+!/99 - Meta/Agent State
+/99 - Meta/*
+!/99 - Meta
+/*
+**

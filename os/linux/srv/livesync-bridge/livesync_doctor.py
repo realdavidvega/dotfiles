@@ -32,6 +32,13 @@ def tailnet_endpoint() -> str:
 ENDPOINT = tailnet_endpoint()
 OWN_SETTINGS = ".obsidian/plugins/obsidian-livesync/"
 FLAG_FILES = ("flag_fetch.md", "flag_rebuild.md", "redflag.md", "redflag2.md", "redflag3.md")
+# Every host allowed to write to CouchDB, as the writers table in LiveSync Setup
+# lists them. A desktop that already has the vault over Syncthing must not also
+# replicate it through LiveSync. The two transports round mtime differently, so
+# each keeps correcting the other, every correction is a new revision carrying
+# byte-identical content, and the bridge re-fetches and re-writes all of it. That
+# ran for two days as a bare informational line, so an unlisted writer now fails.
+EXPECTED_WRITERS = frozenset({"bridge", "local tool", "xebia-macbook", "iphone-14-pro", "ipad-pro-11"})
 
 counts = Counter()
 
@@ -177,6 +184,12 @@ def check_writers(hours: int) -> None:
         for ip, count in writes.most_common()
     }
     print(f"     writers in {hours}h (document batches): {labelled or 'none'}")
+    unexpected = {name: count for name, count in labelled.items() if name not in EXPECTED_WRITERS}
+    if unexpected:
+        report("fail", f"CouchDB writers that should not be writing: {unexpected}. "
+                       "One content transport writes each desktop tree, see Sync Setup")
+    else:
+        report("ok", "every CouchDB writer is an expected one")
 
 
 def check_vault() -> None:

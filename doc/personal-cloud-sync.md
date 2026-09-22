@@ -325,39 +325,37 @@ that recoverable, so it is part of the design rather than an addition to it.
 
 The `(?d)` prefix lets Syncthing delete these locally when they disappear remotely.
 
-Full-content `blackvault` peers, anchored at the vault root so nested directories
-of the same name still sync:
+`blackvault` has two `.stignore` variants, both kept in this repo under
+`os/linux/srv/syncthing/` so a machine's copy can be diffed against the
+canonical one. A `.stignore` is machine-local and gitignored inside the vault,
+which is exactly why it drifts unnoticed.
 
-```
-/.git
-/.codex
-/.claude
-/.opencode
-/.codegraph
-/.smart-env
-/.trash
-(?d).DS_Store
-(?d)Thumbs.db
-```
+| File | For | Carries |
+|---|---|---|
+| `stignore-blackvault-full` | a device that takes vault content over Syncthing | everything but per-machine and regenerable paths |
+| `stignore-blackvault-coordination` | a device whose content arrives over LiveSync | the lease tree and nothing else |
 
-`.codex/cache` alone is 310MB of regenerable agent state. The leading `/` matters: without it,
-`99 - Meta/Skills/.opencode/` would be excluded too, and that is real vault content.
+Install either as `.stignore` in the vault root. `.codex/cache` alone is 310MB of
+regenerable agent state. The leading `/` matters: without it,
+`99 - Meta/Skills/.opencode/` would be excluded too, and that is real vault
+content. In the coordination variant the include rules must precede `**`,
+because Syncthing uses the first matching pattern.
 
-The Xebia Mac receives content through LiveSync. Its machine-local `.stignore`
-keeps only the independent coordination path that the singleton leases require:
-
-```
-!/99 - Meta
-!/99 - Meta/Agent State
-!/99 - Meta/Agent State/.leases
-!/99 - Meta/Agent State/.leases/**
-**
-```
-
-The include rules must precede `**` because Syncthing uses the first matching
-pattern. Do not replace this with the full-content rules while LiveSync is
-enabled on the same vault; delivering one write through both mechanisms creates
-byte-identical `.sync-conflict-*` copies.
+> [!warning] Pair the coordination variant with LiveSync, always
+> It is an allowlist ending in `**`. A host left holding it with LiveSync
+> disabled has no content transport in either direction, and Syncthing still
+> reports the folder as in sync, because ignored paths are simply not its
+> business. Check `localFiles` against `globalFiles` rather than the state
+> label:
+>
+> ```
+> curl -s -H "X-API-Key: $KEY" "http://127.0.0.1:8384/rest/db/status?folder=blackvault"
+> ```
+>
+> Equally, do not put the full-content variant on a device that still has
+> LiveSync enabled. Delivering one write through both mechanisms creates
+> byte-identical `.sync-conflict-*` copies, and the two round modification times
+> differently, so they correct each other forever.
 
 > [!warning] Avoid `: ? | * < > "` in note titles
 > The bridge splits paths on `:` and drops the file. All of these are also illegal in Windows

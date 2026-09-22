@@ -1,0 +1,32 @@
+// blackvault, full-content peer. The hub and black-pc.
+//
+// Install as ".stignore" in the vault root on any device that takes its vault
+// content over Syncthing. Syncthing reloads it live, so a wrong copy here takes
+// effect within a scan and is silent: the folder simply stops carrying content
+// and still reports itself in sync.
+//
+// Everything ignored below is per-machine or regenerable. Everything else,
+// including "99 - Meta/Agent State/.leases/", syncs.
+
+// Machine-local git clone. Each device keeps its own.
+/.git
+// Agent tooling links and caches. Regenerable, and .codex/cache alone is 310M.
+// Anchored at the root only: nested dirs like "99 - Meta/Skills/.opencode/"
+// are real vault content and must sync.
+/.codex
+/.claude
+/.opencode
+/.agents
+/.codegraph
+// Per-machine Obsidian state. A pane layout and a LiveSync connection each
+// belong to one device, so replicating them makes two machines fight over one
+// file. These lines only ignore: stale copies already on disk are left alone.
+/.obsidian/workspace.json
+/.obsidian/workspace-mobile.json
+/.obsidian/plugins/obsidian-livesync
+// Obsidian and plugin caches. Regenerable.
+/.smart-env
+/.trash
+// OS clutter. (?d) lets Syncthing delete these locally when they vanish remotely.
+(?d).DS_Store
+(?d)Thumbs.db
