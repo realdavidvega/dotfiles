@@ -489,19 +489,25 @@ gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-type 
 gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
 gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
 gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-timeout 0
-gsettings set org.cinnamon.desktop.screensaver idle-activation-enabled false
+gsettings set org.cinnamon.desktop.session idle-delay 0
 ```
 
-The screensaver is not activated on idle, and that last setting is what keeps the panel dark.
-`org.cinnamon.desktop.session idle-delay` is 900, so after fifteen minutes of X idle `csd-power`
-spawns `cinnamon-screensaver-command.py -a`. When the screensaver service is not running, D-Bus
-cold starts `cinnamon-screensaver-main.py`, whose startup injects an XTEST Escape at the stale
+The session never reports idle, and that last setting is what keeps the panel dark. `csd-power`
+watches session idle, and at the stock 900 seconds it spawns `cinnamon-screensaver-command.py
+-a`. When the screensaver service is not running, D-Bus cold starts
+`cinnamon-screensaver-main.py`, whose startup injects an XTEST Escape at the stale
 `cs-backup-locker` window. That counts as real input, so it wakes the panel and resets the idle
 counter, which schedules the next activation another 900 seconds out. The loop is self
 perpetuating and never settles. Measured over four and a half hours behind a shut lid: 18 wakes,
 one every 905 seconds, each lighting the panel for 87 seconds.
 
-`lock-enabled` stays `true`, so the session still locks. Only idle activation is off.
+`org.cinnamon.desktop.screensaver idle-activation-enabled` does not gate this path. `csd-power`
+never consults it, so setting it false leaves the loop running at full rate. The session idle
+delay is the only one of the two that reaches the caller.
+
+The cost is that an open lid no longer blanks on a Cinnamon idle timer. A closed lid is
+unaffected, because the watcher owns the blank there. `lock-enabled` stays `true`, so the session
+still locks.
 
 Apply the system-level lid setting with a reboot. A temporary inhibitor is available for testing:
 
