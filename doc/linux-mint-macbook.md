@@ -88,11 +88,19 @@ therefore sets an off timeout for as long as the lid is closed, so the blank re-
 after every wake, and `panel_on` puts the timeouts back to zero so an open lid never blanks on
 a timer of ours.
 
-Cinnamon's screensaver and power stack write DPMS as well, and a restart of either puts the
-timeout back to zero, which silently turns the blank back into a one shot. The lid watcher
-therefore re-checks every 30 seconds while the lid is closed and re-arms the timeout if it has
-drifted. It re-asserts the timeout only, never the blank itself, so it can never darken a panel
-somebody is looking at.
+Cinnamon's screensaver and power stack write DPMS as well, and they clobber it two different
+ways. A restart of either puts the timeout back to zero. Switching DPMS off outright leaves the
+timeouts untouched, so `xset` still reports `Off: 60` while `DPMS is Disabled`, the connector at
+`/sys/class/drm/*-eDP-1/dpms` reads `On`, and the panel is lit inside a shut clamshell. Both
+turn the blank back into a one shot, and a drift check that reads the off seconds alone is blind
+to the second one, because 60 still looks like the value it asked for. That is how a closed lid
+ends up glowing until somebody opens it.
+
+The lid watcher therefore re-checks every 30 seconds while the lid is closed and compares the
+off timeout and the enable flag together, re-arming both when either has drifted. It re-asserts
+the timeout and the flag, never the blank itself, so it can never darken a panel somebody is
+looking at. The panel then goes dark on its own once `PANEL_BLANK_SECONDS` of X idle have
+passed.
 
 `PANEL_BLANK_SECONDS` controls that timeout and defaults to 60. Remote input keeps the panel lit
 while a session is actively in use and it goes dark a minute after the input stops. Capture is

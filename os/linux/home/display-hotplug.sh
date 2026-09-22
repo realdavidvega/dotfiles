@@ -51,8 +51,18 @@ panel_arm_blank() {
     xset dpms 0 0 "$PANEL_BLANK_SECONDS" 2>/dev/null || true
 }
 
-panel_blank_seconds_now() {
-    xset -q 2>/dev/null | awk '/Standby:/ { print $6; exit }'
+# Cinnamon's power stack can also switch DPMS off outright instead of moving the
+# timeout, and DPMSDisable leaves the timeouts untouched: xset keeps reporting
+# Off: 60 while the panel is lit and /sys/class/drm/*/dpms reads On. An off-seconds
+# check alone therefore reads 60, concludes nothing drifted and never re-arms, which
+# is how a closed lid ends up glowing until somebody opens it. Read the enable flag
+# alongside the timeout so both kinds of drift are caught.
+panel_blank_state_now() {
+    xset -q 2>/dev/null | awk '
+        /Standby:/ { off = $6 }
+        /DPMS is/ { enabled = $3 }
+        END { print off, enabled }
+    '
 }
 
 panel_off() {
@@ -91,15 +101,16 @@ watch_lid() {
             continue
         fi
 
-        # Cinnamon's screensaver and power stack write DPMS too, and a restart of
-        # either puts the timeout back to zero, which silently turns the lid-closed
-        # blank back into a one shot. Re-assert the timeout, never the blank itself,
-        # so this can never darken a panel somebody is looking at.
+        # Cinnamon's screensaver and power stack write DPMS too, either putting the
+        # timeout back to zero or switching DPMS off entirely, and both silently turn
+        # the lid-closed blank back into a one shot. Re-assert the timeout and the
+        # enable flag, never the blank itself, so this can never darken a panel
+        # somebody is looking at.
         ticks=$((ticks + 1))
         if [ "$ticks" -ge 30 ]; then
             ticks=0
             if [ "$current_state" = closed ] &&
-                [ "$(panel_blank_seconds_now)" != "$PANEL_BLANK_SECONDS" ]; then
+                [ "$(panel_blank_state_now)" != "$PANEL_BLANK_SECONDS Enabled" ]; then
                 panel_arm_blank || true
             fi
         fi
