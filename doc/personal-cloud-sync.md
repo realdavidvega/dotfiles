@@ -173,8 +173,9 @@ procedure for taking upstream changes.
 Upstream ships no license, which is why this copy stays private and is never published.
 
 `livesync_doctor.py` is a read-only health report for this layer: containers, the phone
-endpoint, whether the bridge carries its patch, hidden records outside the allowlist, and
-failed bridge uploads. It exits non-zero on any failure.
+endpoint, whether the bridge carries its patch, hidden records outside the allowlist,
+failed bridge uploads, and whether each Syncthing peer advertises only the paths assigned
+to its transport role. It exits non-zero on any failure.
 
 `cleanup_internal.py` removes unwanted internal-file records and their unshared chunks from an
 affected CouchDB database. It reads the allowlist from the bridge config and its dry run prints

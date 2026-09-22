@@ -7,13 +7,20 @@ import json
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
+from typing import Final
 
 DB = "http://127.0.0.1:5984/blackvault"
 VAULT = Path("/srv/sync/blackvault")
 BRIDGE_DIR = Path("/srv/services/livesync-bridge")
 BRIDGE_CONFIG = BRIDGE_DIR / "dat/config.json"
+SYNCTHING_HOME = Path("/srv/services/syncthing")
+SYNCTHING_FOLDER: Final = "blackvault"
+SYNCTHING_CANARY: Final = "AGENTS.md"
+SYNCTHING_CONTENT_DEVICES: Final[frozenset[str]] = frozenset({"black-pc"})
+SYNCTHING_COORDINATION_DEVICES: Final[frozenset[str]] = frozenset({"xebia-macbook"})
 # The modifications used to arrive as a patch carried in this repo. They live in
 # the private bridge repository now, so what matters is that the checkout is that
 # repository rather than upstream.
@@ -98,6 +105,38 @@ def check_services() -> None:
         report("ok", "bridge source carries the internal-file and exclude handling")
     else:
         report("fail", "bridge source lacks the exclude handling, hidden files are unfiltered on upload")
+
+
+def check_syncthing_roles() -> None:
+    result = run([
+        "syncthing", "cli", "-H", str(SYNCTHING_HOME), "debug", "file",
+        SYNCTHING_FOLDER, SYNCTHING_CANARY,
+    ])
+    if result.returncode != 0:
+        report("fail", f"cannot inspect Syncthing device roles: {result.stderr.strip()}")
+        return
+
+    devices = ET.parse(SYNCTHING_HOME / "config.xml").getroot().findall("device")
+    names_by_id = {
+        device.attrib["id"]: device.attrib.get("name", device.attrib["id"])
+        for device in devices
+    }
+    info = json.loads(result.stdout)
+    available = {
+        names_by_id.get(entry["id"], entry["id"])
+        for entry in info.get("availability") or []
+    }
+    missing = sorted(SYNCTHING_CONTENT_DEVICES - available)
+    unexpected = sorted(SYNCTHING_COORDINATION_DEVICES & available)
+    if missing or unexpected:
+        report(
+            "fail",
+            f"Syncthing transport roles disagree with Sync Setup: missing content peers {missing or 'none'}, "
+            f"coordination-only peers advertising vault content {unexpected or 'none'}. "
+            "Install the canonical .stignore for each role",
+        )
+    else:
+        report("ok", "Syncthing content and coordination peers advertise only their assigned paths")
 
 
 def load_allowlist() -> list[str]:
@@ -211,6 +250,7 @@ def main() -> None:
     args = parser.parse_args()
 
     check_services()
+    check_syncthing_roles()
     allowlist = load_allowlist()
     check_database(allowlist, args.hours)
     check_writers(args.hours)
@@ -223,6 +263,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (subprocess.CalledProcessError, OSError, KeyError, ValueError) as exc:
+    except (subprocess.CalledProcessError, OSError, ET.ParseError, KeyError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
