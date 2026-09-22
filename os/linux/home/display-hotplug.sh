@@ -106,6 +106,7 @@ watch_lid() {
     local current_state
     local previous_state
     local ticks
+    local desyncs
     local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
     exec 9>"$runtime_dir/dotfiles-display-lid.lock"
@@ -113,12 +114,14 @@ watch_lid() {
 
     previous_state="$(lid_state)"
     ticks=0
+    desyncs=0
     while sleep 1; do
         current_state="$(lid_state)"
         if [ "$current_state" != "$previous_state" ]; then
             DISPLAY_HOTPLUG_DELAY=0 "$0"
             previous_state="$current_state"
             ticks=0
+            desyncs=0
             continue
         fi
 
@@ -135,12 +138,24 @@ watch_lid() {
                     panel_arm_blank || true
                 fi
 
-                # Forcing the blank is safe only where X already believes the panel
-                # is dark. That is exactly the desync, and it means no one can be
+                # Forcing the blank is safe only where X already believes the
+                # panel is dark. That is the desync, and it means nobody can be
                 # looking at what this turns off. A remote viewer is unaffected
                 # either way, since DPMS leaves the framebuffer intact.
+                #
+                # X lags its own bookkeeping for about nine seconds after every
+                # wake, reporting Monitor is Off while the panel is already lit,
+                # and that transient clears on its own. Blanking inside it would
+                # darken a panel somebody just woke, so only a desync still there
+                # on the next check counts as the stuck state worth breaking.
                 if panel_x_thinks_blanked && panel_hardware_is_lit; then
-                    xset dpms force off 2>/dev/null || true
+                    desyncs=$((desyncs + 1))
+                    if [ "$desyncs" -ge 2 ]; then
+                        desyncs=0
+                        xset dpms force off 2>/dev/null || true
+                    fi
+                else
+                    desyncs=0
                 fi
             fi
         fi

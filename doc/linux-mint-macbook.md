@@ -114,8 +114,12 @@ The connector is the authority, not `xset`. The watcher therefore also compares 
 the lid is closed and forces the blank when X believes the panel is dark and the connector says
 it is lit. That condition is the desync itself, so it can never darken a panel somebody is
 looking at, and a remote viewer is unaffected either way because DPMS leaves the framebuffer
-intact. What produces the desync is still unidentified. A modeset through `rustdesk-display
-apply` does not reproduce it.
+intact.
+
+X lags its own bookkeeping for about nine seconds after every wake, reporting `Monitor is Off`
+while the panel is already lit, and that transient clears on its own. Blanking inside it would
+darken a panel somebody just woke, so the watcher requires the desync to survive two consecutive
+checks before it forces anything.
 
 `PANEL_BLANK_SECONDS` controls that timeout and defaults to 60. Remote input keeps the panel lit
 while a session is actively in use and it goes dark a minute after the input stops. Capture is
@@ -485,7 +489,19 @@ gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-type 
 gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
 gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
 gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-timeout 0
+gsettings set org.cinnamon.desktop.screensaver idle-activation-enabled false
 ```
+
+The screensaver is not activated on idle, and that last setting is what keeps the panel dark.
+`org.cinnamon.desktop.session idle-delay` is 900, so after fifteen minutes of X idle `csd-power`
+spawns `cinnamon-screensaver-command.py -a`. When the screensaver service is not running, D-Bus
+cold starts `cinnamon-screensaver-main.py`, whose startup injects an XTEST Escape at the stale
+`cs-backup-locker` window. That counts as real input, so it wakes the panel and resets the idle
+counter, which schedules the next activation another 900 seconds out. The loop is self
+perpetuating and never settles. Measured over four and a half hours behind a shut lid: 18 wakes,
+one every 905 seconds, each lighting the panel for 87 seconds.
+
+`lock-enabled` stays `true`, so the session still locks. Only idle activation is off.
 
 Apply the system-level lid setting with a reboot. A temporary inhibitor is available for testing:
 
