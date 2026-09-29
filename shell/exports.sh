@@ -100,7 +100,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     local repo_dir="$current_path"
     while [ -n "$repo_dir" ] && [ "$repo_dir" != "/" ]; do
         if [ -e "$repo_dir/.git" ]; then
-            if [ -f "$repo_dir/.gitattributes" ] && grep -qs 'git-crypt' "$repo_dir/.gitattributes"; then
+            if [ -f "$repo_dir/.gitattributes" ] && grep -qsE '^[^#]*filter=git-crypt' "$repo_dir/.gitattributes"; then
                 command /usr/bin/git "$@"
                 return
             fi
