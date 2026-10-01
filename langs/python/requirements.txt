@@ -5,7 +5,7 @@ idna==3.16
 packaging==26.2
 playwright==1.60.0
 pyee==13.0.1
-pyjwt==2.13.0
+pyjwt==2.15.0
 requests==2.34.2
 typing-extensions==4.15.0
 urllib3==2.7.0
