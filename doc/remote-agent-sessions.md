@@ -56,6 +56,7 @@ Most of it exists because an agent TUI is not an ordinary program.
 | `escape-time 25` | Esc is the interrupt key in both agents. The 500ms default makes it feel broken. 25ms stays responsive without splitting escape sequences that arrive in separate packets over a relayed mobile link |
 | `history-limit 200000` | The run is the artifact. A few MB per pane buys reading what happened instead of guessing |
 | `set-clipboard on` | OSC 52 copies from the remote session into the local clipboard, with no round trip through a file |
+| `after-load-buffer`, `after-set-buffer`, `copy-command` | GNOME Terminal ignores OSC 52. Each buffer write also goes through `scripts/tmux-clipboard.sh` into the Linux desktop clipboard, because Claude Code skips `xclip` in a pane whose environment still says SSH |
 | `window-size latest` | A phone attaching does not shrink the session for the desk. Sizing follows the active client rather than the smallest one |
 | `status-position top` | The iOS keyboard covers the bottom of the screen, which is where the session name and window list would otherwise sit |
 | `automatic-rename off` | Reattaching from a phone means picking a window from a list. A name that tracks the running process is useless for that |
