@@ -74,7 +74,7 @@ HTTP_TIMEOUT = POLL_TIMEOUT + 15
 PEEK_LINES = 30
 MAX_MESSAGE = 3500
 
-# The launcher, used by /new so a Telegram-created session gets the same
+# The launcher, used by /open so a Telegram-created session gets the same
 # three-window layout as one made at the desk. The hub copy is preferred
 # because it reads even when the encrypted home does not.
 LAUNCHER_CANDIDATES = (
@@ -193,18 +193,19 @@ or weekly limit, with the reset time, and another once that window resets.
 /limits shows current usage.
 
 \u2500\u2500 LIFECYCLE \u2500\u2500
-/resume NAME   start it and continue the last conversation
-/new NAME      start it with a blank conversation
-/bind NAME     attach this topic to a session already running
-/kill NAME     close it
+/open NAME        start it, continuing its last conversation if there is one
+/open NAME fresh  start it with a blank conversation
+/bind NAME        attach this topic to a session already running
+/close NAME       stop it, keeping the conversation
 
-Both /resume and /new take an agent after the name: claude (default), codex,
-opencode, shell.
+/open takes an agent after the name: claude (default), codex, opencode, shell.
+A name matching a repository starts there: /open skp, /open skills.
+Any other name starts in the vault.
 
 \u2500\u2500 TOPICS OUTLIVE SESSIONS \u2500\u2500
-Killing a session, or rebooting the hub, leaves this topic alone. A session is
-a process. The conversation is a file on disk. /resume NAME brings the same
-topic back with the conversation intact, /new NAME starts fresh in it.
+Closing a session, or rebooting the hub, leaves this topic alone. A session is
+a process. The conversation is a file on disk. /open NAME brings the same
+topic back with the conversation intact, /open NAME fresh starts blank in it.
 
 Deleting a topic creates one replacement on the next delivery.
 Network errors never replace a topic. /bind NAME inside a topic reuses it.
@@ -236,7 +237,7 @@ encrypted home. From a phone:
   ssh mint
   ecryptfs-mount-private
 
-then /resume vault here. Never send the passphrase through Telegram.
+then /open vault here. Never send the passphrase through Telegram.
 
 \u2500\u2500 FULL GUIDE \u2500\u2500
 black-vault \u2192 02 - Personal/06 - Tech/03 - Guides/Remote Agent Sessions"""
@@ -959,9 +960,13 @@ class Bridge:
                      [b("🔄 Refresh", "home"), b("🧹 Clear", "clear-control")]]
         elif page == "new":
             body = "Reply to the prompt below with a new session name."
-        elif page in ("new-agent", "resume-agent"):
+        elif page in ("new-agent", "resume-agent", "open-agent"):
             title += " · " + session
-            body = "Choose the agent. " + ("Starts a blank conversation." if page == "new-agent" else "Continues its last conversation.")
+            body = "Choose the agent. " + {
+                "new-agent": "Starts a blank conversation.",
+                "resume-agent": "Continues its last conversation.",
+                "open-agent": "Continues the last conversation in its directory, or starts fresh if there is none.",
+            }[page]
             rows = [[b(a.title(), page.replace("-agent", "-run"), session, a)]
                     for a in ("claude", "codex", "opencode", "shell")]
         elif page in ("session", "manage"):
@@ -971,7 +976,7 @@ class Bridge:
             if page == "manage":
                 body += " · Manage"
                 if running:
-                    rows.append([b("🔗 Bind topic", "bind", session), b("⏹ Kill session", "kill", session)])
+                    rows.append([b("🔗 Bind topic", "bind", session), b("⏹ Close session", "kill", session)])
                 rows.append([b("🧹 Clear", "clear", session)])
             else:
                 link = self.topic_link(self.topic_for(session, create=False))
@@ -986,19 +991,19 @@ class Bridge:
                 rows.append([b("⚙️ Manage", "manage", session)])
         elif page == "kill":
             title += " · " + session
-            body = "Stop this session and its agent? The topic and saved conversation remain."
-            rows = [[b("⏹ Yes, kill " + session, "kill-confirm", session), b("Cancel", "session", session)]]
+            body = "Close this session and its agent? The topic and saved conversation remain."
+            rows = [[b("⏹ Yes, close " + session, "kill-confirm", session), b("Cancel", "session", session)]]
         else:
-            body = ("Choose a session on the main panel to open its controls. Manage holds bind, kill and clear."
-                    "\nNew session asks for a new name. Stopped sessions offer Resume conversation and Start fresh."
+            body = ("Choose a session on the main panel to open its controls. Manage holds bind, close and clear."
+                    "\nNew session asks for a name, and a repository name starts there. Stopped sessions offer Resume conversation and Start fresh."
                     "\nSend requires a reply to the named prompt within five minutes. Back cancels it."
-                    "\n/ls /new /resume /bind /kill /peek /say /esc /enter /clear remain available."
+                    "\n/ls /open /close /bind /peek /say /esc /enter /clear remain available."
                     "\nIn Control, include the session name for terminal commands."
                     "\nLimits stays in its own topic. /control restores this panel."
                     f"\nSetup: chat {self.config.chat_id}, Control thread {thread}.")
         if page != "home":
             parent = "session" if page in ("manage", "kill", "new-agent", "resume-agent") else "home"
-            if page == "new-agent" and session not in self.state.topics:
+            if page == "open-agent":
                 parent = "new"
             rows.append([b("⬅ Back", parent, session if parent == "session" else ""),
                          b("🔄 Refresh", page, session)])
@@ -1035,15 +1040,15 @@ class Bridge:
         if session and not self.config.session_allowed(session):
             self.control_panel(notice="This session is no longer allowed.")
             return
-        if action in ("home", "help", "new-agent", "resume-agent", "session", "manage", "kill"):
+        if action in ("home", "help", "new-agent", "resume-agent", "open-agent", "session", "manage", "kill"):
             self.control_panel(action, session)
         elif action == "new":
             self.prompt_new_session(user)
-        elif action in ("new-run", "resume-run"):
+        elif action in ("new-run", "resume-run", "open-run"):
             if self.tmux.exists(session):
-                result = f"{session} is already running. Stop it first to change its conversation."
+                result = f"{session} is already running. Close it first to change its conversation."
             else:
-                result = self.launch(session, agent, resume=action == "resume-run")
+                result = self.launch(session, agent, mode=action.removesuffix("-run").replace("new", "fresh"))
             self.control_panel("session", session, result)
         elif action == "kill-confirm":
             result = self.tmux.kill(session) if self.tmux.exists(session) else "Session is already stopped."
@@ -1086,9 +1091,10 @@ class Bridge:
         elif not self.config.session_allowed(name):
             self.prompt_new_session(user, "That name is not allowed by the session configuration.")
         elif name in self.state.topics or self.tmux.exists(name):
-            self.prompt_new_session(user, f"{name} already exists. Choose it from the main panel, or enter a different name.")
+            # An existing name is a session to return to, not a mistake.
+            self.control_panel("session", name, f"{name} already exists.")
         else:
-            self.control_panel("new-agent", name)
+            self.control_panel("open-agent", name)
 
     def topic_for(self, session: str, create: bool = True) -> int | None:
         with self.state.locked(".topics.lock"):
@@ -1275,7 +1281,7 @@ class Bridge:
             self.post(None, f"session {session} is not in the allowlist")
             return
         if not self.tmux.exists(session):
-            self.post(None, f"no tmux session named {session}. Create it with /new {session}")
+            self.post(None, f"no tmux session named {session}. Start it with /open {session}")
             return
         self.post(session, f"Topic bound to {session}. Type here to reach its pane.",
                   buttons=["peek", "esc"])
@@ -1360,8 +1366,12 @@ class Bridge:
             return False
         return True
 
-    def launch(self, session: str, agent: str, resume: bool = False) -> str:
-        """Use the same detached lifecycle commands as the terminal."""
+    def launch(self, session: str, agent: str, mode: str = "open") -> str:
+        """Use the same detached lifecycle commands as the terminal.
+
+        open continues the last conversation in the session's directory when
+        there is one, fresh always starts blank, resume always continues.
+        """
         launcher = find_launcher()
         if not launcher:
             return "agent-session launcher not found on this host"
@@ -1370,7 +1380,11 @@ class Bridge:
         if session.startswith("-") or any(c in session for c in ".:"):
             return "Session names cannot start with '-' or contain '.' or ':'."
         try:
-            command = [launcher, "resume" if resume else "new", session, agent]
+            command = {
+                "open": [launcher, "open", session, agent, "--detached"],
+                "fresh": [launcher, "new", session, agent],
+                "resume": [launcher, "resume", session, agent],
+            }[mode]
             # The launcher announces sessions it starts. This one announces itself.
             environment = dict(os.environ, AGENT_BRIDGE_QUIET="1")
             done = subprocess.run(command, capture_output=True, text=True, timeout=30,
@@ -1384,7 +1398,11 @@ class Bridge:
             return f"{session} did not start. Is the encrypted home unlocked?"
 
         self.topic_for(session)
-        if resume:
+        # The launcher's first line says where it started and which conversation.
+        summary = (done.stdout or "").strip().splitlines()
+        if summary:
+            return summary[0]
+        if mode == "resume":
             return f"started {session}, {agent} picking up its last conversation"
         return f"started {session} running {agent}"
 
@@ -1425,8 +1443,8 @@ class Bridge:
         if not self.tmux.exists(session):
             return (
                 f"no session named {session} is running.\n"
-                f"/resume {session} continues its last conversation, "
-                f"/new {session} starts a blank one. Either returns to this topic."
+                f"/open {session} continues its last conversation, "
+                f"/open {session} fresh starts a blank one. Either returns to this topic."
             )
 
         if action == "peek":
@@ -1518,7 +1536,7 @@ class Bridge:
                     None,
                     "No sessions running.\n\n"
                     "After a reboot this usually means the encrypted home is still locked, "
-                    "so no agent has started. Unlock it over SSH, then /new vault.",
+                    "so no agent has started. Unlock it over SSH, then /open vault.",
                 )
                 return
 
@@ -1545,10 +1563,38 @@ class Bridge:
             self.post(None, "\n".join(lines), markup=markup if keyboard else None)
             return
 
-        if command in ("bind", "open"):
-            # `open` is kept as an alias because it was the original name, but
-            # `bind` is the honest one. This attaches a topic to a session that
-            # already exists. Creating one is /new, matching `ags new`.
+        if command == "open":
+            # Start or return, matching `ags open`. A running session is a bind,
+            # a stopped one continues its directory's last conversation unless
+            # told fresh.
+            parts = argument.split()
+            target = parts[0] if parts else session or ""
+            options = [part.lstrip("-").lower() for part in parts[1:]]
+            fresh = "fresh" in options
+            agents = [part for part in options if part != "fresh"]
+            if (not target or len(agents) > 1 or
+                    any(a not in ("claude", "codex", "opencode", "shell") for a in agents)):
+                self.post(None, "Usage: /open SESSION [claude|codex|opencode|shell] [fresh]")
+                return
+            if not self.config.session_allowed(target):
+                self.post(None, f"session {target} is not in the allowlist")
+                return
+            if self.tmux.exists(target):
+                if fresh or agents:
+                    self.topic_for(target)
+                    self.post(target, f"{target} is already running {self.tmux.running(target)}.\n"
+                                      f"To change it: /close {target}, then "
+                                      f"{' '.join(['/open', target, *agents] + (['fresh'] if fresh else []))}.")
+                    return
+                command, argument = "bind", target
+            else:
+                self.post(target, self.launch(target, agents[0] if agents else "claude",
+                                              mode="fresh" if fresh else "open"))
+                return
+
+        if command == "bind":
+            # This attaches a topic to a session that already exists. Starting
+            # one is /open, matching `ags open`.
             target = argument or session or ""
             if not target:
                 self.post(None, "Usage: /bind <session>")
@@ -1557,7 +1603,7 @@ class Bridge:
                 self.post(None, f"session {target} is not in the allowlist")
                 return
             if not self.tmux.exists(target):
-                self.post(None, f"no tmux session named {target}. Create it with /new {target}")
+                self.post(None, f"no tmux session named {target}. Start it with /open {target}")
                 return
             if thread_id is None or int(thread_id) == 1 or self.session_for(int(thread_id)) in TOPIC_TITLES:
                 self.open_topic(target)
@@ -1592,16 +1638,16 @@ class Bridge:
                 self.post(
                     target,
                     f"{target} is already running {self.tmux.running(target)}.\n"
-                    f"To change agent: /kill {target}, then /{command} {target} {agent}.",
+                    f"To change agent: /close {target}, then /{command} {target} {agent}.",
                 )
                 return
-            self.post(target, self.launch(target, agent, resume=resume))
+            self.post(target, self.launch(target, agent, mode="resume" if resume else "fresh"))
             return
 
         if command in ("kill", "close"):
             target = argument or session or ""
             if not target:
-                self.post(None, "Usage: /kill <session>")
+                self.post(None, "Usage: /close <session>")
                 return
             if not self.config.session_allowed(target):
                 self.post(None, f"session {target} is not in the allowlist")
@@ -1614,13 +1660,13 @@ class Bridge:
                 self.post(None, error)
                 return
             # Posted into the session's own topic, which stays behind as the
-            # record. /new with the same name returns to this topic later.
+            # record. /open with the same name returns to this topic later.
             self.post(
                 target,
-                f"killed {target}.\n\n"
-                f"This topic stays. /resume {target} comes back to it and picks "
-                f"up the conversation. /new {target} comes back to it and starts "
-                "a blank one.",
+                f"closed {target}.\n\n"
+                f"This topic stays. /open {target} comes back to it and picks "
+                f"up the conversation. /open {target} fresh comes back to it and "
+                "starts a blank one.",
             )
             return
 
@@ -1645,15 +1691,14 @@ class Bridge:
                 "/enter     press Enter\n"
                 "/clear     delete this topic's messages\n"
                 "/ls        list sessions\n"
-                "/new S [a] start a session, blank conversation\n"
-                "/resume S [a] start a session and continue where it left off\n"
+                "/open S [a] [fresh] start a session, continuing its last conversation\n"
                 "/bind S    bind a topic to an existing session\n"
-                "/kill S    kill a session and its agent\n"
+                "/close S   close a session, keeping its conversation\n"
                 "/limits    Claude and Codex usage\n"
                 "/id        report ids for setup\n\n"
                 "In General: /peek S, /say S TEXT, /esc S, /enter S.\n"
                 "Terminal: ags followed by the same verb and session name.\n"
-                "ags open S attaches a terminal. Sessions get a topic when they start.",
+                "ags open S also attaches the terminal. Sessions get a topic when they start.",
             )
             return
 
@@ -1751,10 +1796,9 @@ class Bridge:
     COMMANDS = [
         ("control", "Open the Control panel"),
         ("ls", "List sessions and what each is running"),
-        ("new", "Start a session with a blank conversation: /new NAME [agent]"),
-        ("resume", "Start a session and continue its last conversation: /resume NAME [agent]"),
+        ("open", "Start or return to a session: /open NAME [agent] [fresh]"),
         ("bind", "Bind this topic to an existing session"),
-        ("kill", "Close a session and its agent"),
+        ("close", "Close a session, keeping its conversation"),
         ("peek", "Show the session's pane"),
         ("say", "Type text into the pane and press Enter"),
         ("esc", "Interrupt the agent"),

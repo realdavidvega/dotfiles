@@ -320,9 +320,48 @@ class BridgeTests(unittest.TestCase):
         from unittest.mock import patch
         with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), patch.object(b.subprocess, 'run', return_value=Mock(returncode=0, stdout='', stderr='')) as run:
             self.bridge.launch('vault', 'codex')
+            self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'open', 'vault', 'codex', '--detached'])
+            self.bridge.launch('vault', 'codex', mode='fresh')
             self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'new', 'vault', 'codex'])
-            self.bridge.launch('vault', 'codex', resume=True)
+            self.bridge.launch('vault', 'codex', mode='resume')
             self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'resume', 'vault', 'codex'])
+
+    def test_launch_reports_the_launchers_summary(self):
+        from unittest.mock import patch
+        out = 'Started skp with claude in /repos/skp, continuing its last conversation.\nUse ags open skp to attach.\n'
+        with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), \
+                patch.object(b.subprocess, 'run', return_value=Mock(returncode=0, stdout=out, stderr='')):
+            self.assertEqual(self.bridge.launch('skp', 'claude'),
+                             'Started skp with claude in /repos/skp, continuing its last conversation.')
+
+    def test_open_stopped_session_continues_unless_fresh(self):
+        self.bridge.config.session_patterns = ['*']
+        self.tmux.exists.return_value = False
+        self.bridge.launch = Mock(return_value='started')
+        self.bridge.handle_command('open', 'skp', None, None)
+        self.bridge.launch.assert_called_with('skp', 'claude', mode='open')
+        self.bridge.handle_command('open', 'skp codex fresh', None, None)
+        self.bridge.launch.assert_called_with('skp', 'codex', mode='fresh')
+        self.bridge.handle_command('open', 'skp --fresh', None, None)
+        self.bridge.launch.assert_called_with('skp', 'claude', mode='fresh')
+
+    def test_open_rejects_unknown_agent(self):
+        self.bridge.launch = Mock()
+        self.bridge.handle_command('open', 'vault gpt', None, None)
+        self.bridge.launch.assert_not_called()
+        self.assertIn('Usage: /open', self.tg.send.call_args.args[1])
+
+    def test_open_running_session_binds_without_launch(self):
+        self.bridge.launch = Mock()
+        self.bridge.handle_command('open', 'vault', None, 15)
+        self.bridge.launch.assert_not_called()
+        self.assertEqual(b.State.load(self.path).topics, {'vault': 15})
+
+    def test_open_running_session_with_fresh_says_close_first(self):
+        self.bridge.launch = Mock()
+        self.bridge.handle_command('open', 'vault fresh', None, None)
+        self.bridge.launch.assert_not_called()
+        self.assertIn('/close vault, then /open vault fresh', self.tg.send.call_args.args[1])
 
     def test_agent_window_target_does_not_follow_selected_shell(self):
         tmux = b.Tmux()
@@ -528,7 +567,7 @@ class ControlTests(unittest.TestCase):
         cb = self.callback(key)
         cb['message'].update(message_id=50, message_thread_id=40)
         self.bridge.handle_callback(cb)
-        self.bridge.launch.assert_called_once_with('vault', 'codex', resume=True)
+        self.bridge.launch.assert_called_once_with('vault', 'codex', mode='resume')
 
     def test_home_lists_sessions_without_duplicate_lifecycle_pickers(self):
         actions = list(self.bridge.control_actions.values())
@@ -550,14 +589,22 @@ class ControlTests(unittest.TestCase):
         self.click('new')
         self.bridge.handle_message({'chat': {'id': -1}, 'from': {'id': 2},
             'message_thread_id': 40, 'text': 'research', 'reply_to_message': {'message_id': 50}})
-        self.assertIn(('new-run', 'research', 'codex'), self.bridge.control_actions.values())
+        self.assertIn(('open-run', 'research', 'codex'), self.bridge.control_actions.values())
         self.tmux.type_text.assert_not_called()
 
-    def test_new_rejects_existing_and_invalid_names(self):
+    def test_new_rejects_invalid_names(self):
         self.bridge.config.session_patterns = ['*']
-        for name in ('vault', '../bad', 'a b', '@limits', '-option'):
+        for name in ('../bad', 'a b', '@limits', '-option'):
             self.bridge.accept_new_session(2, name)
-            self.assertFalse(any(v[0] == 'new-run' for v in self.bridge.control_actions.values()))
+            self.assertFalse(any(v[0].endswith('-run') for v in self.bridge.control_actions.values()))
+
+    def test_new_with_existing_name_shows_that_session(self):
+        self.bridge.config.session_patterns = ['*']
+        self.tmux.exists.return_value = False
+        self.bridge.accept_new_session(2, 'vault')
+        actions = {v[0] for v in self.bridge.control_actions.values()}
+        self.assertIn('resume-agent', actions)
+        self.assertNotIn('open-agent', actions)
         self.tmux.type_text.assert_not_called()
 
     def test_limits_shortcut_is_absent_and_cleanup_label_is_clear(self):
