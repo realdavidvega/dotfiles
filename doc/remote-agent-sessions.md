@@ -75,16 +75,17 @@ has `agent-session` on PATH. Bare `ags`, `ags --help`, and
 from another machine. Before the encrypted home is unlocked, use
 `/srv/services/agents/bin/agent-session --help`.
 
-The terminal and Telegram use the same core verbs. `new` and `resume` start
-detached. Both preserve a session that is already running. To watch it in a
-terminal, use `ags open NAME`.
+The terminal and Telegram use the same core verbs. `open` returns to a running
+session, and starts a stopped one by continuing the agent's last conversation
+in its directory, or a fresh one when there is none. In a terminal it also
+attaches. In Telegram it binds the session's topic.
 
 | Action | Terminal | Telegram |
 |---|---|---|
 | List | `ags ls` | `/ls` |
-| Start fresh | `ags new vault codex` | `/new vault codex` |
-| Continue saved conversation | `ags resume vault codex` | `/resume vault codex` |
-| Stop session | `ags kill vault` | `/kill vault` |
+| Start or return | `ags open skp` | `/open skp` |
+| Start blank | `ags open vault codex --fresh` | `/open vault codex fresh` |
+| Stop session | `ags close vault` | `/close vault` |
 | Read pane | `ags peek vault 15` | `/peek 15` in its topic, `/peek vault 15` in General |
 | Send input | `ags say vault "continue"` | `/say continue` in its topic, `/say vault continue` in General |
 | Interrupt | `ags esc vault` | `/esc` in its topic, `/esc vault` in General |
@@ -92,15 +93,17 @@ terminal, use `ags open NAME`.
 | Help | `ags --help` or `ags help` | `/help` |
 
 `claude` is the default agent. `codex`, `opencode` and `shell` are also accepted.
-`new` and `resume` accept `--agent NAME` as an alternative to the positional
-agent, and `--dir PATH` for a custom directory.
+`open` takes the agent positionally or as `--agent NAME`, `--dir PATH` for a
+custom directory, `--fresh` to start blank, `--resume` to insist on continuing,
+and `--detached` to start without attaching.
 
-Terminal attachment remains `ags open NAME`, which also supports creating a
-missing session with the existing `--agent`, `--dir` and `--resume` options.
-`--detached` suppresses attachment. `ags mobile NAME` explicitly adds another
-terminal client, `ags remote COMMAND ...` runs the command on the hub, and
-`ags unlock` unlocks its encrypted home. Telegram's `/bind NAME` associates a
-topic with a running session. Existing aliases remain available.
+`new NAME` is `open --fresh --detached`, `resume NAME` is
+`open --resume --detached`, and `kill` is `close`. They stay for scripts and the
+Control panel buttons, and Telegram still answers `/new`, `/resume` and `/kill`.
+`ags mobile NAME` explicitly adds another terminal client,
+`ags remote COMMAND ...` runs the command on the hub, and `ags unlock` unlocks
+its encrypted home. Telegram's `/bind NAME` associates a topic with a running
+session.
 
 Pane commands resolve the active pane of the `agent` window, independent of
 which window a terminal client is viewing. Sessions without an `agent` window
@@ -119,9 +122,15 @@ window. `ATTACHMENT` counts terminal clients, not Telegram users. `detached`
 means no terminal is attached to that session, and does not mean it is stopped.
 `RUNNING` reports the foreground program, not an inferred busy or idle state.
 
-The working directory
-resolves from `AGENT_SESSION_ROOT`, then `BLACK_VAULT_REPO`, then
-`BLACK_VAULT`, then the hub's vault path, then the current directory.
+The working directory comes from the session name, so `/open skp` from a phone
+lands in the checkout without typing a path. A git repository named exactly
+NAME under `AGENT_SESSION_REPOS` (default `~/Workspace/repos:/srv/services`,
+searched three levels deep) wins. Failing that, the only repository named
+`NAME-something` is used, so `skills` finds `skills-registry`. Two such
+candidates, as with `black`, is ambiguous and finds nothing. Any other name
+falls back to `AGENT_SESSION_ROOT`, then `BLACK_VAULT_REPO`, then `BLACK_VAULT`,
+then the hub's vault path, then the current directory. `--dir` overrides all of
+it, and `ags ls` shows where each session landed.
 
 Four details in there are not obvious and were each found by something
 breaking.
@@ -150,13 +159,20 @@ before there is a client to attach.
 
 ### Resuming
 
-`ags resume NAME [agent]` (or `ags open NAME --resume`) types the agent's own continue command instead of a bare
+Continuing types the agent's own continue command instead of a bare
 invocation: `claude --continue`, `codex resume --last`, `opencode --continue`.
 Each resolves the most recent conversation in the session's working directory,
 so the launcher's directory resolution is what makes it deterministic.
 
+`open` continues by default when the agent has a conversation to continue in
+that directory. For Claude Code that is a transcript under
+`~/.claude/projects/<encoded directory>/`, for Codex a rollout whose
+`session_meta` carries that `cwd`. OpenCode and the shell are not checked and
+start fresh unless given `--resume`. Continuing is per directory, not per
+session name, so two vault sessions share the vault's most recent conversation.
+
 A session is a process and a conversation is a file. Killing the first, or
-rebooting the host, leaves the second alone, which is why `/resume` can rebuild
+rebooting the host, leaves the second alone, which is why `/open` can rebuild
 a session and carry on mid-thread. To pick from a list instead of taking the
 most recent, type `claude --resume` or `codex resume` in the pane, since those
 open an interactive picker.
@@ -246,10 +262,9 @@ prompt from a phone is then just replying to the message that told you about it.
 ```text
 /control        restore the pinned Control panel
 /ls             list sessions, with a button that opens or creates each topic
-/new S [agent]  start a session through the launcher, default claude
-/resume S [a]  continue the last conversation if the session is stopped
+/open S [a] [fresh]  start or return, continuing the last conversation
 /bind S         bind a topic to a session that already exists
-/kill S         close a session and its agent
+/close S        close a session, keeping its conversation
 /peek [n]       colour PNG of the pane, default 30 lines, maximum 60
 /say TEXT       type text and press Enter
 /esc            interrupt
@@ -260,9 +275,14 @@ prompt from a phone is then just replying to the message that told you about it.
 /discover       run on the host, not in chat, to get ids before first start
 ```
 
-`/new` and `/resume` call the launcher's matching detached commands, so they
-have the same lifecycle behavior as `ags new` and `ags resume`. `/bind` handles
-Telegram topic association. `/open` remains a compatibility alias for `/bind`.
+`/open` calls `agent-session open NAME AGENT --detached`, adding `--fresh` when
+asked, so it picks the same directory and conversation as `ags open`. The reply
+is the launcher's first line, which names the directory and whether the
+conversation continued. On a running session `/open` binds its topic, and asking
+for `fresh` or another agent there says to close it first. `/new` and `/resume`
+still call the launcher's explicit forms. The Control panel's New session
+accepts an existing name by showing that session, and a new name starts through
+`open`.
 Inside a session topic, the session is inferred. In General and Control, pane
 commands take the same explicit session name as their terminal counterparts.
 General messages are ignored. Control accepts terminal text only as a reply
@@ -287,12 +307,12 @@ panel, and setup ids appear under Help. The daemon stores the panel message
 and thread ids in `control-panel.json` beside the bridge state. Button tokens
 and pending input expire when the menu changes or the daemon restarts.
 
-The launcher gives terminal sessions their topics too. When `new`, `resume` or
-`open` creates a session, and when `kill` ends one, `agent-session.sh` runs
+The launcher gives terminal sessions their topics too. When `open` creates a
+session, and when `close` ends one, `agent-session.sh` runs
 `agent-bridge.py topic NAME --text ...` in the background. It does nothing when
 the staged bridge or `bridge.env` is missing, so machines without a bridge are
 unaffected, and it never makes the terminal wait on Telegram. The bridge sets
-`AGENT_BRIDGE_QUIET` when it calls the launcher, so a `/new` is announced once.
+`AGENT_BRIDGE_QUIET` when it calls the launcher, so an `/open` is announced once.
 `AGENT_BRIDGE_BIN` points the launcher at another bridge, which the tests use.
 
 Every notification carries Peek and Esc. Only a Claude Code permission prompt,
@@ -359,7 +379,7 @@ sessions deliberately: the history is the record, and reusing a name returns to
 the same thread.
 
 A deleted topic is replaced immediately on the next delivery, including a
-`/new` or `/resume` response. An existing session and topic are reused.
+`/open` response. An existing session and topic are reused.
 Only Telegram's explicit missing-topic error invalidates the mapping. Network
 failures, rate limits, closed topics and formatting errors preserve it.
 If creation fails, session output is not redirected into General.

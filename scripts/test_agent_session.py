@@ -84,5 +84,58 @@ class SessionTests(unittest.TestCase):
             finally:
                 tmux('kill-server', check=False)
 
+    def test_open_finds_the_repository_and_continues_by_default(self):
+        with tempfile.TemporaryDirectory(prefix='agent-session-test-') as directory:
+            root = Path(directory).resolve()
+            binary = root / '.local/bin'
+            binary.mkdir(parents=True)
+            (root / '.tmux.conf').write_text(
+                'set -g default-shell /bin/bash\n'
+                'set -g default-command "bash --noprofile --norc"\n'
+            )
+            record = root / 'invocations'
+            fake = binary / 'claude'
+            fake.write_text('#!/usr/bin/env bash\nprintf "%s|%s\\n" "$PWD" "$*" >> "$AGENT_TEST_RECORD"\ncat\n')
+            fake.chmod(0o755)
+            repos, vault = root / 'repos', root / 'vault'
+            vault.mkdir()
+            for repo in ('github/tools/skp', 'github/tools/skills-registry',
+                         'github/a/black-one', 'github/b/black-two'):
+                (repos / repo / '.git').mkdir(parents=True)
+            skp = repos / 'github/tools/skp'
+            env = dict(os.environ, HOME=str(root), TMUX='', TMUX_TMPDIR=str(root),
+                       AGENT_SESSION_ROOT=str(vault), AGENT_SESSION_REPOS=str(repos),
+                       AGENT_TEST_RECORD=str(record), AGENT_BRIDGE_BIN=str(root / 'none'))
+            env.pop('CLAUDE_CONFIG_DIR', None)
+            def cli(*args):
+                return subprocess.run(['bash', str(SCRIPT), *args], env=env, check=True,
+                                      capture_output=True, text=True, timeout=10).stdout
+            def started(name, *args):
+                count = len(record.read_text().splitlines()) if record.exists() else 0
+                out = cli('open', name, '--detached', *args)
+                for _ in range(40):
+                    lines = record.read_text().splitlines() if record.exists() else []
+                    if len(lines) > count:
+                        cli('close', name)
+                        return out, lines[-1]
+                    time.sleep(.05)
+                self.fail('agent did not start')
+            try:
+                out, line = started('skp')
+                self.assertEqual(line, f'{skp}|')
+                self.assertIn('fresh conversation', out)
+                history = root / '.claude/projects' / str(skp).replace('/', '-').replace('.', '-').replace('_', '-')
+                history.mkdir(parents=True)
+                (history / 'conversation.jsonl').write_text('{}\n')
+                out, line = started('skp')
+                self.assertEqual(line, f'{skp}|--continue')
+                self.assertIn('continuing its last conversation', out)
+                self.assertEqual(started('skp', '--fresh')[1], f'{skp}|')
+                self.assertEqual(started('skills')[1], f'{repos}/github/tools/skills-registry|')
+                self.assertEqual(started('black')[1], f'{vault}|')
+                self.assertEqual(started('house')[1], f'{vault}|')
+            finally:
+                subprocess.run(['tmux', 'kill-server'], env=env, capture_output=True)
+
 if __name__ == '__main__':
     unittest.main()

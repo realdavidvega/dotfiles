@@ -10,9 +10,8 @@ Persistent tmux sessions for coding agents, local or over SSH.
 
 Shared commands (the same verbs as Telegram):
   ls                      List sessions and what is running
-  new <name> [agent]       Start a detached session with a fresh conversation
-  resume <name> [agent]    Start detached and continue the last conversation
-  kill <name>             Stop a session, keeping its saved conversation
+  open <name> [agent]      Attach, starting the session if it is not running
+  close <name>            Stop a session, keeping its saved conversation
   peek <name> [lines]      Read the agent pane, default 30 lines, maximum 60
   say <name> <text...>     Type text literally and press Enter
   esc <name>              Send Escape to the agent pane
@@ -20,35 +19,48 @@ Shared commands (the same verbs as Telegram):
   help                    Show this help
 
 Terminal commands:
-  open <name> [dir]        Attach, creating the session if it does not exist
   mobile <name>           Force an additional terminal client
   remote [args...]         Run the same command on the hub over SSH
   unlock                  Unlock the hub's encrypted home (hub only)
 
 Agents: claude (default), codex, opencode, shell.
-new and resume preserve an existing session. Use open to watch it.
 
-Options for new, resume and open:
+Starting a session continues the agent's last conversation in that directory
+when there is one, and starts a fresh one otherwise.
+
+Options for open:
+  --fresh                 Start a blank conversation even if one exists
+  --resume                Continue the last conversation, never start fresh
   --agent <a>              Select the agent (alternative to the positional agent)
-  --dir <path>             Override the default working directory
+  --dir <path>             Override the working directory
+  --detached              Start or reuse without attaching
 
-Additional options for open:
-  --resume                Continue the last conversation when creating
-  --detached              Create or reuse without attaching
+Where a session starts:
+  A session named after a git repository under AGENT_SESSION_REPOS starts in
+  it. An exact name wins, otherwise the only repository named <name>-something,
+  so skp finds tools/skp and skills finds tools/skills-registry. Any other name
+  starts in the default root, the vault.
+
+Explicit forms, kept for scripts and the Telegram buttons:
+  new <name> [agent]       open --fresh --detached
+  resume <name> [agent]    open --resume --detached
+  kill <name>             close
 
 Examples:
-  ags new vault codex
-  ags open vault
+  ags open skp
+  ags open vault codex --fresh
   ags say vault "continue with the tests"
-  ags remote resume vault codex
+  ags remote open skp
 
-Telegram: /new vault codex, /resume vault codex, /kill vault, /ls.
+Telegram: /open skp, /open vault codex fresh, /close skp, /ls.
 Inside the vault topic: /peek, /say TEXT, /esc, /enter.
-On the hub, new, resume and open give a session its Telegram topic.
+On the hub, starting a session gives it its Telegram topic.
 
 Environment:
-  AGENT_SESSION_ROOT  Default working directory
-  AGENT_SESSION_HOST  SSH host for `remote` (default: mint)
+  AGENT_SESSION_ROOT   Default working directory
+  AGENT_SESSION_REPOS  Where named repositories are looked up, colon separated
+                       (default: ~/Workspace/repos:/srv/services)
+  AGENT_SESSION_HOST   SSH host for `remote` (default: mint)
 
 A session gets three windows: agent, shell, git. The agent is typed into a
 shell rather than run as the window's command, so that when it exits or
@@ -126,6 +138,66 @@ resolve_root() {
   pwd
 }
 
+# A session named after a repository starts in it, so `/open skp` from a phone
+# lands in the checkout without typing a path. An exact name wins. Failing
+# that, the only repository named NAME-something, so skills finds
+# skills-registry. Two candidates is ambiguous and finds nothing.
+repo_for_name() {
+  local name="$1" base dir exact="" bases
+  local -a prefixed=()
+
+  [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+  IFS=: read -ra bases <<< "${AGENT_SESSION_REPOS:-$HOME/Workspace/repos:/srv/services}"
+
+  for base in "${bases[@]}"; do
+    [[ -n "$base" && -d "$base" ]] || continue
+    while IFS= read -r dir; do
+      [[ -e "$dir/.git" ]] || continue
+      if [[ "${dir##*/}" == "$name" ]]; then
+        exact="$dir"
+        break 2
+      fi
+      prefixed+=("$dir")
+    done < <(find "$base" -mindepth 1 -maxdepth 3 -type d \( -name "$name" -o -name "$name-*" \) \
+               -not -path '*/.*' 2>/dev/null)
+  done
+
+  if [[ -n "$exact" ]]; then
+    printf '%s\n' "$exact"
+  elif ((${#prefixed[@]} == 1)); then
+    printf '%s\n' "${prefixed[0]}"
+  else
+    return 1
+  fi
+}
+
+session_dir() {
+  repo_for_name "$1" || resolve_root
+}
+
+# Whether the agent has a conversation in this directory that continuing would
+# pick up. Each agent keys its history by the working directory, so this is
+# the same lookup claude --continue and codex resume --last make. opencode and
+# the shell have nothing to find, so they start fresh unless told otherwise.
+has_conversation() {
+  local agent="$1" dir codex_home
+
+  dir="$(cd "$2" && pwd -P)" || return 1
+  case "$agent" in
+    claude)
+      compgen -G "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${dir//[^A-Za-z0-9]/-}/*.jsonl" >/dev/null
+      ;;
+    codex)
+      # The first line of each rollout is its session_meta, carrying the cwd.
+      codex_home="${CODEX_HOME:-$HOME/.codex}"
+      [[ -d "$codex_home/sessions" ]] || return 1
+      find "$codex_home/sessions" -name 'rollout-*.jsonl' -print0 2>/dev/null \
+        | xargs -0 -r head -qn1 2>/dev/null | grep -qF "\"cwd\":\"$dir\""
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 # Tell the Telegram bridge about a lifecycle change on this host, so a session
 # started at a terminal gets its topic without a trip through /bind. It runs in
 # the background and says nothing. No bridge, no configuration or no network
@@ -188,18 +260,22 @@ enter_session() {
 }
 
 cmd_open() {
-  local name="" dir="" agent="claude" agent_cmd agent_bin resume=false detached=false
+  local name="" dir="" agent="claude" agent_cmd agent_bin mode=auto resume=false detached=false
+  local conversation
 
   while (($# > 0)); do
     case "$1" in
       --agent)  agent="${2:?--agent needs a value}"; shift 2 ;;
       --dir)    dir="${2:?--dir needs a value}"; shift 2 ;;
-      --resume) resume=true; shift ;;
+      --resume) mode=resume; shift ;;
+      --fresh)  mode=fresh; shift ;;
       --detached) detached=true; shift ;;
       -h|--help) usage; exit 0 ;;
       *)
         if [[ -z "$name" ]]; then
           name="$1"
+        elif [[ "$1" =~ ^(claude|codex|opencode|shell)$ ]]; then
+          agent="$1"
         elif [[ -z "$dir" ]]; then
           dir="$1"
         else
@@ -237,7 +313,7 @@ cmd_open() {
 
   ensure_config
 
-  [[ -n "$dir" ]] || dir="$(resolve_root)"
+  [[ -n "$dir" ]] || dir="$(session_dir "$name")"
 
   if [[ ! -d "$dir" ]]; then
     printf 'Working directory does not exist: %s\n' "$dir" >&2
@@ -245,6 +321,9 @@ cmd_open() {
   fi
 
   agent_bin="$(agent_binary "$agent")"
+  if [[ "$mode" == resume ]] || { [[ "$mode" == auto ]] && has_conversation "$agent" "$dir"; }; then
+    resume=true
+  fi
   agent_cmd="$(agent_command "$agent" "$resume")"
 
   if [[ -n "$agent_bin" ]] && ! command -v "$agent_bin" >/dev/null 2>&1; then
@@ -263,13 +342,16 @@ cmd_open() {
   fi
 
   if [[ "$resume" == true ]]; then
-    announce_session "$name" --text "🟢 $name started at a terminal, $agent continuing its last conversation."
+    conversation="continuing its last conversation"
   else
-    announce_session "$name" --text "🟢 $name started at a terminal, running $agent in $dir."
+    conversation="fresh conversation"
   fi
+  announce_session "$name" --text "🟢 $name started at a terminal, $agent in $dir, $conversation."
 
   if [[ "$detached" == true ]]; then
-    printf 'Started %s with %s. Use ags open %s to attach.\n' "$name" "$agent" "$name"
+    # The first line is what Telegram shows, so it stands on its own.
+    printf 'Started %s with %s in %s, %s.\n' "$name" "$agent" "$dir" "$conversation"
+    printf 'Use ags open %s to attach.\n' "$name"
   else
     enter_session "$name"
   fi
@@ -337,14 +419,14 @@ cmd_start() {
     esac
   done
   agent_binary "$agent" >/dev/null
-  [[ "$verb" != resume ]] || options+=(--resume)
+  if [[ "$verb" == resume ]]; then options+=(--resume); else options+=(--fresh); fi
   cmd_open "$name" --agent "$agent" "${options[@]}"
 }
 
 agent_pane() {
   local name="$1" rows window active pane selected=""
   if ! rows="$(tmux list-windows -t "=$name" -F $'#{window_name}\t#{window_active}\t#{pane_id}' 2>/dev/null)"; then
-    printf 'No session named %s. Use ags new %s or ags resume %s.\n' "$name" "$name" "$name" >&2
+    printf 'No session named %s. Use ags open %s.\n' "$name" "$name" >&2
     return 1
   fi
   while IFS=$'\t' read -r window active pane; do
@@ -435,12 +517,14 @@ attached_clients() {
   tmux list-clients -t "=$1" 2>/dev/null | grep -c . || true
 }
 
-cmd_kill() {
+# Closing stops the agent and the tmux session. The conversation is a file on
+# disk, so the next open picks it up again.
+cmd_close() {
   local name="${1:?A session name is required}"
 
   tmux kill-session -t "=$name"
   announce_session "$name" --no-create \
-    --text "killed $name at a terminal. /resume $name picks the conversation up again."
+    --text "closed $name at a terminal. /open $name picks the conversation up again."
 }
 
 cmd_remote() {
@@ -490,7 +574,7 @@ case "$command" in
   peek|say|esc|enter) cmd_pane "$command" "$@" ;;
   ls|list)     cmd_ls ;;
   mobile)      cmd_mobile "$@" ;;
-  kill)        cmd_kill "$@" ;;
+  close|kill)  cmd_close "$@" ;;
   remote)      cmd_remote "$@" ;;
   unlock)      cmd_unlock ;;
   help|-h|--help) usage ;;
