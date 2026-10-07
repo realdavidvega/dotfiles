@@ -144,4 +144,5 @@ maybe_start_postgres "$workspace"
 maybe_start_hindsight
 
 cd "$workspace"
-exec opencode "${opencode_args[@]}"
+# bash 3.2 treats an empty array as unbound under set -u, so expand it only when set.
+exec opencode ${opencode_args[@]+"${opencode_args[@]}"}
