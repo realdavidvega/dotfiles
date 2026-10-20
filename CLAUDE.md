@@ -251,6 +251,15 @@ requires a session name, while Telegram can infer it from the topic. Pane
 commands target the `agent` window even when a different window is selected.
 Full reasoning and the alternatives considered are in `doc/remote-agent-sessions.md`.
 
+### Voice notes (hub)
+
+`scripts/voice.py` turns text into an OGG/Opus voice note with Kokoro on the
+CPU, offline, and prints one JSON line (`speak`, `check`). It runs from
+`/srv/services/voice` with its own venv and verified models, staged by
+`restoration_scripts/54-voice.sh` on a hub, and refuses to run from this
+checkout. Test it with `python3 scripts/test_voice.py`. The contract, cache and
+install are in `doc/voice.md`.
+
 ## Architecture
 
 ### Directory map (top-level, what's non-obvious)
@@ -284,7 +293,7 @@ Full reasoning and the alternatives considered are in `doc/remote-agent-sessions
   Order matters. Adding a new step means picking a sensible number.
 - `scripts/` — repo-owned scripts callable from anywhere (not necessarily
   during bootstrap). Includes `opencode-session.sh`, `hindsight-local.sh`,
-  `agent-session.sh`, `agent-notify.sh`, `agent-bridge.py`,
+  `agent-session.sh`, `agent-notify.sh`, `agent-bridge.py`, `voice.py`,
   `skills/{sync,verify}.sh`,
   `mp3-tagger/*`, etc.
 - `shell/` — the actual shell setup. `init.sh` is the single entry point that

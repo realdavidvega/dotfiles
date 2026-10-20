@@ -41,6 +41,7 @@ flowchart TD
 | Aliases | Short forms for daily use | `aliases/.tmux-aliases` |
 | Telegram bridge | Control a session from a phone, any agent | `scripts/agent-bridge.py`, `os/linux/srv/agents/bridge.env.sample`, `os/linux/system/etc/systemd/system/agent-bridge.service` |
 | Hub staging | Plaintext copies for a host whose home is encrypted | `restoration_scripts/51-agent-sessions.sh` |
+| Voice notes | Local text to speech for the hub's bots, not yet called by the bridge | `scripts/voice.py`, `os/linux/srv/voice/`, `restoration_scripts/54-voice.sh` |
 | SSH key readability | Key login that works before the home is unlocked | `os/linux/system/etc/ssh/sshd_config.d/01-dotfiles-authorized-keys.conf` |
 | Packages | `mosh` for mobile links, `claude-code-tools` for `tmux-cli` | `os/linux/apt/packages.mint.txt`, `langs/python/uv_tools.txt` |
 
@@ -532,6 +533,11 @@ Log in once with
 `/srv/services/telegram/venv/bin/python /srv/services/telegram/bin/telegram-user.py login`.
 It refuses a bot token, and writes the session into
 `/srv/services/telegram/user.env` without printing it.
+
+Voice notes come from `scripts/voice.py`, a local Kokoro CLI with its own venv
+and models under `/srv/services/voice`, staged by
+`restoration_scripts/54-voice.sh` and described in `doc/voice.md`. Black System
+uses it for the voiced morning brief. The bridge does not call it yet.
 
 | Option | Why not now | Revisit when |
 |---|---|---|
