@@ -1,0 +1,4 @@
+# The voice CLI's only direct dependency. 54-voice.sh installs requirements.txt
+# when it exists, else this file. Freeze requirements.txt on the hub's own Mint
+# Python from a clean venv built from this file.
+kokoro-onnx>=0.6.1
