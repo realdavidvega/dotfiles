@@ -220,6 +220,13 @@ class BridgeTests(unittest.TestCase):
         self.tg.call.side_effect = b.TelegramError('400 message is not modified')
         self.assertIn('already current', self.bridge.publish_guide())
 
+    def test_a_fresh_guide_is_pinned_whole(self):
+        self.tg.call.return_value = {'ok': True, 'result': {'message_id': 21}}
+        self.bridge.publish_guide(pin=True)
+        sent = next(c.kwargs for c in self.tg.call.call_args_list if c.args[0] == 'sendMessage')
+        self.assertEqual(sent['text'], self.bridge.render_guide())
+        self.assertLess(len(b.GUIDE.format(sessions='vault skp skills dotfiles black-system api')), 4096)
+
     def test_deleted_guide_id_is_cleared(self):
         self.state.guide_message_id = 20
         self.state.save()
@@ -698,6 +705,422 @@ class LimitsPanelTests(unittest.TestCase):
         self.press('refresh', thread=40)
         self.press('refresh', user=999)
         self.bridge.limits.report.assert_not_called()
+
+FAKE_VOICE = r"""
+import json, sys, time
+from pathlib import Path
+root = Path(__file__).resolve().parent.parent
+verb = sys.argv[1]
+(root / 'calls.log').open('a').write(' '.join(sys.argv[1:]) + '\n')
+script = root / f'{verb}.json'
+reply = json.loads(script.read_text()) if script.exists() else {'ok': True}
+time.sleep(reply.pop('sleep', 0))
+if reply.pop('silent', False):
+    sys.exit(1)
+if verb == 'speak' and reply.get('ok'):
+    Path(sys.argv[sys.argv.index('--out') + 1]).write_bytes(b'OGG')
+print(json.dumps(reply))
+"""
+
+
+class VoiceTests(unittest.TestCase):
+    helper = BridgeTests.helper
+
+    def setUp(self):
+        BridgeTests.setUp(self)
+        self.root = Path(self.tmp.name) / 'voice-root'
+        (self.root / 'bin').mkdir(parents=True)
+        (self.root / 'venv/bin').mkdir(parents=True)
+        (self.root / 'bin/voice.py').write_text(FAKE_VOICE)
+        (self.root / 'venv/bin/python').symlink_to(sys.executable)
+        self.reply('hear', ok=True, text='run the tests', seconds=2)
+        self.bridge.config.voice_root = self.root
+        self.messages = iter(range(100, 200))
+        self.tg.send.side_effect = lambda *a, **k: {'ok': True, 'result': {'message_id': next(self.messages)}}
+        self.tmux.type_text.return_value = None
+        self.bridge.voice = b.VoiceLane(self.bridge)
+        self.lane = self.bridge.voice
+
+    def reply(self, verb, **result):
+        (self.root / f'{verb}.json').write_text(json.dumps(result))
+
+    def note(self, message_id=10, thread=6, duration=5, user=2):
+        message = {'chat': {'id': -1}, 'from': {'id': user}, 'message_id': message_id,
+                   'voice': {'file_id': f'f{message_id}', 'duration': duration}}
+        if thread is not None:
+            message['message_thread_id'] = thread
+        self.bridge.handle_message(message)
+
+    def run_lane(self):
+        deadline = b.time.monotonic() + 15
+        while self.lane.running or self.lane.busy():
+            self.assertLess(b.time.monotonic(), deadline)
+            self.lane.tick()
+            b.time.sleep(0.02)
+
+    def hear(self, message_id=10):
+        with patch.object(self.bridge.tg, 'download') as download:
+            download.side_effect = lambda _f, dest, _c: dest.write_bytes(b'OGG')
+            self.note(message_id)
+            self.run_lane()
+        return f'h{message_id}'
+
+    def tap(self, data, message_id, user=2):
+        callback = {'id': 'q', 'data': data, 'from': {'id': user},
+                    'message': {'chat': {'id': -1}, 'message_id': message_id, 'text': 'finished: tests pass'}}
+        self.bridge.handle_callback(callback)
+        return [c.kwargs for c in self.tg.call.call_args_list if c.args[0] == 'answerCallbackQuery'][-1].get('text')
+
+    def calls(self, method):
+        return [c.kwargs for c in self.tg.call.call_args_list if c.args and c.args[0] == method]
+
+    def posted(self):
+        return [c.args[1] for c in self.tg.send.call_args_list]
+
+    def test_a_voice_note_is_heard_and_answered_with_a_card(self):
+        key = self.hear()
+        self.assertEqual(self.calls('setMessageReaction')[0]['reaction'], [{'type': 'emoji', 'emoji': '👀'}])
+        card = self.tg.send.call_args
+        self.assertEqual(card.args[1], '🎙 Heard for vault:\n“run the tests”')
+        self.assertEqual(card.kwargs['reply_to'], 10)
+        self.assertEqual([button['callback_data'] for button in card.kwargs['markup']['inline_keyboard'][0]],
+                         ['v:s:h10', 'v:e:h10', 'v:x:h10'])
+        saved = json.loads(self.lane.path.read_text())[key]
+        self.assertEqual((saved['status'], saved['card'], 'pid' in saved), ('ready', 100, False))
+        self.assertEqual(sorted(p.name for p in self.lane.job_folder(key).iterdir()), ['text.txt'])
+        self.assertNotIn('run the tests', self.lane.path.read_text())
+        self.assertEqual(self.lane.job_folder(key).stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.lane.path.stat().st_mode & 0o777, 0o600)
+
+    def test_refused_voice_notes_get_a_line_and_queue_nothing(self):
+        self.state.topics['work'] = 8
+        self.state.save()
+        self.note(thread=8)
+        self.note(duration=121)
+        for message_id in range(20, 26):
+            self.note(message_id)
+        self.bridge.config.voice_root = None
+        self.note(30)
+        self.note(31, thread=None)
+        self.assertEqual(self.posted(), ['session work is not in the allowlist',
+                                         "That's over two minutes. Send a shorter one, or type it.",
+                                         'Too many voice jobs waiting. Send it again in a minute.',
+                                         "Voice notes aren't read on this host. Type it instead."])
+        self.assertEqual(sorted(self.lane.jobs), ['h20', 'h21', 'h22', 'h23', 'h24'])
+
+    def test_send_types_the_whole_transcript_once_and_closes_the_card(self):
+        self.reply('hear', ok=True, text='x' * 4000)
+        key = self.hear()
+        self.assertEqual(self.tap('v:s:h10', 99), 'That voice note has expired.')
+        self.tmux.type_text.assert_not_called()
+        self.tg.call.side_effect = lambda method, **_: (_ for _ in ()).throw(b.TelegramError('edit')) \
+            if method == 'editMessageText' else {'ok': True}
+        self.assertIsNone(self.tap('v:s:h10', 100))
+        self.assertEqual(self.tap('v:s:h10', 100), 'That voice note has expired.')
+        self.tmux.type_text.assert_called_once_with('vault', 'x' * 4000, enter=True)
+        self.assertNotIn(key, self.lane.jobs)
+        self.assertFalse(self.lane.job_folder(key).exists())
+
+    def test_send_shows_a_typing_failure_instead_of_sent(self):
+        self.hear()
+        self.tmux.type_text.return_value = 'pane gone'
+        self.tap('v:s:h10', 100)
+        self.assertEqual(self.calls('editMessageText')[-1]['text'], 'pane gone\n“run the tests”')
+
+    def test_send_to_a_stopped_session_keeps_the_card(self):
+        key = self.hear()
+        self.tmux.exists.return_value = False
+        self.tap('v:s:h10', 100)
+        self.assertIn('no session named vault is running', self.posted()[-1])
+        self.assertEqual(self.lane.jobs[key]['status'], 'ready')
+        self.assertEqual(self.calls('editMessageText'), [])
+
+    def test_edit_types_the_corrected_reply_even_a_slash_command(self):
+        key = self.hear()
+        self.tap('v:e:h10', 100)
+        self.assertEqual(self.tg.send.call_args.kwargs['markup'], {'force_reply': True})
+        self.assertEqual(self.lane.jobs[key]['ask'], 101)
+        plain = {'chat': {'id': -1}, 'from': {'id': 2}, 'message_thread_id': 6, 'text': 'something else'}
+        self.bridge.handle_message(plain)
+        self.assertIn(key, self.lane.jobs)
+        self.tmux.exists.return_value = False
+        self.bridge.handle_message(dict(plain, text='/compact', reply_to_message={'message_id': 101}))
+        self.assertEqual(self.lane.jobs[key]['ask'], 101)
+        self.tmux.exists.return_value = True
+        self.bridge.handle_message(dict(plain, text='/compact', reply_to_message={'message_id': 101}))
+        self.assertEqual(self.tmux.type_text.call_args_list[-1].args, ('vault', '/compact'))
+        self.assertNotIn(key, self.lane.jobs)
+        self.assertEqual(self.calls('editMessageText')[-1]['text'], '✅ Sent to vault:\n“/compact”')
+        self.assertEqual(self.calls('deleteMessage')[-1]['message_id'], 101)
+
+    def test_discard_deletes_the_card_and_types_nothing(self):
+        key = self.hear()
+        self.tap('v:e:h10', 100)
+        self.tap('v:x:h10', 100)
+        self.assertEqual([c['message_id'] for c in self.calls('deleteMessage')], [100, 101])
+        self.tmux.type_text.assert_not_called()
+        self.assertNotIn(key, self.lane.jobs)
+
+    def test_each_hear_failure_gets_its_line(self):
+        cases = [({'ok': False, 'reason': 'empty'}, 'Heard nothing in that one. Try again, or type it.'),
+                 ({'ok': False, 'reason': 'models'}, "Speech-to-text isn't installed on this host yet. Type it instead."),
+                 ({'ok': False, 'reason': 'audio'}, "Couldn't read that voice note. Send it again."),
+                 ({'ok': False, 'reason': 'engine'}, "Couldn't transcribe that one. Send it again, or type it."),
+                 ({'silent': True}, "Couldn't transcribe that one. Send it again, or type it.")]
+        for message_id, (result, line) in enumerate(cases, 40):
+            self.reply('hear', **result)
+            key = self.hear(message_id)
+            self.assertEqual((self.posted()[-1], self.tg.send.call_args.kwargs['reply_to']), (line, message_id))
+            self.assertNotIn(key, self.lane.jobs)
+        with patch.object(self.bridge.tg, 'download', side_effect=b.TelegramError('download: URLError')):
+            self.note(50)
+            self.run_lane()
+        self.assertEqual(self.posted()[-1], "Couldn't read that voice note. Send it again.")
+
+    def test_a_retry_survives_the_scratch_folder_a_killed_run_left(self):
+        with patch.object(self.bridge.tg, 'download') as download:
+            download.side_effect = lambda _f, dest, _c: dest.write_bytes(b'OGG')
+            self.note()
+            scratch = self.lane.job_folder('h10') / 'voice-hear-1'
+            scratch.mkdir()
+            (scratch / 'in.wav').write_bytes(b'WAV')
+            self.run_lane()
+        self.assertEqual(self.posted()[-1], '🎙 Heard for vault:\n“run the tests”')
+        self.assertEqual(sorted(p.name for p in self.lane.job_folder('h10').iterdir()), ['text.txt'])
+
+    def test_a_card_that_cannot_be_posted_is_forgotten_without_a_failure_line(self):
+        for error in (b.TelegramError('Bad Gateway'), b.http.client.IncompleteRead(b'')):
+            def send(*args, **kwargs):
+                if kwargs.get('markup'):
+                    raise error
+                return {'ok': True, 'result': {'message_id': 100}}
+            self.tg.send.reset_mock()
+            self.tg.send.side_effect = send
+            self.hear()
+            self.assertEqual(self.tg.send.call_count, 1)
+            self.assertEqual(self.lane.jobs, {})
+
+    def test_a_failure_line_that_cannot_be_posted_is_tried_again(self):
+        sends = iter([b.TelegramError('Bad Gateway')])
+        def send(*args, **kwargs):
+            error = next(sends, None)
+            if error:
+                raise error
+            return {'ok': True, 'result': {'message_id': 100}}
+        self.reply('speak', ok=False, error='boom')
+        self.tap('a:listen:vault', 60)
+        self.tg.send.side_effect = send
+        with self.assertLogs(b.LOG, 'ERROR'):
+            self.run_lane()
+        self.assertEqual(self.posted(), ["Couldn't voice that one."] * 2)
+        self.assertEqual(self.lane.jobs, {})
+
+    def test_a_job_that_cannot_be_saved_is_still_answered(self):
+        with patch.object(self.lane, 'save', side_effect=OSError('disk full')):
+            self.assertEqual(self.tap('a:listen:vault', 60), "Couldn't queue that. Try again later.")
+            self.note()
+        self.assertEqual(self.posted()[-1], "Couldn't save that voice note. Send it again.")
+        self.assertEqual(self.lane.jobs, {})
+        self.assertEqual(list(self.lane.folder.iterdir()), [])
+
+    def test_a_failed_ask_keeps_the_one_before(self):
+        key = self.hear()
+        self.tap('v:e:h10', 100)
+        self.tg.send.side_effect = b.TelegramError('Bad Gateway')
+        with self.assertRaises(b.TelegramError):
+            self.tap('v:e:h10', 100)
+        self.assertEqual(self.lane.jobs[key]['ask'], 101)
+        self.assertEqual(self.calls('deleteMessage'), [])
+
+    def test_an_overrun_is_killed_and_a_restart_retries_until_the_cap(self):
+        self.reply('hear', sleep=30)
+        with patch.dict(b.VOICE_LIMITS, hear=0.3):
+            self.hear()
+        self.assertEqual(self.posted()[-1], "Couldn't transcribe that one. Send it again, or type it.")
+        with patch.object(self.bridge.tg, 'download'):
+            self.note(11)
+            for _ in range(3):
+                self.lane.tick()
+                self.assertIsNotNone(self.lane.running)
+                self.lane.stop_child()
+                self.assertEqual(self.lane.jobs['h11']['status'], 'queued')
+                self.lane = self.bridge.voice = b.VoiceLane(self.bridge)
+            self.lane.tick()
+        self.assertIsNone(self.lane.running)
+        self.assertNotIn('h11', self.lane.jobs)
+        self.assertFalse(self.lane.job_folder('h11').exists())
+
+    def test_an_unexpected_error_still_answers_and_never_stops_the_loop(self):
+        (self.root / 'bin/voice.py').write_text(FAKE_VOICE.replace(".write_bytes(b'OGG')", ".parent"))
+        self.tap('a:listen:vault', 60)
+        with self.assertLogs(b.LOG, 'ERROR') as logged:
+            self.run_lane()
+        self.assertEqual(logged.output, ['ERROR:agent-bridge:voice job failed: FileNotFoundError'])
+        self.assertEqual(self.posted()[-1], "Couldn't voice that one.")
+        self.assertEqual(self.lane.jobs, {})
+        self.lane.add('s61', {'kind': 'speak', 'session': 'vault', 'status': 'queued', 'received': 0,
+                              'attempts': 0, 'reply_to': 61}, text='old')
+        self.lane.tick()
+        self.assertEqual(self.lane.jobs, {})
+        self.assertEqual((self.posted()[-1], self.tg.send.call_args.kwargs['reply_to']),
+                         ("Couldn't voice that one.", 61))
+
+    def test_a_failed_voice_send_still_answers(self):
+        self.reply('speak', ok=True, seconds=3)
+        self.tap('a:listen:vault', 60)
+        self.tg.send.side_effect = lambda *a, **k: (_ for _ in ()).throw(b.TelegramError('Bad Request')) \
+            if k.get('upload') else {'ok': True, 'result': {'message_id': 100}}
+        with self.assertLogs(b.LOG, 'ERROR'):
+            self.run_lane()
+        self.assertEqual(self.posted()[-1], "Couldn't voice that one.")
+        self.assertEqual(self.lane.jobs, {})
+
+    def test_the_speak_limit_grows_with_the_text(self):
+        self.reply('speak', ok=True, sleep=0.5)
+        with patch.dict(b.VOICE_LIMITS, speak=0.3), patch.object(b, 'SPEECH_RATE', 1000):
+            self.tap('a:listen:vault', 60)
+            self.run_lane()
+        self.assertEqual(self.posted()[-1], "Couldn't voice that one.")
+        with patch.dict(b.VOICE_LIMITS, speak=0.3), patch.object(b, 'SPEECH_RATE', 20):
+            self.tap('a:listen:vault', 61)
+            self.run_lane()
+        self.assertEqual(self.tg.send.call_args.kwargs['upload'][0], 'voice')
+
+    def test_load_drops_bad_entries_sweeps_folders_and_expires_cards(self):
+        key = self.hear()
+        self.lane.jobs[key]['received'] -= b.VOICE_TTL + 1
+        self.lane.add('h11', {'kind': 'hear', 'session': 'vault', 'status': 'queued', 'received': 0,
+                              'attempts': 0, 'note': 11, 'file': 'f11'})
+        raw = dict(self.lane.jobs, s5={'kind': 'hear'}, **{'../x': {}})
+        self.lane.path.write_text(json.dumps(raw))
+        (self.lane.folder / 'h77').mkdir()
+        self.lane = b.VoiceLane(self.bridge)
+        self.assertEqual(list(self.lane.jobs), [key, 'h11'])
+        self.assertFalse((self.lane.folder / 'h77').exists())
+        self.lane.tick()
+        self.assertEqual(self.lane.jobs, {})
+        self.assertEqual(self.calls('editMessageReplyMarkup')[-1]['message_id'], 100)
+        self.assertEqual((self.posted()[-1], self.tg.send.call_args.kwargs['reply_to']),
+                         ("Couldn't transcribe that one. Send it again, or type it.", 11))
+
+    def test_a_crashed_bridges_child_is_killed_only_in_its_own_folder(self):
+        self.lane.add('h10', {'kind': 'hear', 'session': 'vault', 'status': 'queued', 'received': b.time.time(),
+                              'attempts': 1, 'note': 10, 'file': 'f', 'pid': 4242})
+        self.lane.add('h11', {'kind': 'hear', 'session': 'vault', 'status': 'queued', 'received': b.time.time(),
+                              'attempts': 1, 'note': 11, 'file': 'f', 'pid': 4343})
+        proc = Path(self.tmp.name) / 'proc'
+        (proc / '4242').mkdir(parents=True)
+        (proc / '4242/cwd').symlink_to(self.lane.job_folder('h10'))
+        (proc / '4343').mkdir()
+        (proc / '4343/cwd').symlink_to(self.tmp.name)
+        killed = Mock(side_effect=lambda pid, _sig: b.shutil.rmtree(proc / str(pid)))
+        with patch.object(b, 'PROC', proc), patch.object(b.os, 'killpg', killed):
+            b.VoiceLane(self.bridge)
+        killed.assert_called_once_with(4242, b.signal.SIGKILL)
+
+    def test_a_download_never_logs_the_token(self):
+        tg = b.Telegram('123:SECRET')
+        dest = Path(self.tmp.name) / 'note.ogg'
+        with patch.object(tg, 'call', return_value={'result': {'file_path': 'voice/a.oga'}}), \
+                patch.object(b.urllib.request, 'urlopen',
+                             side_effect=b.urllib.error.URLError('https://api.telegram.org/file/bot123:SECRET/x')), \
+                self.assertRaises(b.TelegramError) as raised:
+            tg.download('f', dest, 100)
+        self.assertNotIn('SECRET', str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        response = Mock()
+        response.read.side_effect = [b'x' * 80, b'x' * 80, b'']
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        with patch.object(tg, 'call', return_value={'result': {'file_path': 'voice/a.oga'}}), \
+                patch.object(b.urllib.request, 'urlopen', return_value=response), \
+                self.assertRaises(b.TelegramError) as raised:
+            tg.download('f', dest, 100)
+        self.assertEqual(str(raised.exception), 'download: ValueError')
+
+    def test_strangers_get_no_toast_and_queue_nothing(self):
+        self.hear()
+        for data in ('v:s:h10', 'a:listen:vault', 'k:6'):
+            self.assertIsNone(self.tap(data, 100, user=999))
+        self.tmux.type_text.assert_not_called()
+        self.assertEqual(list(self.lane.jobs), ['h10'])
+
+    def test_listen_reads_a_finished_message_aloud_in_reply(self):
+        self.reply('speak', ok=True, path='out.ogg', seconds=3)
+        self.assertEqual(self.tap('a:listen:vault', 60), 'Voicing it…')
+        self.assertEqual(self.tap('a:listen:vault', 60), 'Already on its way.')
+        self.assertEqual(self.lane.text('s60'), 'finished: tests pass')
+        self.run_lane()
+        sent = self.tg.send.call_args
+        self.assertEqual((sent.kwargs['upload'], sent.kwargs['thread_id'], sent.kwargs['reply_to']),
+                         (('voice', 'listen.ogg', 'audio/ogg', b'OGG'), 6, 60))
+        self.assertIn('speak --text-file text.txt --out out.ogg --no-cache', (self.root / 'calls.log').read_text())
+        self.assertEqual(self.lane.jobs, {})
+        self.reply('speak', ok=False, error='boom')
+        self.tap('a:listen:vault', 61)
+        self.run_lane()
+        self.assertEqual(self.posted()[-1], "Couldn't voice that one.")
+
+    def test_listen_toasts(self):
+        self.assertEqual(self.tap('a:listen:work', 60), "That session isn't in the allowlist.")
+        for message_id in range(61, 66):
+            self.tap('a:listen:vault', message_id)
+        self.assertEqual(self.tap('a:listen:vault', 66), 'Busy. Try again in a minute.')
+        self.bridge.config.voice_root = None
+        self.assertEqual(self.tap('a:listen:vault', 67), "Voice isn't set up on this host.")
+
+    def test_listen_is_offered_only_with_voice_and_a_short_enough_name(self):
+        self.assertEqual(b.notify_buttons('stop', self.bridge.config, 'vault'), ['peek', 'listen', 'clear'])
+        self.assertEqual(b.notify_buttons('stop', self.bridge.config, 'v' * 56), ['peek', 'clear'])
+        self.assertEqual(b.notify_buttons('permission', self.bridge.config, 'vault'), ['peek', 'yes', 'esc'])
+        self.bridge.config.voice_root = None
+        self.assertEqual(b.notify_buttons('stop', self.bridge.config, 'vault'), ['peek', 'clear'])
+
+    def test_one_child_at_a_time_in_arrival_order_with_short_polls(self):
+        self.assertEqual(self.bridge.poll_timeout(), b.POLL_TIMEOUT)
+        with patch.object(self.bridge.tg, 'download'):
+            self.note(10)
+            self.tap('a:listen:vault', 60)
+            self.note(11)
+            self.assertEqual(self.bridge.poll_timeout(), b.BUSY_POLL)
+            self.run_lane()
+        verbs = [line.split()[0] for line in (self.root / 'calls.log').read_text().splitlines()]
+        self.assertEqual(verbs, ['hear', 'speak', 'hear'])
+        self.assertEqual(self.bridge.poll_timeout(), b.POLL_TIMEOUT)
+
+    def test_only_serve_builds_the_lane(self):
+        self.hear()
+        self.assertIsNone(b.Bridge(self.bridge.config, self.state, self.tg, self.tmux).voice)
+
+    def test_a_new_bot_drops_every_voice_job(self):
+        self.hear()
+        self.tg.call.return_value = {'ok': True, 'result': []}
+        self.bridge.drain_updates()
+        self.assertEqual(self.lane.jobs, {})
+        self.assertFalse(self.lane.folder.exists())
+
+    def test_doctor_reports_voice(self):
+        self.reply('check', ok=True, hear=True)
+        self.assertEqual(b.voice_status(self.bridge.config), 'speak and hear ready')
+        self.reply('check', ok=True, hear=False, hear_error='ImportError')
+        self.assertEqual(b.voice_status(self.bridge.config), 'speak only (hear: ImportError)')
+        self.reply('check', ok=True, hear=False)
+        self.assertEqual(b.voice_status(self.bridge.config), 'speak only (hear models missing)')
+        self.reply('check', silent=True)
+        self.assertEqual(b.voice_status(self.bridge.config), 'check failed (no output)')
+        self.bridge.config.voice_root = Path(self.tmp.name) / 'nowhere'
+        self.assertEqual(b.voice_status(self.bridge.config), f'not installed at {self.bridge.config.voice_root}')
+        self.bridge.config.voice_root = None
+        self.assertEqual(b.voice_status(self.bridge.config), 'off (AGENT_BRIDGE_VOICE_ROOT unset)')
+
+    def test_the_voice_root_comes_from_the_environment(self):
+        env = {'AGENT_BRIDGE_BOT_TOKEN': 't', 'AGENT_BRIDGE_CHAT_ID': '-1', 'AGENT_BRIDGE_ALLOWED_USER_IDS': '2',
+               'AGENT_BRIDGE_SESSIONS': 'vault', 'AGENT_BRIDGE_VOICE_ROOT': str(self.root)}
+        with patch.dict(b.os.environ, env, clear=True):
+            self.assertEqual(b.Config.from_env().voice_root, self.root)
+        with patch.dict(b.os.environ, dict(env, AGENT_BRIDGE_VOICE_ROOT=''), clear=True):
+            self.assertIsNone(b.Config.from_env().voice_root)
+
 
 if __name__ == '__main__':
     unittest.main()

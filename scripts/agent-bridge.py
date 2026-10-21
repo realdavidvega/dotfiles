@@ -48,6 +48,7 @@ import argparse
 import fcntl
 import fnmatch
 import html
+import http.client
 import json
 import logging
 import os
@@ -144,6 +145,7 @@ BUTTONS: dict[str, tuple[str, str]] = {
     "yes": ("1 · Yes", "1"),
     "enter": ("⏎ Enter", ""),
     "esc": ("⎋ Esc", ""),
+    "listen": ("🔊 Listen", ""),
     "clear": ("🧹 Clear", ""),
 }
 
@@ -183,6 +185,7 @@ Inside a session topic, a plain message is typed into the pane as well.
 In General, include the session: /peek vault, /say vault TEXT, /esc vault.
 At a terminal use the same verbs: ags peek vault, ags say vault "TEXT".
 If plain messages stop arriving, privacy mode was turned back on. Use /say.
+With voice on, a voice note comes back as text to Send, Edit or Discard.
 
 Control lists sessions directly. Select one for its controls, or use New session.\n/control restores it. General stays quiet. Plain messages there are ignored. Tasks, mood and notes
 for the journal go to Black System, not here.
@@ -213,7 +216,7 @@ Network errors never replace a topic. /bind NAME inside a topic reuses it.
 \u2500\u2500 BUTTONS \u2500\u2500
 Peek and Esc come with every notification. A permission prompt also gets
 1 \u00b7 Yes. Esc declines it. A question arrives as a card listing its options.
-Answer it at the terminal. A finished turn gets \U0001F9F9 Clear.
+Answer it at the terminal. A finished turn gets \U0001F9F9 Clear and \U0001F50A Listen.
 Buttons send the keystrokes a human would press and do not read the prompt, so
 /peek before approving something you did not watch happen.
 
@@ -290,6 +293,8 @@ class Config:
     limit_warn: int = 90
     limits_enabled: bool = False
     limits_state_path: Path | None = None
+    # The voice CLI's root. None turns voice off, which is the default.
+    voice_root: Path | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -348,8 +353,13 @@ class Config:
         limits_state = Path(
             os.environ.get("AGENT_BRIDGE_LIMITS_STATE") or state.with_name("limits-state.json")
         )
+        voice = os.environ.get("AGENT_BRIDGE_VOICE_ROOT", "").strip()
         return cls(token, chat_id, users, patterns, state, socket, roots,
-                   warn, limits, limits_state)
+                   warn, limits, limits_state, Path(voice) if voice else None)
+
+    def voice_ready(self) -> bool:
+        root = self.voice_root
+        return root is not None and (root / "bin/voice.py").is_file() and (root / "venv/bin/python").exists()
 
     def session_allowed(self, name: str) -> bool:
         if name.startswith("@"):
@@ -686,6 +696,10 @@ class TelegramError(RuntimeError):
         return "message thread not found" in detail or "topic_deleted" in detail
 
 
+# URLError is an OSError, and a malformed response raises ValueError.
+TELEGRAM_ERRORS = (TelegramError, OSError, ValueError)
+DOWNLOAD_TIMEOUT = 30
+
 
 UPLOAD_METHODS = {"photo": "sendPhoto", "voice": "sendVoice"}
 
@@ -737,6 +751,27 @@ class Telegram:
             except Exception:  # noqa: BLE001 - we are already handling an error
                 detail = ""
             raise TelegramError(f"{method}: {exc.code} {detail or exc.reason}") from exc
+
+    def download(self, file_id: str, dest: Path, cap: int) -> None:
+        """Save a file the chat sent, refusing one over `cap` bytes.
+
+        The file URL holds the token, so it never reaches a log, and an error
+        names only its type.
+        """
+        try:
+            path = self.call("getFile", file_id=file_id)["result"]["file_path"]
+            deadline = time.monotonic() + DOWNLOAD_TIMEOUT
+            with urllib.request.urlopen(f"{API_ROOT}/file/bot{self._token}/{path}",
+                                        timeout=DOWNLOAD_TIMEOUT) as response, open(dest, "wb") as out:
+                total = 0
+                while chunk := response.read(1 << 16):
+                    total += len(chunk)
+                    if total > cap or time.monotonic() > deadline:
+                        raise ValueError("over the cap or the deadline")
+                    out.write(chunk)
+        except (TelegramError, urllib.error.URLError, http.client.HTTPException, OSError, ValueError,
+                KeyError) as exc:
+            raise TelegramError(f"download: {type(exc).__name__}") from None
 
     def send(
         self,
@@ -891,6 +926,312 @@ class Tmux:
         return len([line for line in out.splitlines() if line.strip()])
 
 
+# ── Voice ───────────────────────────────────────────────────────────────────
+
+VOICE_QUEUE = 5
+VOICE_LONGEST = 120
+VOICE_LIMITS = {"hear": 240, "speak": 120}
+SPEECH_RATE = 15  # characters spoken a second, about 150 words a minute
+VOICE_ATTEMPTS = 3
+VOICE_TTL = 24 * 3600
+VOICE_DOWNLOAD_CAP = 20 * 1024 * 1024
+BUSY_POLL = 2
+PROC = Path("/proc")
+
+
+SPEAK_FAILED = "Couldn't voice that one."
+HEAR_FAILED = {
+    "empty": "Heard nothing in that one. Try again, or type it.",
+    "models": "Speech-to-text isn't installed on this host yet. Type it instead.",
+    "audio": "Couldn't read that voice note. Send it again.",
+    "engine": "Couldn't transcribe that one. Send it again, or type it.",
+}
+
+
+def shorten(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def quoted(heading: str, text: str) -> str:
+    """A heading over a quoted text, cut to fit one message."""
+    return f"{heading}\n“{shorten(text, MAX_MESSAGE - len(heading) - 3)}”"
+
+
+def last_json_line(output: str) -> Any:
+    """The JSON on the last non-empty line, as every voice CLI verb prints. Raises ValueError without one."""
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("no output")
+    return json.loads(lines[-1])
+
+
+def not_allowed(session: str) -> str:
+    return f"session {session} is not in the allowlist"
+
+
+def card_markup(key: str) -> dict[str, Any]:
+    labels = (("✅ Send", "s"), ("✏️ Edit", "e"), ("🗑 Discard", "x"))
+    return {"inline_keyboard": [[{"text": label, "callback_data": f"v:{code}:{key}"} for label, code in labels]]}
+
+
+def voice_command(root: Path, *args: str) -> list[str]:
+    return [str(root / "venv/bin/python"), str(root / "bin/voice.py"), *args]
+
+
+def voice_env(root: Path) -> dict[str, str]:
+    """The fixed environment doc/voice.md gives a service, so nothing of the bridge's, the token least of all, reaches the CLI."""
+    return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(root), "VOICE_HOME": str(root),
+            "XDG_CACHE_HOME": str(root / "cache/xdg"), "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2"}
+
+
+def lower_priority() -> None:
+    os.nice(10)
+
+
+def valid_key(key: Any) -> bool:
+    """`h<note id>` or `s<message id>`, the only names a job folder may have."""
+    return isinstance(key, str) and key[:1] in ("h", "s") and key[1:].isascii() and key[1:].isdecimal()
+
+
+def valid_job(key: str, job: Any) -> bool:
+    if not (valid_key(key) and isinstance(job, dict)):
+        return False
+    kind = {"h": "hear", "s": "speak"}[key[0]]
+    ids = ("note",) if kind == "hear" else ("reply_to",)
+    return (job.get("kind") == kind and job.get("status") in ("queued", "ready")
+            and isinstance(job.get("session"), str) and isinstance(job.get("received"), (int, float))
+            and isinstance(job.get("attempts"), int) and all(isinstance(job.get(name), int) for name in ids)
+            and (kind == "speak" or isinstance(job.get("file"), str)))
+
+
+class VoiceLane:
+    """Voice jobs, run one child process at a time in arrival order.
+
+    A hear job turns a voice note into a transcript and a speak job turns a
+    finished message into a voice note. Entries live in voice-notes.json,
+    which only the daemon touches, and their text and audio in a private
+    folder per job, so text never reaches the JSON. The bridge is told when a
+    job ends through voice_done.
+    """
+
+    def __init__(self, bridge: "Bridge") -> None:
+        self.bridge = bridge
+        self.path = bridge.state.path.with_name("voice-notes.json")
+        self.folder = bridge.state.path.with_name("voice")
+        self.child: subprocess.Popen[bytes] | None = None
+        self.running: str | None = None
+        self.started = 0.0
+        self.limit = 0.0
+        self.jobs: dict[str, dict[str, Any]] = {}
+        self.load()
+
+    @property
+    def root(self) -> Path | None:
+        return self.bridge.config.voice_root
+
+    def load(self) -> None:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = {}
+        raw = raw if isinstance(raw, dict) else {}
+        # Before validation, so an entry about to be dropped still has its child killed.
+        for key, job in raw.items():
+            if valid_key(key) and isinstance(job, dict) and isinstance(job.get("pid"), int):
+                self.kill_stale(key, job.pop("pid"))
+        self.jobs = {k: v for k, v in raw.items() if valid_job(k, v)}
+        if self.folder.is_dir():
+            for entry in self.folder.iterdir():
+                if entry.name not in self.jobs:
+                    shutil.rmtree(entry, ignore_errors=True)
+        self.save()
+
+    def kill_stale(self, key: str, pid: int) -> None:
+        """Kill a child an earlier bridge left running, which KillMode=process allows.
+
+        Only when the pid still runs in this job's folder, so a pid the kernel
+        has since given to something else is left alone.
+        """
+        proc = PROC / str(pid)
+        try:
+            if os.path.realpath(proc / "cwd") != os.path.realpath(self.job_folder(key)):
+                return
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            return
+        deadline = time.monotonic() + 5
+        while proc.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".voice-notes-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(self.jobs, handle, indent=2)
+                handle.write("\n")
+            os.replace(name, self.path)
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+    def job_folder(self, key: str) -> Path:
+        return self.folder / key
+
+    def queued(self) -> int:
+        return sum(1 for job in self.jobs.values() if job["status"] == "queued")
+
+    def busy(self) -> bool:
+        return self.queued() > 0
+
+    def text(self, key: str) -> str:
+        try:
+            return (self.job_folder(key) / "text.txt").read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def by_ask(self, ask: Any) -> str | None:
+        return next((k for k, job in self.jobs.items() if ask is not None and job.get("ask") == ask), None)
+
+    def add(self, key: str, job: dict[str, Any], text: str | None = None) -> None:
+        """Queue a job, or raise OSError with nothing left behind, so a caller saying "send it again" is true."""
+        try:
+            for folder in (self.folder, self.job_folder(key)):
+                folder.mkdir(exist_ok=True)
+                folder.chmod(0o700)
+            if text is not None:
+                (self.job_folder(key) / "text.txt").write_text(text, encoding="utf-8")
+            self.jobs[key] = job
+            self.save()
+        except OSError:
+            self.jobs.pop(key, None)
+            shutil.rmtree(self.job_folder(key), ignore_errors=True)
+            raise
+
+    def forget(self, key: str) -> None:
+        if key == self.running:
+            self.stop_child()
+        self.jobs.pop(key, None)
+        shutil.rmtree(self.job_folder(key), ignore_errors=True)
+        self.save()
+
+    def tick(self) -> None:
+        """Expire old cards, then collect, kill or start a child. A fault fails its job, never the loop."""
+        now = time.time()
+        for key, job in list(self.jobs.items()):
+            if key != self.running and now - job["received"] > VOICE_TTL:
+                self.guarded(self.expire, key)
+        if self.running:
+            self.guarded(self.poll, self.running)
+            return
+        key = next((k for k, job in self.jobs.items() if job["status"] == "queued"), None)
+        if key:
+            self.guarded(self.start, key)
+
+    def guarded(self, step: Callable[[str], None], key: str) -> None:
+        try:
+            step(key)
+        except Exception as exc:  # noqa: BLE001 - one job must not stop the loop
+            LOG.error("voice job failed: %s", type(exc).__name__)
+            job = self.jobs.get(key)
+            self.forget(key)
+            if job is not None and job["status"] == "queued":
+                self.bridge.voice_failed(job)
+
+    def expire(self, key: str) -> None:
+        job = self.jobs[key]
+        self.forget(key)
+        if job["status"] == "queued":
+            self.bridge.voice_failed(job)
+        else:
+            self.bridge.voice_expired(job)
+
+    def start(self, key: str) -> None:
+        job = self.jobs[key]
+        job["attempts"] += 1
+        self.save()
+        if job["attempts"] > VOICE_ATTEMPTS or not self.bridge.config.voice_ready():
+            self.finish(key, {"ok": False, "reason": "engine"})
+            return
+        folder = self.job_folder(key)
+        if job["kind"] == "hear":
+            try:
+                self.bridge.tg.download(job["file"], folder / "note.ogg", VOICE_DOWNLOAD_CAP)
+            except TelegramError as exc:
+                LOG.warning("voice note download failed: %s", exc)
+                self.finish(key, {"ok": False, "reason": "audio"})
+                return
+            args = ["hear", "--in", "note.ogg"]
+            limit = VOICE_LIMITS["hear"]
+        else:
+            args = ["speak", "--text-file", "text.txt", "--out", "out.ogg", "--no-cache"]
+            # Twice the time the text takes to say, so a long finished message is not killed half read.
+            limit = max(VOICE_LIMITS["speak"], 2 * len(self.text(key)) / SPEECH_RATE)
+        assert self.root is not None
+        # Output goes to files, never pipes, so engine chatter cannot fill a pipe and stall the child.
+        with open(folder / "out.json", "wb") as out, open(folder / "err.log", "wb") as err:
+            self.child = subprocess.Popen(voice_command(self.root, *args), stdin=subprocess.DEVNULL, stdout=out,
+                                          stderr=err, cwd=folder, env=voice_env(self.root),
+                                          start_new_session=True, preexec_fn=lower_priority)
+        self.running, self.started, self.limit = key, time.monotonic(), limit
+        job["pid"] = self.child.pid
+        self.save()
+
+    def poll(self, key: str) -> None:
+        assert self.child is not None
+        if self.child.poll() is None:
+            if time.monotonic() - self.started > self.limit:
+                self.stop_child()
+                self.finish(key, {"ok": False, "reason": "engine"})
+            return
+        self.child, self.running = None, None
+        self.finish(key, self.result(key))
+
+    def result(self, key: str) -> dict[str, Any]:
+        """The CLI's last JSON line. A child that printed none, killed or aborted, failed as engine."""
+        try:
+            result = last_json_line((self.job_folder(key) / "out.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"ok": False, "reason": "engine"}
+        return result if isinstance(result, dict) else {"ok": False, "reason": "engine"}
+
+    def finish(self, key: str, result: dict[str, Any]) -> None:
+        job = self.jobs[key]
+        job.pop("pid", None)
+        folder = self.job_folder(key)
+        if job["kind"] == "hear" and result.get("ok"):
+            # Only the transcript stays while the card is up, never the audio, nor a killed run's scratch folder.
+            for path in folder.iterdir():
+                if path.is_dir():
+                    shutil.rmtree(path)
+                elif path.name != "text.txt":
+                    path.unlink()
+            (folder / "text.txt").write_text(str(result.get("text") or ""), encoding="utf-8")
+        self.save()
+        self.bridge.voice_done(key, job, result)
+
+    def stop_child(self) -> None:
+        """SIGKILL the running child's whole group and reap it. Its job stays queued, to run again."""
+        if self.child is None:
+            return
+        child, self.child = self.child, None
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child.wait()
+        job = self.jobs.get(self.running or "")
+        self.running = None
+        if job is not None:
+            job.pop("pid", None)
+            self.save()
+
+    def drop_all(self) -> None:
+        self.stop_child()
+        self.jobs = {}
+        shutil.rmtree(self.folder, ignore_errors=True)
+        self.save()
+
+
 # ── Topic bookkeeping ───────────────────────────────────────────────────────
 
 
@@ -914,6 +1255,8 @@ class Bridge:
             self.limits_panel_state = {}
         self.control_actions: dict[str, tuple[str, str, str]] = {}
         self.control_pending: dict[int, tuple[int, str, float]] = {}
+        # Only serve builds the lane, so a hook running notify never touches voice-notes.json.
+        self.voice: VoiceLane | None = None
 
     def publish_limits_panel(self) -> None:
         thread = self.topic_for(LIMITS)
@@ -1126,7 +1469,7 @@ class Bridge:
                 name=TOPIC_TITLES.get(session, session),
                 icon_custom_emoji_id=TOPIC_ICONS.get(session, SESSION_ICON),
             )
-        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
+        except TELEGRAM_ERRORS as exc:
             LOG.warning("could not create a topic for %s: %s", session, exc)
             return None
         if not result.get("ok"):
@@ -1183,10 +1526,7 @@ class Bridge:
     def finish_clear(self, choice: str, message: dict[str, Any]) -> None:
         """Act on a confirmation: k:- cancels, k:0 clears General, k:N a topic."""
         if choice == "-":
-            try:
-                self.tg.call("deleteMessage", chat_id=self.config.chat_id, message_id=message.get("message_id"))
-            except (TelegramError, urllib.error.URLError, OSError):
-                pass
+            self.delete_messages(message.get("message_id"))
             return
         try:
             thread = int(choice)
@@ -1450,15 +1790,22 @@ class Bridge:
             escaped = html.escape(body)
         return f"{header}\n<pre>{escaped}</pre>"
 
-    def act(self, session: str, action: str, argument: str = "") -> str:
+    def refusal(self, session: str) -> str | None:
+        """Why `act` would refuse this session, or None when it can act."""
         if not self.config.session_allowed(session):
-            return f"session {session} is not in the allowlist"
+            return not_allowed(session)
         if not self.tmux.exists(session):
             return (
                 f"no session named {session} is running.\n"
                 f"/open {session} continues its last conversation, "
                 f"/open {session} fresh starts a blank one. Either returns to this topic."
             )
+        return None
+
+    def act(self, session: str, action: str, argument: str = "") -> str:
+        refused = self.refusal(session)
+        if refused:
+            return refused
 
         if action == "peek":
             return self.peek_message(session) if self.pane_visible(session) else self.withheld(session)
@@ -1491,8 +1838,18 @@ class Bridge:
 
         thread_id = message.get("message_thread_id")
         topic = self.session_for(int(thread_id)) if thread_id is not None else None
+        if "voice" in message:
+            self.receive_voice(message, topic)
+            return
         text = (message.get("text") or "").strip()
         if not text:
+            return
+
+        # Before the command branch, so a corrected text starting with / is typed.
+        asked = (message.get("reply_to_message") or {}).get("message_id")
+        key = self.voice.by_ask(asked) if self.voice else None
+        if key:
+            self.send_heard(key, text)
             return
 
         if topic == CONTROL:
@@ -1755,15 +2112,17 @@ class Bridge:
         user_id = callback.get("from", {}).get("id")
         data = callback.get("data") or ""
 
-        clearing = data.startswith("k:") and data != "k:-"
-        try:
-            self.tg.call("answerCallbackQuery", callback_query_id=callback.get("id"),
-                         text="Clearing…" if clearing else None)
-        except Exception:  # noqa: BLE001 - acknowledging is best effort
-            pass
-
+        # Authorised before the answer, so a stranger's tap gets no toast.
         if not self.authorised(chat_id, user_id if user_id is None else int(user_id)):
+            self.answer(callback)
             return
+
+        if data.startswith(("v:", "a:listen:")):
+            self.voice_callback(callback)
+            return
+
+        clearing = data.startswith("k:") and data != "k:-"
+        self.answer(callback, "Clearing…" if clearing else None)
 
         if data in ("l:refresh", "l:clear"):
             self.state.reload()
@@ -1804,6 +2163,190 @@ class Bridge:
         body = self.act(session, action)
         self.post(session, body, buttons=["peek", "esc"])
 
+    # ── voice ───────────────────────────────────────────────────────────────
+
+    def receive_voice(self, message: dict[str, Any], topic: str | None) -> None:
+        """Queue a voice note in a session topic to be heard, or say why not."""
+        if topic is None or topic in TOPIC_TITLES:
+            return
+        note = int(message["message_id"])
+        voice = message["voice"]
+        if self.voice is None or not self.config.voice_ready():
+            line = "Voice notes aren't read on this host. Type it instead."
+        elif not self.config.session_allowed(topic):
+            line = not_allowed(topic)
+        elif int(voice.get("duration") or 0) > VOICE_LONGEST:
+            line = "That's over two minutes. Send a shorter one, or type it."
+        elif self.voice.queued() >= VOICE_QUEUE:
+            line = "Too many voice jobs waiting. Send it again in a minute."
+        else:
+            try:
+                self.voice.add(f"h{note}", {"kind": "hear", "session": topic, "status": "queued",
+                                            "received": time.time(), "attempts": 0, "note": note,
+                                            "file": str(voice["file_id"])})
+            except OSError as exc:
+                LOG.warning("could not queue a voice note: %s", type(exc).__name__)
+                self.post(topic, "Couldn't save that voice note. Send it again.", reply_to=note)
+                return
+            try:
+                self.tg.call("setMessageReaction", chat_id=self.config.chat_id, message_id=note,
+                             reaction=[{"type": "emoji", "emoji": "👀"}])
+            except TELEGRAM_ERRORS:
+                pass
+            return
+        self.post(topic, line, reply_to=note)
+
+    def voice_done(self, key: str, job: dict[str, Any], result: dict[str, Any]) -> None:
+        """Reply to a finished voice job. The lane forgets it on an exception."""
+        assert self.voice is not None
+        session = job["session"]
+        if job["kind"] == "speak":
+            if result.get("ok"):
+                # Sent before the job is forgotten, so a failed send still gets its failure line.
+                audio = (self.voice.job_folder(key) / "out.ogg").read_bytes()
+                self.post(session, "", upload=("voice", "listen.ogg", "audio/ogg", audio), reply_to=job["reply_to"])
+                self.voice.forget(key)
+            else:
+                self.post(session, SPEAK_FAILED, reply_to=job["reply_to"])
+                self.voice.forget(key)
+            return
+        if not result.get("ok"):
+            self.post(session, HEAR_FAILED.get(str(result.get("reason")), HEAR_FAILED["engine"]),
+                      reply_to=job["note"])
+            self.voice.forget(key)
+            return
+        try:
+            card = self.post(session, quoted(f"🎙 Heard for {session}:", self.voice.text(key)),
+                             markup=card_markup(key), reply_to=job["note"])
+            job["card"] = int(card["result"]["message_id"])
+        except Exception as exc:  # noqa: BLE001 - the note was heard, so no transcription failure line
+            LOG.warning("could not post a voice card: %s", type(exc).__name__)
+            self.voice.forget(key)
+            return
+        job["status"] = "ready"
+        self.voice.save()
+
+    def voice_failed(self, job: dict[str, Any]) -> None:
+        """The failure line for a job an unexpected error ended. Best effort, from inside a tick."""
+        try:
+            if job["kind"] == "hear":
+                self.post(job["session"], HEAR_FAILED["engine"], reply_to=job["note"])
+            else:
+                self.post(job["session"], SPEAK_FAILED, reply_to=job["reply_to"])
+        except Exception as exc:  # noqa: BLE001 - the job is already forgotten
+            LOG.warning("could not report a failed voice job: %s", type(exc).__name__)
+
+    def voice_callback(self, callback: dict[str, Any]) -> None:
+        """A card button or Listen, from an authorised user."""
+        data, message = callback.get("data") or "", callback.get("message") or {}
+        if data.startswith("a:listen:"):
+            self.answer(callback, self.listen(data.removeprefix("a:listen:"), message))
+            return
+        action, _, key = data.removeprefix("v:").partition(":")
+        job = self.voice.jobs.get(key) if self.voice else None
+        if (job is None or job["kind"] != "hear" or job["status"] != "ready"
+                or job.get("card") != message.get("message_id") or action not in ("s", "e", "x")):
+            self.answer(callback, "That voice note has expired.")
+            self.drop_buttons(message.get("message_id"))
+            return
+        self.answer(callback)
+        if action == "s":
+            self.send_heard(key, self.voice.text(key))
+        elif action == "e":
+            self.ask_correction(key)
+        else:
+            self.delete_messages(job.get("card"), job.get("ask"))
+            self.voice.forget(key)
+
+    def answer(self, callback: dict[str, Any], text: str | None = None) -> None:
+        try:
+            self.tg.call("answerCallbackQuery", callback_query_id=callback.get("id"), text=text)
+        except Exception:  # noqa: BLE001 - acknowledging is best effort
+            pass
+
+    def send_heard(self, key: str, text: str) -> None:
+        """Type a heard (or corrected) text into its session, at most once."""
+        assert self.voice is not None
+        job = self.voice.jobs[key]
+        session = job["session"]
+        if not text:
+            self.voice.forget(key)
+            self.delete_messages(job.get("card"), job.get("ask"))
+            self.post(session, HEAR_FAILED["engine"], reply_to=job["note"])
+            return
+        refused = self.refusal(session)
+        if refused:
+            self.post(session, refused)
+            return
+        # Forgotten and saved before typing, so no later tap can type it again.
+        self.voice.forget(key)
+        typed = self.act(session, "say", text)
+        heading = f"✅ Sent to {session}:" if typed == f"typed into {session}" else typed
+        try:
+            self.tg.call("editMessageText", chat_id=self.config.chat_id, message_id=job.get("card"),
+                         text=quoted(heading, text))
+        except TELEGRAM_ERRORS as exc:
+            LOG.warning("could not close a voice card: %s", type(exc).__name__)
+        self.delete_messages(job.get("ask"))
+
+    def ask_correction(self, key: str) -> None:
+        assert self.voice is not None
+        job = self.voice.jobs[key]
+        # The old ask goes only once the new one is up, so a failed post leaves one to reply to.
+        asked = self.post(job["session"], "Reply to this with the corrected text.",
+                          markup={"force_reply": True})
+        self.delete_messages(job.get("ask"))
+        job["ask"] = int(asked["result"]["message_id"])
+        self.voice.save()
+
+    def listen(self, session: str, message: dict[str, Any]) -> str:
+        """Queue a finished message to be read aloud. Returns the toast."""
+        text = (message.get("text") or "").strip()
+        key = f"s{message.get('message_id')}"
+        if self.voice is None or not self.config.voice_ready():
+            return "Voice isn't set up on this host."
+        if not self.config.session_allowed(session):
+            return "That session isn't in the allowlist."
+        if not text or not valid_key(key):
+            return "Nothing to read."
+        if key in self.voice.jobs:
+            return "Already on its way."
+        if self.voice.queued() >= VOICE_QUEUE:
+            return "Busy. Try again in a minute."
+        try:
+            self.voice.add(key, {"kind": "speak", "session": session, "status": "queued", "received": time.time(),
+                                 "attempts": 0, "reply_to": int(message["message_id"])}, text=text)
+        except OSError as exc:
+            LOG.warning("could not queue a Listen: %s", type(exc).__name__)
+            return "Couldn't queue that. Try again later."
+        return "Voicing it…"
+
+    def voice_expired(self, job: dict[str, Any]) -> None:
+        self.delete_messages(job.get("ask"))
+        self.drop_buttons(job.get("card"))
+
+    def drop_buttons(self, message_id: Any) -> None:
+        if message_id is None:
+            return
+        try:
+            self.tg.call("editMessageReplyMarkup", chat_id=self.config.chat_id, message_id=message_id,
+                         reply_markup={"inline_keyboard": []})
+        except TELEGRAM_ERRORS:
+            pass
+
+    def delete_messages(self, *message_ids: Any) -> None:
+        for message_id in message_ids:
+            if message_id is None:
+                continue
+            try:
+                self.tg.call("deleteMessage", chat_id=self.config.chat_id, message_id=message_id)
+            except TELEGRAM_ERRORS:
+                pass
+
+    def poll_timeout(self) -> int:
+        """Short polls while a voice job waits, so a finished child is collected promptly."""
+        return BUSY_POLL if self.voice is not None and self.voice.busy() else POLL_TIMEOUT
+
     # ── the loop ────────────────────────────────────────────────────────────
 
     COMMANDS = [
@@ -1834,7 +2377,7 @@ class Bridge:
                 commands=[{"command": c, "description": d} for c, d in self.COMMANDS],
                 scope={"type": "chat", "chat_id": self.config.chat_id},
             )
-        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
+        except TELEGRAM_ERRORS as exc:
             LOG.warning("could not publish the command menu: %s", exc)
 
     def render_guide(self) -> str:
@@ -1877,7 +2420,10 @@ class Bridge:
         if not pin:
             return "no pinned guide to update. Run: agent-bridge.py guide --pin"
 
-        sent = self.tg.send(self.config.chat_id, text)
+        # Not tg.send, which cuts a message to MAX_MESSAGE. The guide may run past
+        # it, up to Telegram's own 4,096, as the edit above already allows.
+        sent = self.tg.call("sendMessage", chat_id=self.config.chat_id, text=text,
+                            link_preview_options={"is_disabled": True})
         if not sent.get("ok"):
             return f"could not post the guide: {sent}"
 
@@ -1911,14 +2457,23 @@ class Bridge:
             pending = self.tg.call("getUpdates", offset=-1, timeout=0).get("result", [])
             if pending:
                 offset = int(pending[-1]["update_id"]) + 1
-        except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
+        except TELEGRAM_ERRORS as exc:
             LOG.warning("could not skip queued updates: %s", exc)
         LOG.info("offset belongs to another bot, starting bot %s at %s", self.bot_id, offset)
         self.state.offset, self.state.bot_id = offset, self.bot_id
         self.state.save()
+        # Their message ids belong to the old bot's chat.
+        if self.voice is not None:
+            self.voice.drop_all()
 
     def serve(self) -> int:
         running = True
+        # Also with voice now off, so jobs left from when it was on are swept and their children killed.
+        if self.config.voice_root is not None or self.state.path.with_name("voice-notes.json").exists():
+            try:
+                self.voice = VoiceLane(self)
+            except OSError as exc:
+                LOG.error("voice is off, its state could not be loaded: %s", type(exc).__name__)
         if self.state.bot_id != self.bot_id:
             self.drain_updates()
         # Re-exec when this file changes on disk. Deploying a fix and then
@@ -1942,17 +2497,17 @@ class Bridge:
         self.publish_commands()
         try:
             self.publish_limits_panel()
-        except (TelegramError, OSError, ValueError):
+        except TELEGRAM_ERRORS:
             LOG.exception("could not publish Limits panel")
         try:
             self.control_panel()
-        except (TelegramError, OSError, ValueError):
+        except TELEGRAM_ERRORS:
             LOG.exception("could not publish Control panel")
 
         if self.state.guide_message_id:
             try:
                 LOG.info("%s", self.publish_guide())
-            except (TelegramError, OSError, ValueError):
+            except TELEGRAM_ERRORS:
                 LOG.warning("could not refresh the pinned guide")
 
         LOG.info(
@@ -1970,6 +2525,8 @@ class Bridge:
             if loaded_mtime is not None and script.stat().st_mtime != loaded_mtime:
                 LOG.info("bridge file changed, reloading")
                 self.state.save()
+                if self.voice is not None:
+                    self.voice.stop_child()
                 os.execv(sys.executable, [sys.executable, str(script), "serve"])
             if self.config.limits_enabled and time.time() >= next_limits:
                 next_limits = time.time() + LIMITS_INTERVAL
@@ -1978,6 +2535,11 @@ class Bridge:
                 except Exception as exc:  # noqa: BLE001 - limits must never stop the loop
                     LOG.exception("limits check failed: %s", exc)
             self.reap_prune()
+            if self.voice is not None:
+                try:
+                    self.voice.tick()
+                except Exception as exc:  # noqa: BLE001 - voice must never stop the loop
+                    LOG.error("voice tick failed: %s", type(exc).__name__)
             if time.time() >= next_prune:
                 next_prune = time.time() + PRUNE_INTERVAL
                 self.start_prune()
@@ -1986,10 +2548,10 @@ class Bridge:
                     "getUpdates",
                     http_timeout=HTTP_TIMEOUT,
                     offset=self.state.offset or None,
-                    timeout=POLL_TIMEOUT,
+                    timeout=self.poll_timeout(),
                     allowed_updates=["message", "callback_query"],
                 )
-            except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
+            except TELEGRAM_ERRORS as exc:
                 LOG.warning("poll failed (%s), retrying in %ss", exc, backoff)
                 for _ in range(backoff):
                     if not running:
@@ -2019,6 +2581,8 @@ class Bridge:
                     LOG.exception("update handling failed: %s", exc)
             self.state.save()
 
+        if self.voice is not None:
+            self.voice.stop_child()
         return 0
 
 
@@ -2064,14 +2628,22 @@ NOTIFY_BUTTONS = {
     "permission": ["peek", "yes", "esc"],
     "question": ["peek", "esc"],
     "notification": ["peek", "esc"],
-    "stop": ["peek", "clear"],
+    "stop": ["peek", "listen", "clear"],
 }
+
+
+def notify_buttons(event: str, config: Config, session: str) -> list[str]:
+    """The event's buttons, without Listen where this host has no voice or the name is too long for it."""
+    buttons = NOTIFY_BUTTONS.get(event, ["peek"])
+    if config.voice_ready() and len(f"a:listen:{session}".encode()) <= 64:
+        return buttons
+    return [name for name in buttons if name != "listen"]
 
 
 def cmd_notify(args: argparse.Namespace) -> int:
     bridge = build(Config.from_env())
     session = args.session or "agent"
-    buttons = NOTIFY_BUTTONS.get(args.event, ["peek"])
+    buttons = notify_buttons(args.event, bridge.config, session)
     if args.dry_run:
         print(f"[{session}] buttons={buttons}\n{args.text}")
         return 0
@@ -2101,7 +2673,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
         result = tg.call(
             "getUpdates", http_timeout=20, timeout=0, allowed_updates=["message"]
         )
-    except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
+    except TELEGRAM_ERRORS as exc:
         print(f"Telegram unreachable: {exc}")
         return 1
 
@@ -2155,6 +2727,33 @@ def cmd_guide(args: argparse.Namespace) -> int:
     return 0
 
 
+def voice_status(config: Config) -> str:
+    root = config.voice_root
+    if root is None:
+        return "off (AGENT_BRIDGE_VOICE_ROOT unset)"
+    if not config.voice_ready():
+        return f"not installed at {root}"
+    try:
+        done = subprocess.run(voice_command(root, "check"), stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, env=voice_env(root), timeout=60, check=False)
+        result = last_json_line(done.stdout)
+    except subprocess.TimeoutExpired:
+        return "check failed (timeout)"
+    except ValueError:
+        return "check failed (no output)"
+    except OSError as exc:
+        return f"check failed ({type(exc).__name__})"
+    if not isinstance(result, dict):
+        return "check failed (no output)"
+    if not result.get("ok"):
+        return f"check failed ({result.get('error', 'no error given')})"
+    if result.get("hear"):
+        return "speak and hear ready"
+    if result.get("hear_error"):
+        return f"speak only (hear: {result['hear_error']})"
+    return "speak only (hear models missing)"
+
+
 def cmd_doctor(_args: argparse.Namespace) -> int:
     try:
         config = Config.from_env()
@@ -2172,10 +2771,11 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     print(f"tmux:     {', '.join(names) if names else 'no server running'}")
     for name in names:
         print(f"          {name} -> {'allowed' if config.session_allowed(name) else 'blocked'}")
+    print(f"voice:    {voice_status(config)}")
 
     try:
         me = Telegram(config.token).call("getMe")
-    except (TelegramError, urllib.error.URLError, OSError, ValueError) as exc:
+    except TELEGRAM_ERRORS as exc:
         print(f"bot:      unreachable ({exc})")
         return 1
 
