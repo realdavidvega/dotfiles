@@ -32,6 +32,39 @@ class FakeEngine:
         return bytes(4 * self.samples)
 
 
+# Decodes an input holding a number of seconds into that much silent 16 kHz WAV,
+# and fails on anything else, the way ffmpeg fails on audio it cannot read.
+FAKE_DECODER = '''#!{python}
+import sys, wave
+args = sys.argv[1:]
+source, out = args[args.index('-i') + 1], args[-1]
+try:
+    seconds = float(open(source).read())
+except ValueError:
+    sys.stderr.write('Invalid data found when processing input')
+    sys.exit(1)
+with wave.open(out, 'wb') as w:
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate(16000)
+    w.writeframes(bytes(2 * int(16000 * seconds)))
+'''
+
+
+class FakeListener:
+    def __init__(self, text='call the dentist'):
+        self.text = text
+        self.calls = []
+
+    def whole(self, wav):
+        self.calls.append(('whole', wav))
+        return self.text
+
+    def pieces(self, wav):
+        self.calls.append(('pieces', wav))
+        return ['  call the', 'dentist ', '']
+
+
 class VoiceTests(unittest.TestCase):
     def setUp(self):
         mask = os.umask(0o022)
@@ -228,7 +261,7 @@ class VoiceTests(unittest.TestCase):
     def test_check_lists_models_and_ffmpeg_without_loading_an_engine(self):
         with patch.object(v.importlib, 'import_module') as imported:
             code, result = self.run_cli('check')
-        self.assertEqual([c.args[0] for c in imported.call_args_list], list(v.ENGINE_MODULES))
+        self.assertEqual([c.args[0] for c in imported.call_args_list], [*v.ENGINE_MODULES, *v.HEAR_MODULES])
         self.assertEqual(code, 0)
         self.assertEqual(result['models'], [str(self.root / 'models' / n) for n in v.MODELS])
         self.assertEqual(result['ffmpeg'], str(self.bin / 'ffmpeg'))
@@ -325,6 +358,120 @@ class VoiceTests(unittest.TestCase):
         gap = int(v.SAMPLE_RATE * v.BATCH_GAP_S)
         self.assertEqual(len(pcm), 4 * (3 * 100 + 2 * gap))
         self.assertEqual(engine.calls, ['one', 'two', 'three'])
+
+
+class HearTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / 'voice'
+        for name in (*v.MODELS, *v.HEAR_MODELS):
+            path = self.root / 'models' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'model')
+        self.bin = Path(self.tmp.name) / 'fakebin'
+        self.bin.mkdir()
+        ffmpeg = self.bin / 'ffmpeg'
+        ffmpeg.write_text(FAKE_DECODER.format(python=sys.executable))
+        ffmpeg.chmod(0o755)
+        self.note = Path(self.tmp.name) / 'in.ogg'
+        self.note.write_text('3')
+        env = patch.dict(os.environ, {'VOICE_HOME': str(self.root), 'PATH': f'{self.bin}:/usr/bin:/bin'})
+        env.start()
+        self.addCleanup(env.stop)
+        self.listener = FakeListener()
+        loader = patch.object(v, 'load_listener', side_effect=lambda root: self.listener)
+        self.loader = loader.start()
+        self.addCleanup(loader.stop)
+
+    def run_cli(self, *argv):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = v.main(list(argv))
+        return code, json.loads(buffer.getvalue().strip().splitlines()[-1])
+
+    def hear(self):
+        return self.run_cli('hear', '--in', str(self.note))
+
+    def test_a_short_note_is_heard_in_one_pass(self):
+        code, result = self.hear()
+        self.assertIsInstance(result.pop('peak_mb'), int)
+        self.assertEqual((code, result), (0, {'ok': True, 'text': 'call the dentist', 'seconds': 3}))
+        self.assertEqual([call[0] for call in self.listener.calls], ['whole'])
+        self.loader.assert_called_once_with(self.root)
+
+    def test_a_note_over_twenty_seconds_is_split_at_pauses_and_joined(self):
+        self.note.write_text('20.5')
+        code, result = self.hear()
+        self.assertEqual((code, result['text'], result['seconds']), (0, 'call the dentist', 21))
+        self.assertEqual([call[0] for call in self.listener.calls], ['pieces'])
+        self.note.write_text('20')
+        self.listener.calls.clear()
+        self.hear()
+        self.assertEqual([call[0] for call in self.listener.calls], ['whole'])
+
+    def test_the_decoded_audio_is_gone_after_hearing(self):
+        self.hear()
+        wav = Path(self.listener.calls[0][1])
+        self.assertEqual(wav.suffix, '.wav')
+        self.assertFalse(wav.exists())
+        self.assertFalse(wav.parent.exists())
+        # Beside the note, so deleting the note's folder after a killed run takes the audio too.
+        self.assertEqual(wav.parent.parent, self.note.parent)
+
+    def test_failures_name_their_reason(self):
+        (self.root / 'models' / v.HEAR_MODELS[0]).unlink()
+        self.assertEqual(self.hear()[1]['reason'], 'models')
+        self.assertIn(v.HEAR_MODELS[0], self.hear()[1]['error'])
+        (self.root / 'models' / v.HEAR_MODELS[0]).write_bytes(b'model')
+        self.note.write_text('not audio')
+        code, result = self.hear()
+        self.assertEqual((code, result['ok'], result['reason']), (1, False, 'audio'))
+        self.assertIn('Invalid data', result['error'])
+        self.note.write_text('3')
+        self.listener.text = '  '
+        self.assertEqual(self.hear()[1], {'ok': False, 'error': 'heard nothing', 'reason': 'empty'})
+        self.loader.side_effect = RuntimeError('onnxruntime exploded')
+        code, result = self.hear()
+        self.assertEqual((code, result['reason']), (1, 'engine'))
+        self.assertIn('onnxruntime exploded', result['error'])
+        # An engine that is not installed will never hear anything, which is what models means.
+        self.loader.side_effect = ImportError("No module named 'onnx_asr'")
+        self.assertEqual(self.hear()[1]['reason'], 'models')
+
+    def test_a_missing_note_or_ffmpeg_fails(self):
+        code, result = self.run_cli('hear', '--in', str(self.note.with_name('gone.ogg')))
+        self.assertEqual((code, result['reason']), (1, 'audio'))
+        with patch.dict(os.environ, {'PATH': '/nonexistent'}):
+            code, result = self.hear()
+        self.assertEqual((code, result['reason']), (1, 'engine'))
+        self.assertIn('ffmpeg', result['error'])
+
+    def test_ffmpeg_decodes_to_16k_mono_16_bit_wav(self):
+        self.assertEqual(v.decode_args('/usr/bin/ffmpeg', Path('/tmp/in.ogg'), Path('/tmp/x/in.wav')), [
+            '/usr/bin/ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+            '-i', '/tmp/in.ogg', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
+            '-f', 'wav', '/tmp/x/in.wav',
+        ])
+
+    def test_check_says_whether_hearing_is_installed_without_failing_speech(self):
+        with patch.object(v.importlib, 'import_module'):
+            code, result = self.run_cli('check')
+        self.assertEqual((code, result['hear'], result['hear_missing']), (0, True, []))
+        (self.root / 'models' / v.HEAR_MODELS[-1]).unlink()
+        with patch.object(v.importlib, 'import_module'):
+            code, result = self.run_cli('check')
+        self.assertEqual((code, result['ok'], result['hear']), (0, True, False))
+        self.assertEqual(result['hear_missing'], [v.HEAR_MODELS[-1]])
+
+    def test_check_reports_hearing_off_when_onnx_asr_does_not_import(self):
+        def importing(name):
+            if name in v.HEAR_MODULES:
+                raise ImportError('No module named onnx_asr')
+        with patch.object(v.importlib, 'import_module', side_effect=importing):
+            code, result = self.run_cli('check')
+        self.assertEqual((code, result['ok'], result['hear']), (0, True, False))
+        self.assertIn('onnx_asr', result['hear_error'])
 
 
 if __name__ == '__main__':

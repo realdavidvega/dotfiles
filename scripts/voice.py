@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""Turn text into a voice note, locally and offline.
+"""Turn text into a voice note and a voice note into text, locally and offline.
 
 Usage:
   voice.py speak --text-file F --out X.ogg [--voice am_michael] [--speed 1.0] [--no-cache]
+  voice.py hear --in X.ogg
   voice.py check
 
 speak voices the text with Kokoro and encodes it with ffmpeg as mono OGG/Opus
-at 32 kbps, the format Telegram plays as a voice note. check confirms the model
-files and ffmpeg are present and the engine imports, without loading a model.
+at 32 kbps, the format Telegram plays as a voice note. hear decodes a note with
+ffmpeg and transcribes it with Parakeet, splitting anything over 20 seconds at
+pauses with Silero VAD. It never caches, so no transcript stays on disk. check
+confirms the model files and ffmpeg are present and the engine imports, without
+loading a model, and says whether hear is installed too.
 
 Every verb prints one JSON line as the last line of stdout. Success is
 {"ok": true, ...} and failure is {"ok": false, "error": "..."} with a non-zero
 exit. speak reports {"path", "seconds", "cached", "peak_mb"}, where seconds is
 rounded up and peak_mb is the larger of this process's and its children's peak
-resident memory. Anything an engine prints goes to stderr.
+resident memory. hear reports {"text", "seconds", "peak_mb"}, and its failures add a
+reason: models, audio, empty or engine. Anything an engine prints goes to
+stderr.
 
 The root is VOICE_HOME when set. Otherwise it is the parent of the directory
 this script sits in, when that directory is named bin and its parent holds
@@ -44,6 +50,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+import wave
 from pathlib import Path
 
 # Paths under <root>/models. models.lock holds each file's URL and sha256.
@@ -52,6 +59,20 @@ KOKORO_VOICES = "kokoro/voices-v1.0.bin"
 MODELS = (KOKORO_MODEL, KOKORO_VOICES)
 # Imported by check, without loading a model, so a broken venv shows up before a job runs.
 ENGINE_MODULES = ("onnxruntime", "kokoro_onnx")
+# The names onnx-asr looks for in a local folder, so it never reaches for Hugging Face.
+PARAKEET = "parakeet"
+SILERO = "silero"
+HEAR_MODELS = (
+    f"{PARAKEET}/encoder-model.int8.onnx",
+    f"{PARAKEET}/decoder_joint-model.int8.onnx",
+    f"{PARAKEET}/vocab.txt",
+    f"{PARAKEET}/config.json",
+    f"{SILERO}/silero_vad.onnx",
+)
+HEAR_MODULES = ("onnx_asr",)
+HEAR_RATE = 16000
+# Parakeet takes 20 to 30 seconds a pass. Anything longer is split at pauses first.
+WHOLE_MAX_S = 20
 
 DEFAULT_VOICE = "am_michael"
 SAMPLE_RATE = 24000
@@ -68,7 +89,9 @@ EMOJI_GLUE = {"\ufe0e", "\ufe0f", "\u200d", "\u20e3"}
 
 
 class Refusal(Exception):
-    pass
+    def __init__(self, message: str, reason: str | None = None):
+        super().__init__(message)
+        self.reason = reason
 
 
 class Parser(argparse.ArgumentParser):
@@ -248,8 +271,8 @@ def synthesize(engine, text: str) -> bytes:
     return gap.join(engine.pcm(batch) for batch in batches(text))
 
 
-def missing_models(root: Path) -> list[str]:
-    return [name for name in MODELS if not (root / "models" / name).is_file()]
+def missing_models(root: Path, names: tuple[str, ...] = MODELS) -> list[str]:
+    return [name for name in names if not (root / "models" / name).is_file()]
 
 
 def check(args: argparse.Namespace) -> dict:
@@ -265,7 +288,16 @@ def check(args: argparse.Namespace) -> dict:
             importlib.import_module(module)
         except Exception as exc:
             raise Refusal(f"{module} does not import: {type(exc).__name__}: {exc}") from exc
-    return {"ok": True, "models": [str(root / "models" / name) for name in MODELS], "ffmpeg": ffmpeg}
+    result = {"ok": True, "models": [str(root / "models" / name) for name in MODELS], "ffmpeg": ffmpeg}
+    # Hearing is optional, so a host can speak before its speech-to-text models are pinned.
+    missing = missing_models(root, HEAR_MODELS)
+    result.update(hear=not missing, hear_missing=missing)
+    for module in HEAR_MODULES:
+        try:
+            importlib.import_module(module)
+        except Exception as exc:
+            result.update(hear=False, hear_error=f"{module} does not import: {type(exc).__name__}: {exc}")
+    return result
 
 
 def place(source: Path, out: Path) -> None:
@@ -326,6 +358,84 @@ def speak(args: argparse.Namespace) -> dict:
     return {"ok": True, "path": str(out), "seconds": seconds, "cached": False, "peak_mb": peak_mb()}
 
 
+def decode_args(ffmpeg: str, source: Path, wav: Path) -> list[str]:
+    return [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(source), "-ar", str(HEAR_RATE), "-ac", "1", "-c:a", "pcm_s16le",
+        "-f", "wav", str(wav),
+    ]
+
+
+def decode(ffmpeg: str, source: Path, wav: Path) -> int:
+    """Decode a note to WAV and return its length in seconds, rounded up."""
+    done = subprocess.run(decode_args(ffmpeg, source, wav), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if done.returncode != 0:
+        tail = done.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no output"]
+        raise Refusal(f"ffmpeg could not decode the note ({done.returncode}): {tail[0]}", "audio")
+    with wave.open(str(wav), "rb") as audio:
+        return math.ceil(audio.getnframes() / audio.getframerate())
+
+
+class ParakeetListener:
+    def __init__(self, root: Path):
+        for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+            os.environ.setdefault(name, str(THREADS))
+        import onnx_asr
+        import onnxruntime as rt
+
+        opts = rt.SessionOptions()
+        opts.intra_op_num_threads = THREADS
+        opts.inter_op_num_threads = 1
+        common = {"sess_options": opts, "providers": ["CPUExecutionProvider"]}
+        self.model = onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v3", root / "models" / PARAKEET,
+                                         quantization="int8", **common)
+        self.vad = onnx_asr.load_vad("silero", root / "models" / SILERO, **common)
+
+    def whole(self, wav: Path) -> str:
+        return self.model.recognize(str(wav))
+
+    def pieces(self, wav: Path) -> list[str]:
+        return [segment.text for segment in self.model.with_vad(self.vad).recognize(str(wav))]
+
+
+def load_listener(root: Path) -> ParakeetListener:
+    return ParakeetListener(root)
+
+
+def transcribe(listener, wav: Path, seconds: int) -> str:
+    parts = [listener.whole(wav)] if seconds <= WHOLE_MAX_S else listener.pieces(wav)
+    return " ".join(" ".join(part.split()) for part in parts if part.strip())
+
+
+def hear(args: argparse.Namespace) -> dict:
+    source = Path(args.input)
+    if not source.is_file():
+        raise Refusal(f"no such note: {source}", "audio")
+    root = voice_root()
+    missing = missing_models(root, HEAR_MODELS)
+    if missing:
+        raise Refusal(f"missing model files in {root / 'models'}: {', '.join(missing)}", "models")
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise Refusal("ffmpeg not found on PATH", "engine")
+    # Beside the note, so a caller that deletes the note's folder after a killed run takes the audio too.
+    with tempfile.TemporaryDirectory(prefix="voice-hear-", dir=source.parent) as scratch:
+        wav = Path(scratch) / "in.wav"
+        seconds = decode(ffmpeg, source, wav)
+        try:
+            with stdout_to_stderr():
+                text = transcribe(load_listener(root), wav, seconds)
+        except Refusal:
+            raise
+        except ImportError as exc:
+            raise Refusal(f"the engine is not installed: {exc}", "models") from exc
+        except Exception as exc:
+            raise Refusal(f"{type(exc).__name__}: {exc}", "engine") from exc
+    if not text:
+        raise Refusal("heard nothing", "empty")
+    return {"ok": True, "text": text, "seconds": seconds, "peak_mb": peak_mb()}
+
+
 def parser() -> Parser:
     top = Parser(prog="voice.py", description="Turn text into a voice note, locally and offline.")
     verbs = top.add_subparsers(dest="verb", required=True, parser_class=Parser)
@@ -336,6 +446,9 @@ def parser() -> Parser:
     say.add_argument("--speed", type=float, default=1.0)
     say.add_argument("--no-cache", action="store_true", help="neither read nor write the cache")
     say.set_defaults(func=speak)
+    listen = verbs.add_parser("hear", help="transcribe an OGG/Opus voice note")
+    listen.add_argument("--in", dest="input", required=True)
+    listen.set_defaults(func=hear)
     verbs.add_parser("check", help="confirm the model files, ffmpeg and the engine imports, without inference").set_defaults(func=check)
     return top
 
@@ -348,6 +461,8 @@ def main(argv: list[str] | None = None) -> int:
         result = args.func(args)
     except Refusal as exc:
         result = {"ok": False, "error": str(exc)}
+        if exc.reason:
+            result["reason"] = exc.reason
     except Exception as exc:
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     print(json.dumps(result), flush=True)
