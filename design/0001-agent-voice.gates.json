@@ -1,0 +1,87 @@
+{
+  "doc": "design/0001-agent-voice.md",
+  "doc_sha256": "e7eb03b9301e139b2147c5daeb646cad1066526045e2835698f8620c079b8aa5",
+  "hash_method": "sha256 of the UTF-8 body after the frontmatter, stripped. design/check_gates.py does not exist in this repository, so the hash was computed by hand with that rule. Round 3 of the critic read the doc at 34c5da40fa20aafc9ad3f6da378ecb68857cf17269660063bdde45dfa5034fa2. Three code review rounds at high then revised it in place, and comprehension and readiness round 2 read it at 11292b1cc0038de06b681d03121f8761de933dd9192189ade207fef203ba9ab2. Each later run records the hash it read. The round-1 and round-2 critic hashes were not recorded.",
+  "approval": "Approved by the owner on 2026-10-21 after the round-3 critic failed with nothing blocking. Its findings were folded in before approval and not re-gated. The owner chose the design's three open calls (a card with Send, Edit and Discard, a Listen button, Claude and Codex alike) before drafting.",
+  "runs": [
+    {
+      "gate": "comprehension",
+      "round": 1,
+      "verdict": "pass",
+      "gaps": [],
+      "findings": [
+        "Minor gaps only. Privacy mode was already documented in doc/remote-agent-sessions.md"
+      ]
+    },
+    {
+      "gate": "readiness",
+      "round": 1,
+      "verdict": "pass",
+      "findings": [
+        "Eight guesses, each settled in the doc before round 2"
+      ]
+    },
+    {
+      "gate": "critic",
+      "round": 1,
+      "verdict": "fail",
+      "findings": [
+        "Blocking: a crash left the voice child running under KillMode=process, fixed with the pid and /proc cwd check on load",
+        "Should-fix, all folded in: Send could type twice, toasts before authorisation, replies to messages that are gone",
+        "Seven nits, all folded in"
+      ]
+    },
+    {
+      "gate": "critic",
+      "round": 2,
+      "verdict": "fail",
+      "findings": [
+        "Should-fix, all folded in: the Edit reply could type twice and lost text on a stopped session, Send showed Sent when typing failed, the retry cap contradicted itself, folders were deleted only at load, the SIGTERM timing claim was wrong",
+        "Six nits, all folded in"
+      ]
+    },
+    {
+      "gate": "critic",
+      "round": 3,
+      "verdict": "fail",
+      "findings": [
+        "All eleven round-2 items confirmed resolved. No blocking findings",
+        "Should-fix, folded in after round 3 and not re-gated: job folders were inside the backed-up /srv/services/agents (now excluded in doc/personal-cloud-sync.md), and a failed reply could keep a failed job from being forgotten (the job is now forgotten first)",
+        "Nits, folded in: lane built only in serve and before drain_updates, collect clears pid, realpaths on both sides of the cwd check, a job started with voice not ready fails with engine, unknown hear reasons get the engine line, the second stale wiki phrase, the SIGTERM wording",
+        "Three rounds is the cap. What is left is caught by the code review at high and the tests"
+      ]
+    },
+    {
+      "gate": "comprehension",
+      "round": 2,
+      "verdict": "pass",
+      "doc_sha256": "11292b1cc0038de06b681d03121f8761de933dd9192189ade207fef203ba9ab2",
+      "gaps": [],
+      "findings": [
+        "Five minor gaps (the Listen caption, whether the 👀 is cleared, the guide line's wording, a stale child outliving the 5-second wait, whether ready entries count toward the cap). The caption was settled in the doc, the rest left as they are"
+      ]
+    },
+    {
+      "gate": "readiness",
+      "round": 2,
+      "verdict": "fail",
+      "doc_sha256": "11292b1cc0038de06b681d03121f8761de933dd9192189ade207fef203ba9ab2",
+      "findings": [
+        "Blocking: 'The loop' posted a failure line before forgetting the job while 'When hear fails' forgot first, fixed to one order with the guard's single retry",
+        "Minor, folded in: a failed save on receive or Listen now removes the entry and its folder (code fixed too), the voice note has no caption, step 1 names send_peek and the photo tests, step 9 names the doc sections and CLAUDE.md and drops doc/voice.md",
+        "Minor, left: toasts on valid taps, closed-card layout, doctor precedence, Listen trusting the callback's session, file names and field types"
+      ]
+    },
+    {
+      "gate": "readiness",
+      "round": 3,
+      "verdict": "pass",
+      "doc_sha256": "e7eb03b9301e139b2147c5daeb646cad1066526045e2835698f8620c079b8aa5",
+      "findings": [
+        "Read main only, so several questions are already settled on the branch (the card post's own try, no caption through post(), the guide line, bridge.env.sample and the backup doc, both changed in the branch)",
+        "Minor, left: whether the eyes reaction is ever cleared (it is not), what the Edit ask replies to, doctor precedence, a stale child outliving the 5-second wait, child output file names, Send's refusal helper",
+        "Minor, left: the 1 MB Listen size assumes a full message while agent-notify caps a finished turn at 400 characters, so real notes are smaller and the timeout formula still holds"
+      ]
+    }
+  ]
+}
