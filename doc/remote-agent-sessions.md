@@ -41,7 +41,7 @@ flowchart TD
 | Aliases | Short forms for daily use | `aliases/.tmux-aliases` |
 | Telegram bridge | Control a session from a phone, any agent | `scripts/agent-bridge.py`, `os/linux/srv/agents/bridge.env.sample`, `os/linux/system/etc/systemd/system/agent-bridge.service` |
 | Hub staging | Plaintext copies for a host whose home is encrypted | `restoration_scripts/51-agent-sessions.sh` |
-| Voice notes | Local text to speech for the hub's bots, not yet called by the bridge | `scripts/voice.py`, `os/linux/srv/voice/`, `restoration_scripts/54-voice.sh` |
+| Voice notes | Local speech to text and text to speech. A voice note in a session topic becomes a confirm card, and 🔊 Listen reads a finished turn aloud | `scripts/voice.py`, `os/linux/srv/voice/`, `restoration_scripts/54-voice.sh` |
 | SSH key readability | Key login that works before the home is unlocked | `os/linux/system/etc/ssh/sshd_config.d/01-dotfiles-authorized-keys.conf` |
 | Packages | `mosh` for mobile links, `claude-code-tools` for `tmux-cli` | `os/linux/apt/packages.mint.txt`, `langs/python/uv_tools.txt` |
 
@@ -258,7 +258,7 @@ prompt from a phone is then just replying to the message that told you about it.
 |---|---|
 | `serve` | Long-polls `getUpdates` and acts on messages and button presses |
 | `notify` | Posts one message into a session's topic, called by `agent-notify.sh` |
-| `doctor` | Checks configuration, bot reachability and tmux, and reports ids |
+| `doctor` | Checks configuration, voice, bot reachability and tmux, and reports ids |
 
 ```text
 /control        restore the pinned Control panel
@@ -534,10 +534,27 @@ Log in once with
 It refuses a bot token, and writes the session into
 `/srv/services/telegram/user.env` without printing it.
 
-Voice notes come from `scripts/voice.py`, a local Kokoro CLI with its own venv
-and models under `/srv/services/voice`, staged by
-`restoration_scripts/54-voice.sh` and described in `doc/voice.md`. Black System
-uses it for the voiced morning brief. The bridge does not call it yet.
+Voice comes from `scripts/voice.py`, a local CLI that speaks with Kokoro and
+hears with Parakeet, with its own venv and models under `/srv/services/voice`,
+staged by `restoration_scripts/54-voice.sh` and described in `doc/voice.md`.
+Black System uses it for the voiced brief and voice captures. The bridge uses it
+when `AGENT_BRIDGE_VOICE_ROOT` in `bridge.env` names that folder, and leaves
+voice off when the variable is unset.
+
+A voice note in a session topic gets 👀, then a card replying to it with the
+text heard and ✅ Send, ✏️ Edit and 🗑 Discard. Nothing reaches the pane until
+Send. Edit asks for a reply with the corrected text, which is typed in its place.
+A misheard instruction would otherwise reach an agent that may act on it at
+once. A finished turn's 🔊 Listen replies with that message as a voice note.
+It speaks only the text the message already shows, so a work session's
+withheld body stays withheld.
+
+The bridge runs one voice child at a time, in arrival order, in a private
+folder per job under `voice/` beside the state file. Jobs are kept in
+`voice-notes.json`, so a restart picks them up again, and a card left untapped
+for a day loses its buttons. A note longer than two minutes is refused. The
+`doctor` voice line is only meaningful when doctor runs as the service user,
+because the voice root is readable by that user alone.
 
 | Option | Why not now | Revisit when |
 |---|---|---|

@@ -488,12 +488,15 @@ the list below has to be set there explicitly, colon-separated.
   `agent-bridge.py discover`, so this is convenience rather than the only copy
 
 Excluded deliberately: `/srv/sync/blackvault/.git`, which is 450MB reconstructible from GitHub,
-and `.stversions`, which is already a versioning layer. The script excludes nothing by default,
-so both go in the file named by `BLACK_SYSTEM_BACKUP_EXCLUDE_FILE`:
+`.stversions`, which is already a versioning layer, and the bridge's `voice` folder, which holds
+voice notes and transcripts only until they are sent or discarded and must not outlive that in a
+snapshot. The script excludes nothing by default, so all three go in the file named by
+`BLACK_SYSTEM_BACKUP_EXCLUDE_FILE`:
 
 ```text
 /srv/sync/blackvault/.git
 /srv/sync/*/.stversions
+/srv/services/agents/voice
 ```
 
 ### Verify the restore

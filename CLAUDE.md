@@ -261,7 +261,9 @@ hub, and refuses to run from this checkout. `scripts/voice_pin.py` writes the
 speech-to-text lines of `models.lock` on a host that can reach Hugging Face.
 Test them with `python3 scripts/test_voice.py` and `python3
 scripts/test_voice_pin.py`. The contract, cache, pinning and install are in
-`doc/voice.md`.
+`doc/voice.md`. When `AGENT_BRIDGE_VOICE_ROOT` is set, the bridge
+uses it to turn a voice note in a session topic into a card to Send, Edit or
+Discard, and to read a finished turn aloud from its 🔊 Listen button.
 
 ## Architecture
 
