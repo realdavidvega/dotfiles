@@ -121,8 +121,10 @@ install_models() {
 # The smoke run measures what the hub can do. Speech should take less time to
 # make than it lasts, and peak memory should stay well under the 16 GB.
 smoke_run() {
-  local started finished line
-  "$VOICE_VENV/bin/python" "$VOICE_ROOT/bin/voice.py" check || return 1
+  local started finished line checked
+  checked="$("$VOICE_VENV/bin/python" "$VOICE_ROOT/bin/voice.py" check | awk 'NF { last = $0 } END { print last }')"
+  echo "$checked"
+  python3 -c 'import json, sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok") else 1)' "$checked" 2>/dev/null || return 1
   started="$(date +%s.%N)"
   line="$(XDG_CACHE_HOME="$VOICE_ROOT/cache/xdg" "$VOICE_VENV/bin/python" "$VOICE_ROOT/bin/voice.py" \
     speak --no-cache --text-file "$VOICE_ROOT/sample.txt" --out "$VOICE_ROOT/sample.ogg" \
@@ -147,6 +149,35 @@ if result["peak_mb"] >= 1500:
     print("note: peak memory is at or over the 1,500 MB budget")
 PY
   echo "listen: ffplay -nodisp -autoexit $VOICE_ROOT/sample.ogg"
+  if python3 -c 'import json, sys; sys.exit(0 if json.loads(sys.argv[1]).get("hear") else 1)' "$checked"; then
+    hear_smoke
+  else
+    echo "hear is not installed yet: pin the Parakeet and Silero files into models.lock with"
+    echo "scripts/voice_pin.py and run this step again (doc/voice.md, Pinning the speech-to-text models)."
+  fi
+}
+
+# Hears the sample back. The transcript should read as the sample does.
+hear_smoke() {
+  local started finished line
+  started="$(date +%s.%N)"
+  line="$(XDG_CACHE_HOME="$VOICE_ROOT/cache/xdg" "$VOICE_VENV/bin/python" "$VOICE_ROOT/bin/voice.py" \
+    hear --in "$VOICE_ROOT/sample.ogg" | awk 'NF { last = $0 } END { print last }')"
+  finished="$(date +%s.%N)"
+  python3 - "$line" "$started" "$finished" <<'PY' || return 1
+import json
+import sys
+
+try:
+    result = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(f"hear printed no result: {sys.argv[1]!r}")
+if not result.get("ok"):
+    sys.exit(f"hear failed ({result.get('reason')}): {result.get('error')}")
+wall = float(sys.argv[3]) - float(sys.argv[2])
+print(f"heard: {result['text']}")
+print(f"smoke: {result['seconds']} s of audio heard in {wall:.1f} s, real-time factor {wall / result['seconds']:.2f}, peak {result['peak_mb']} MB")
+PY
 }
 
 setup_voice() {
