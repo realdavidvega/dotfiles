@@ -393,8 +393,8 @@ maintained.
 
 ## Obsidian: the Black Vault
 
-The vault lives at `$WORKSPACE/repos/github/tools/black-vault` on all three desktops, and that
-directory is the git working tree itself.
+The vault path differs per host, so scripts resolve it from `$BLACK_VAULT` rather than a literal
+path. On every desktop that directory is the git working tree itself.
 
 Syncthing carries the whole tree between the hub and full-content desktop peers.
 The Xebia Mac and iPhone reach the same content through CouchDB, which
@@ -420,10 +420,12 @@ The hub is the only backup source, since it holds every folder and is always on.
 **Requirement: versioned, not mirrored.** Syncthing propagates deletions within seconds, so a
 mirror reproduces the exact failure it is meant to protect against.
 
-> [!note] Designed, not yet built
-> The vault is already protected against the failure this guards against, by 365-day staggered
-> versioning on the hub plus git history on GitHub. What follows is needed before the other
-> workloads migrate, and for hub disk failure. It is not blocking.
+> [!note] Built, not yet enabled
+> `deploy/backup.sh` in the `black-system` repository implements this, run by
+> `black-system-backup.timer` with a Telegram alert on failure. It does nothing until its
+> `backup.env` exists. The vault is already covered by 365-day staggered versioning on the hub
+> plus git history on GitHub. KeePass, documents and media have no such cover, so enabling this
+> is the first migration phase rather than an extra.
 
 ### restic, not FreeFileSync
 
@@ -448,7 +450,10 @@ against.
 
 ### Scheduling
 
-A **system** timer with `Persistent=true`, not a user timer.
+A **system** timer, not a user timer. `black-system-backup.timer` fires daily at 04:30 with up to
+30 minutes of jitter, and `Persistent=true` runs a missed night at the next boot. Retention keeps 7
+daily, 4 weekly and 6 monthly snapshots, and `forget` is scoped to the `black-system` tag, so a
+repository shared with other backups never has theirs pruned.
 
 > [!warning] `loginctl enable-linger` does not work on this hub
 > A user timer plus linger is the usual answer, and it fails here. The home is ecryptfs and
@@ -458,25 +463,48 @@ A **system** timer with `Persistent=true`, not a user timer.
 The repository password is a secret, kept in KeePass and in a `0600` file on the hub, and read by
 the unit rather than embedded in it.
 
+The unit runs as the hub user, not root. Anything it backs up must be readable by that user, which
+is worth checking for container-owned directories before listing them.
+
+The drive must be at the same path on every boot: an `/etc/fstab` entry by UUID with `nofail`, so a
+missing drive does not stall the boot. With the drive absent, restic finds no repository at that
+path and the run fails, which posts the alert. It never writes snapshots to the internal disk by
+mistake.
+
 ### What to include
 
+With no `BLACK_SYSTEM_BACKUP_PATHS`, the script backs up only the vault and the bot's state, so
+the list below has to be set there explicitly, colon-separated.
+
 - `/srv/sync/*`, every Syncthing folder
-- `/srv/services/couchdb/data`, the LiveSync database
 - `/srv/services/syncthing`, the device certificate and folder keys. Losing these means a new
   device ID and re-pairing every device
+- `/srv/services/couchdb/data`, the LiveSync database. Optional: the bridge rebuilds it from the
+  vault, which is how a hub rebuild already restores it. The CouchDB image usually owns this
+  directory as its own uid, so include it only if `ls -ln` shows the hub user can read it
 - `/srv/services/livesync-bridge/dat`, the bridge config including its chunk settings
 - `/srv/services/agents`, the Telegram bridge's `bridge.env` and its topic mapping.
   Both are reconstructible, the token from KeePass and the chat id from
   `agent-bridge.py discover`, so this is convenience rather than the only copy
 
 Excluded deliberately: `/srv/sync/blackvault/.git`, which is 450MB reconstructible from GitHub,
-and `.stversions`, which is already a versioning layer.
+and `.stversions`, which is already a versioning layer. The script excludes nothing by default,
+so both go in the file named by `BLACK_SYSTEM_BACKUP_EXCLUDE_FILE`:
+
+```text
+/srv/sync/blackvault/.git
+/srv/sync/*/.stversions
+```
 
 ### Verify the restore
 
 A backup nobody has restored from is a hypothesis. Pull a file out of a snapshot and confirm it
 opens, before trusting it and again after any change to the include list. `restic check --read-data`
 verifies the repository itself, which is a different question from whether a restore works.
+
+Restore into an empty directory, `restic restore latest --target /tmp/restore`, and copy what is
+needed out by path. **Never restore over `/srv/sync`**: Syncthing would carry every overwritten
+file to every device within seconds.
 
 ***
 
@@ -529,49 +557,70 @@ skip unless Linux, not WSL, `linuxmint`, `MacBookPro12,1`.
 
 | Piece | State |
 |---|---|
-| Vault out of iCloud, at `$WORKSPACE/repos/github/tools/black-vault` | Mac, content hash verified identical to the hub |
-| Syncthing 2.1.3 | Mac and hub, tailnet-only addressing, discovery and relaying off |
+| Vault out of iCloud | Content hash verified identical between the Mac and the hub |
+| Syncthing | Hub, Mac and Windows, tailnet-only addressing, discovery and relaying off. 2.1.3 on the hub, held |
 | Syncthing on the hub | system service enabled at `multi-user.target`, config on `/srv` |
+| Windows | Syncthing, full `blackvault` folder, no LiveSync. Bridge standby |
+| Mac | LiveSync for vault content, Syncthing for lease claims only. Bridge standby |
+| iPhone and iPad | LiveSync clients against CouchDB |
 | Docker CE with Compose | enabled at boot |
 | CouchDB 3.5 | loopback only, CORS incl. `capacitor://localhost`, `require_valid_user` |
 | `tailscale serve` | Let's Encrypt certificate on the MagicDNS name, tailnet only |
 | `livesync-bridge` | built from source as uid 1000, boot service |
 | LiveSync database | unencrypted, chunk settings matched across bridge and plugin |
 | Obsidian on the hub | Flatpak, `--filesystem` override for the vault, interactive use only |
+| restic backup | built in `black-system`, not enabled |
 
 Everything on the hub is a boot service. None of it needs the encrypted home unlocked, a
 graphical session, or a login.
-
-## Remaining
-
-| Step | Why this order |
-|---|---|
-| iPhone: LiveSync client, fetch from remote | The remote already holds the vault, so this device only pulls |
-| Windows: Syncthing, `blackvault` and the rest | Fan out once the shape is proven on two machines |
-| restic backup to an external drive, with a verified restore | Needed before the remaining workloads migrate, and against hub disk failure |
 
 The Obsidian vault has left iCloud. It is protected against propagated deletion by 365-day
 staggered versioning on the hub and by git history on GitHub, both verified, which is why it did
 not wait for restic.
 
-> [!danger] The remaining workloads have no such cover
-> KeePass, documents and media get no git layer. For those, a propagated deletion is
-> unrecoverable once versioning ages out. Build restic and verify a restore before migrating
-> them off iCloud.
+***
 
-The Windows side keeps the vault at `repos/github/docs/black-vault`. Normalise it to
-`repos/github/tools/black-vault` when it joins, so the path is identical on all three desktops.
+## Migration off iCloud
 
-**Deferred:** camera roll, and any attempt to put the Obsidian vault on iOS Syncthing, which is
-impossible rather than merely unwise.
+Everything left is run on the hub or on a device inside the tailnet. Each phase has a gate, and
+the next phase starts only once it passes.
+
+> [!danger] KeePass, documents and media have no git layer
+> For those, a propagated deletion is unrecoverable once versioning ages out. That is why the
+> backup is phase 0 and every later gate asks for a snapshot.
+
+Two rules hold in every phase:
+
+- **Copy out of iCloud, never move.** Moving a file out of iCloud Drive on a Mac deletes it from
+  iCloud on every device. The iCloud copy stays untouched until its gate passes.
+- **Seed from one device, fully downloaded.** With Optimize Mac Storage on, iCloud leaves
+  `.icloud` placeholders in place of evicted files, and copying them copies the placeholders. Mark
+  the source folder Keep Downloaded first, seed from that one device, let it reach the hub, then
+  share with the others.
+
+| Phase | Work | Gate |
+|---|---|---|
+| 0. Backup | Install restic on the hub. Mount the drive by UUID with `nofail`. Write `backup.env` with the full path list and the exclude file, and the password file at mode 0600 with a copy in KeePass. Run `restic init`, enable `black-system-backup.timer`, start the service once by hand | A snapshot exists, `restic check` passes, and a file restored into `/tmp/restore` opens |
+| 1. KeePass | `mkdir /srv/sync/vault`, add it to `80-personal-cloud-hub.sh`. Create the `vault` folder on the hub with 365-day staggered versioning. Seed the `.kdbx` from one device, then share with the others. Point KeePassXC and the iOS client at the new path | Every device opened the database from its new path, and the next snapshot contains it |
+| 2. Documents | Same shape as phase 1, folder `documents`, with its ignore patterns and 365-day staggered versioning | File count and total size match the iCloud source, and a snapshot contains them |
+| 3. Media | Same shape, folder `media`, desktops only. No Syncthing versioning, so restic is its only undo | File count and total size match, and a snapshot contains them |
+| 4. Camera roll | Decide the open question below first. Then enable the `camera` folder, receive-only on the hub with `ignoreDelete` | A photo taken after enabling reaches the hub, and deleting it on the phone leaves the hub copy |
+| 5. Close iCloud | Turn off iCloud Drive and downgrade the storage plan | Every phase above has passed its gate |
+
+**Deferred:** any attempt to put the Obsidian vault on iOS Syncthing, which is impossible rather
+than merely unwise.
 
 ***
 
 ## Open questions
 
+- Whether the camera roll goes to Syncthing as a send-only backup, or to a self-hosted photo
+  library such as Immich. Send-only Syncthing needs no new service but gives no browsable library,
+  no albums and no delete semantics. That gap is the only one in this design a new service would
+  fill. Capacity no longer decides it, with 392GB free on the hub
+- Which external drive holds the restic repository, and whether it stays plugged into the hub.
+  A drive that leaves the house protects against a house fire but fails every run while it is away
 - Whether `livesync-bridge` proves reliable enough to keep, given it carries no license and is
   built from source. The fallback is the LiveSync plugin on a desktop, which needs no new
   infrastructure but reintroduces a dependency on Obsidian being open
-- Whether the camera roll comes in now that the hub has 392GB free, which makes this a question
-  about send-only correctness rather than capacity
 - Whether `media` stays desktop-only or the phone joins
