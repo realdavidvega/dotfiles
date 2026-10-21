@@ -232,7 +232,7 @@ class BridgeTests(unittest.TestCase):
         self.bridge.render_peek = Mock(return_value=b'PNG')
         self.bridge.send_peek('vault', 999)
         self.bridge.render_peek.assert_called_once_with('vault', 60)
-        self.assertEqual(self.tg.send.call_args.kwargs['photo'], b'PNG')
+        self.assertEqual(self.tg.send.call_args.kwargs['upload'], ('photo', 'pane.png', 'image/png', b'PNG'))
         self.bridge.render_peek.side_effect = OSError('missing')
         self.tmux.capture.return_value = '<&>' * 5000
         self.tmux.running.return_value = 'shell'
@@ -278,12 +278,33 @@ class BridgeTests(unittest.TestCase):
         response.__enter__ = Mock(return_value=response)
         response.__exit__ = Mock(return_value=False)
         with patch.object(b.urllib.request, 'urlopen', return_value=response) as send:
-            b.Telegram('fake').send(-1, 'caption', thread_id=6, photo=b'PNG', buttons=['peek'], session='vault')
+            b.Telegram('fake').send(-1, 'caption', thread_id=6, upload=('photo', 'pane.png', 'image/png', b'PNG'),
+                                    buttons=['peek'], session='vault')
         request = send.call_args.args[0]
         self.assertTrue(request.full_url.endswith('/sendPhoto'))
         self.assertIn(b'name="message_thread_id"', request.data)
         self.assertIn(b'a:peek:vault', request.data)
         self.assertIn(b'Content-Type: image/png', request.data)
+
+    def test_a_voice_note_uploads_as_its_own_named_part(self):
+        response = Mock()
+        response.read.return_value = b'{"ok": true, "result": {}}'
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        with patch.object(b.urllib.request, 'urlopen', return_value=response) as send:
+            b.Telegram('fake').send(-1, '', thread_id=6, upload=('voice', 'note.ogg', 'audio/ogg', b'OGG'))
+        request = send.call_args.args[0]
+        self.assertTrue(request.full_url.endswith('/sendVoice'))
+        self.assertIn(b'name="voice"; filename="note.ogg"\r\nContent-Type: audio/ogg\r\n\r\nOGG', request.data)
+        self.assertNotIn(b'name="caption"', request.data)
+
+    def test_a_reply_is_still_posted_when_its_target_is_gone(self):
+        b.Telegram.send(self.tg, -1, 'text', thread_id=6, reply_to=5)
+        self.assertEqual(self.tg.call.call_args.kwargs['reply_parameters'],
+                         {'message_id': 5, 'allow_sending_without_reply': True})
+        self.tg.send.return_value = {'ok': True, 'result': {'message_id': 31}}
+        self.assertEqual(self.bridge.post('vault', 'text', reply_to=5), {'ok': True, 'result': {'message_id': 31}})
+        self.assertEqual(self.tg.send.call_args.kwargs['reply_to'], 5)
 
     @unittest.skipUnless(b.os.environ.get('AGENT_BRIDGE_FREEZE') or b.shutil.which('freeze'), 'optional Freeze renderer is not installed')
     def test_real_renderer_preserves_image_dimensions(self):

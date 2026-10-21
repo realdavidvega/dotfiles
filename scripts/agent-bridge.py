@@ -687,20 +687,27 @@ class TelegramError(RuntimeError):
 
 
 
+UPLOAD_METHODS = {"photo": "sendPhoto", "voice": "sendVoice"}
+
+
 class Telegram:
     def __init__(self, token: str) -> None:
         self._token = token
 
-    def call(self, method: str, http_timeout: int = 20, photo: bytes | None = None, **params: Any) -> dict[str, Any]:
+    def call(self, method: str, http_timeout: int = 20, upload: tuple[str, str, str, bytes] | None = None,
+             **params: Any) -> dict[str, Any]:
         """Call a Bot API method.
 
         `http_timeout` is the socket timeout and is named apart from `timeout`
         because getUpdates takes a `timeout` of its own in the request body.
+        `upload` is one file as (field, file name, content type, bytes), which
+        turns the request into a multipart form.
         """
         url = f"{API_ROOT}/bot{self._token}/{method}"
         body = json.dumps({k: v for k, v in params.items() if v is not None}).encode()
         content_type = "application/json"
-        if photo is not None:
+        if upload is not None:
+            field_name, filename, file_type, data = upload
             boundary = "bridge-" + uuid.uuid4().hex
             chunks = []
             for key, value in params.items():
@@ -708,7 +715,8 @@ class Telegram:
                     continue
                 encoded = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
                 chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{encoded}\r\n'.encode())
-            chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="pane.png"\r\nContent-Type: image/png\r\n\r\n'.encode() + photo + b"\r\n")
+            chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+                          f'Content-Type: {file_type}\r\n\r\n'.encode() + data + b"\r\n")
             chunks.append(f"--{boundary}--\r\n".encode())
             body = b"".join(chunks)
             content_type = f"multipart/form-data; boundary={boundary}"
@@ -738,9 +746,12 @@ class Telegram:
         buttons: list[str] | None = None,
         session: str | None = None,
         parse_mode: str | None = None,
-        photo: bytes | None = None,
+        upload: tuple[str, str, str, bytes] | None = None,
         markup: dict[str, Any] | None = None,
+        reply_to: int | None = None,
     ) -> dict[str, Any]:
+        # A target that was cleared or pruned meanwhile must not cost the reply itself.
+        reply = {"message_id": reply_to, "allow_sending_without_reply": True} if reply_to else None
         if markup is None and buttons and session:
             row = [
                 {"text": BUTTONS[name][0], "callback_data": f"a:{name}:{session}"}
@@ -749,9 +760,10 @@ class Telegram:
             ]
             markup = {"inline_keyboard": [row]} if row else None
 
-        if photo is not None:
-            return self.call("sendPhoto", chat_id=chat_id, message_thread_id=thread_id,
-                             photo=photo, caption=text[:1024], reply_markup=markup)
+        if upload is not None:
+            return self.call(UPLOAD_METHODS[upload[0]], upload=upload, chat_id=chat_id,
+                             message_thread_id=thread_id, caption=text[:1024] or None, reply_markup=markup,
+                             reply_parameters=reply)
         return self.call(
             "sendMessage",
             chat_id=chat_id,
@@ -759,6 +771,7 @@ class Telegram:
             text=text[:MAX_MESSAGE],
             parse_mode=parse_mode,
             reply_markup=markup,
+            reply_parameters=reply,
             link_preview_options={"is_disabled": True},
         )
 
@@ -1232,9 +1245,9 @@ class Bridge:
 
     def post(
         self, session: str | None, text: str, buttons: list[str] | None = None,
-        parse_mode: str | None = None, photo: bytes | None = None,
-        markup: dict[str, Any] | None = None,
-    ) -> None:
+        parse_mode: str | None = None, upload: tuple[str, str, str, bytes] | None = None,
+        markup: dict[str, Any] | None = None, reply_to: int | None = None,
+    ) -> dict[str, Any]:
         self.state.reload()
         session = session or (CONTROL if CONTROL in self.state.topics else None)
         # Serialize lookup, delivery and replacement across daemon and hooks.
@@ -1244,9 +1257,9 @@ class Bridge:
             if session and thread_id is None:
                 raise TelegramError("could not resolve session topic")
             try:
-                self.tg.send(self.config.chat_id, text, thread_id=thread_id,
-                             buttons=buttons, session=session, parse_mode=parse_mode, photo=photo,
-                             markup=markup)
+                return self.tg.send(self.config.chat_id, text, thread_id=thread_id,
+                                    buttons=buttons, session=session, parse_mode=parse_mode, upload=upload,
+                                    markup=markup, reply_to=reply_to)
             except TelegramError as exc:
                 if not session or not exc.missing_topic:
                     raise
@@ -1254,9 +1267,9 @@ class Bridge:
                 thread_id = self._topic_for(session)
                 if thread_id is None:
                     raise TelegramError("could not recreate deleted session topic") from exc
-                self.tg.send(self.config.chat_id, text, thread_id=thread_id,
-                             buttons=buttons, session=session, parse_mode=parse_mode, photo=photo,
-                             markup=markup)
+                return self.tg.send(self.config.chat_id, text, thread_id=thread_id,
+                                    buttons=buttons, session=session, parse_mode=parse_mode, upload=upload,
+                                    markup=markup, reply_to=reply_to)
 
     def topic_link(self, thread_id: int | None) -> str | None:
         """A t.me link into a topic. Only supergroup ids, which start -100, have one."""
@@ -1335,7 +1348,7 @@ class Bridge:
         try:
             photo = self.render_peek(session, lines)
             self.post(session, f"{session} · {self.tmux.running(session)} · {lines} lines",
-                      buttons=buttons, photo=photo)
+                      buttons=buttons, upload=("photo", "pane.png", "image/png", photo))
             return
         except (OSError, subprocess.SubprocessError, TelegramError, ValueError) as exc:
             LOG.warning("image peek unavailable (%s), using text", type(exc).__name__)
