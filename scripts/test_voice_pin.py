@@ -21,11 +21,12 @@ VOCAB = b'<unk> 0\n'
 def fake_json(url):
     if url.endswith('/revision/main'):
         return {'sha': SHA}
-    if url.endswith(f'/tree/{SHA}'):
+    if url.endswith(f'/tree/{SHA}?recursive=true'):
         return [
             {'type': 'file', 'path': 'encoder-model.int8.onnx', 'lfs': {'oid': ENCODER, 'size': 9}},
             {'type': 'file', 'path': 'vocab.txt', 'oid': 'b' * 40},
             {'type': 'file', 'path': 'README.md', 'oid': 'c' * 40},
+            {'type': 'file', 'path': 'onnx/encoder.onnx', 'lfs': {'oid': ENCODER}},
         ]
     raise AssertionError(url)
 
@@ -54,6 +55,10 @@ class PinTests(unittest.TestCase):
     def test_a_file_missing_at_the_commit_fails(self):
         with self.assertRaisesRegex(pin.PinError, 'config.json'):
             pin.lock_lines('parakeet', 'org/model', 'main', ['config.json'])
+
+    def test_recursive_file_keeps_its_subfolder(self):
+        line = pin.lock_lines('marian', 'org/model', 'main', ['onnx/encoder.onnx'])
+        self.assertEqual(line, [f'marian/onnx/encoder.onnx {ENCODER} https://huggingface.co/org/model/resolve/{SHA}/onnx/encoder.onnx'])
 
     def test_main_prints_lines_and_fails_cleanly(self):
         out, err = io.StringIO(), io.StringIO()

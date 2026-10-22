@@ -255,10 +255,11 @@ Full reasoning and the alternatives considered are in `doc/remote-agent-sessions
 
 `scripts/voice.py` turns text into an OGG/Opus voice note with Kokoro on the
 CPU, and a voice note into text with Parakeet, offline, and prints one JSON
-line (`speak`, `hear`, `check`). It runs from `/srv/services/voice` with its
+line (`speak`, `translate`, `hear`, `check`). `speak --lang es` translates marked
+owner spans offline and uses the Spanish voice. It runs from `/srv/services/voice` with its
 own venv and verified models, staged by `restoration_scripts/54-voice.sh` on a
 hub, and refuses to run from this checkout. `scripts/voice_pin.py` writes the
-speech-to-text lines of `models.lock` on a host that can reach Hugging Face.
+speech-to-text and translator lines of `models.lock` on a host that can reach Hugging Face.
 Test them with `python3 scripts/test_voice.py` and `python3
 scripts/test_voice_pin.py`. The contract, cache, pinning and install are in
 `doc/voice.md`. When `AGENT_BRIDGE_VOICE_ROOT` is set, the bridge

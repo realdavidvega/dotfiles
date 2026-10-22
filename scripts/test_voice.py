@@ -267,6 +267,65 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(result['ffmpeg'], str(self.bin / 'ffmpeg'))
         self.loader.assert_not_called()
 
+    def test_span_translation_keeps_system_text_and_balances_truncation(self):
+        calls = []
+        def translate(text):
+            calls.append(text)
+            return {'Call the bank': 'Llama al banco', 'Keep going': 'Sigue', 'outer inner': 'dentro'}[text]
+        self.assertEqual(v.translate_spans('Hoy: ⟦Call the bank⟧. ⟦Keep going', translate),
+                         'Hoy: Llama al banco. Sigue')
+        self.assertEqual(v.translate_spans('⟧Sistema ⟦⟧ ⟦outer ⟦inner⟧', translate), 'Sistema  dentro')
+        self.assertEqual(calls, ['Call the bank', 'Keep going', 'outer inner'])
+
+    def test_spanish_dates_are_calendar_dates_and_keep_boundaries(self):
+        self.assertEqual(v.said_dates_es('El 16/07/24 y 29/2/2024.'),
+                         'El 16 de julio de 2024 y 29 de febrero de 2024.')
+        for text in ('31/2/24', '2016/07/24', '16/07/241', '1/1/24/2'):
+            self.assertEqual(v.said_dates_es(text), text)
+
+    def test_spanish_sentence_boundaries_and_cache_language(self):
+        self.assertEqual(v.sentences('Uno. ¿Otro? ¡Ánimo! Él sigue.'), ['Uno.', '¿Otro?', '¡Ánimo!', 'Él sigue.'])
+        self.assertNotEqual(v.cache_key('same', 'am_michael', 1, 'en'), v.cache_key('same', 'am_michael', 1, 'es'))
+
+    def translator_files(self):
+        for name in v.TRANSLATE_MODELS:
+            path = self.root / 'models' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'model')
+
+    def test_spanish_readiness_requires_files_and_sentencepiece(self):
+        with patch.object(v.importlib, 'import_module'):
+            self.assertFalse(self.run_cli('check')[1]['translate'])
+            self.translator_files()
+            self.assertTrue(self.run_cli('check')[1]['translate'])
+        def imported(module):
+            if module == 'sentencepiece':
+                raise ImportError('missing')
+        with patch.object(v.importlib, 'import_module', side_effect=imported):
+            self.assertFalse(self.run_cli('check')[1]['translate'])
+            code, result = self.speak('--lang', 'es')
+        self.assertEqual((code, result['reason']), (1, 'models'))
+
+    def test_spanish_speech_selects_voice_language_and_says_translated_dates(self):
+        self.translator_files()
+        self.text.write_text('Hoy: ⟦Call on 16/07/24⟧.')
+        with patch.object(v.importlib, 'import_module'), \
+                patch.object(v, 'load_translator', return_value=lambda text: 'Llama el 16/07/24'), \
+                patch.object(v, 'load_engine', return_value=self.engine) as load:
+            code, result = self.speak('--lang', 'es', '--no-cache')
+            load.assert_called_once_with(self.root, 'em_alex', 1.0, lang='es')
+        self.assertEqual((code, result['cached']), (0, False))
+        self.assertEqual(self.engine.calls, ['Hoy: Llama el 16 de julio de 2024.'])
+
+    def test_translate_verb_returns_only_translated_marked_text(self):
+        self.translator_files()
+        self.text.write_text('Hoy: ⟦Call the bank⟧.')
+        with patch.object(v.importlib, 'import_module'), \
+                patch.object(v, 'load_translator', return_value=lambda text: 'Llama al banco'):
+            code, result = self.run_cli('translate', '--text-file', str(self.text))
+        self.assertEqual((code, result), (0, {'ok': True, 'text': 'Hoy: Llama al banco.'}))
+        self.loader.assert_not_called()
+
     def test_check_fails_on_a_missing_model_or_ffmpeg(self):
         (self.root / 'models' / v.KOKORO_VOICES).unlink()
         code, result = self.run_cli('check')

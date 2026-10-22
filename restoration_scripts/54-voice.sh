@@ -149,6 +149,16 @@ if result["peak_mb"] >= 1500:
     print("note: peak memory is at or over the 1,500 MB budget")
 PY
   echo "listen: ffplay -nodisp -autoexit $VOICE_ROOT/sample.ogg"
+  if python3 -c 'import json, sys; sys.exit(0 if json.loads(sys.argv[1]).get("translate") else 1)' "$checked"; then
+    local span_sample
+    span_sample="$(mktemp "$VOICE_ROOT/translate-smoke.XXXXXX")" || return 1
+    printf 'Hoy: ⟦Call the bank on 16/07/24⟧.\n' >"$span_sample"
+    "$VOICE_VENV/bin/python" "$VOICE_ROOT/bin/voice.py" translate --text-file "$span_sample" \
+      || echo "Spanish translation smoke failed. Check the Marian models and sentencepiece."
+    rm -f "$span_sample"
+  else
+    echo "Spanish voice is not installed: pin the Marian files and install sentencepiece (doc/voice.md)."
+  fi
   if python3 -c 'import json, sys; sys.exit(0 if json.loads(sys.argv[1]).get("hear") else 1)' "$checked"; then
     hear_smoke
   else

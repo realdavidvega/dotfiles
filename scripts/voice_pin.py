@@ -43,7 +43,7 @@ def fetch_bytes(url: str) -> bytes:
 
 def lock_lines(folder: str, repo: str, revision: str, files: list[str]) -> list[str]:
     commit = fetch_json(f"{HUB}/api/models/{repo}/revision/{revision}")["sha"]
-    tree = {entry["path"]: entry for entry in fetch_json(f"{HUB}/api/models/{repo}/tree/{commit}")}
+    tree = {entry["path"]: entry for entry in fetch_json(f"{HUB}/api/models/{repo}/tree/{commit}?recursive=true")}
     lines = []
     for name in files:
         if name not in tree:

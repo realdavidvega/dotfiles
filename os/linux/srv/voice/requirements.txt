@@ -12,3 +12,4 @@ packaging==26.3
 phonemizer==3.4.0
 protobuf==7.36.2
 typing_extensions==4.16.0
+sentencepiece==0.2.2

@@ -2,7 +2,8 @@
 """Turn text into a voice note and a voice note into text, locally and offline.
 
 Usage:
-  voice.py speak --text-file F --out X.ogg [--voice am_michael] [--speed 1.0] [--no-cache]
+  voice.py speak --text-file F --out X.ogg [--lang en|es] [--voice VOICE] [--speed 1.0] [--no-cache]
+  voice.py translate --text-file F
   voice.py hear --in X.ogg
   voice.py check
 
@@ -37,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+from datetime import date
 import hashlib
 import importlib
 import json
@@ -75,6 +77,11 @@ HEAR_RATE = 16000
 WHOLE_MAX_S = 20
 
 DEFAULT_VOICE = "am_michael"
+SPAN_OPEN, SPAN_CLOSE = "⟦", "⟧"
+TRANSLATE_MODELS = ("marian/onnx/encoder_model_quantized.onnx", "marian/onnx/decoder_model_quantized.onnx",
+                    "marian/source.spm", "marian/target.spm", "marian/vocab.json")
+DATE_PATTERN = re.compile(r"(?<![\d/])(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})(?![\d/])")
+MONTHS_ES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre")
 SAMPLE_RATE = 24000
 BITRATE = "32k"
 THREADS = 2
@@ -115,7 +122,7 @@ def clean(text: str) -> str:
 
 
 def sentences(text: str) -> list[str]:
-    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", text)
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ¿¡0-9\"'(])", text)
     out: list[str] = []
     for part in parts:
         while len(part) > BATCH_CHARS:
@@ -153,8 +160,8 @@ def voice_root(script: str | None = None) -> Path:
     raise Refusal("no voice root: set VOICE_HOME, or run the staged copy in <root>/bin beside models.lock")
 
 
-def cache_key(text: str, voice: str, speed: float) -> str:
-    material = json.dumps([KOKORO_MODEL, voice, speed, text], ensure_ascii=False)
+def cache_key(text: str, voice: str, speed: float, lang: str = "en") -> str:
+    material = json.dumps([KOKORO_MODEL, lang, voice, speed, text], ensure_ascii=False)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
@@ -240,7 +247,7 @@ def stdout_to_stderr():
 
 
 class KokoroEngine:
-    def __init__(self, root: Path, voice: str, speed: float):
+    def __init__(self, root: Path, voice: str, speed: float, lang: str = "en"):
         for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
             os.environ.setdefault(name, str(THREADS))
         import onnxruntime as rt
@@ -253,17 +260,17 @@ class KokoroEngine:
         self.k = Kokoro.from_session(session, str(root / "models" / KOKORO_VOICES))
         if voice not in self.k.get_voices():
             raise Refusal(f"unknown voice {voice!r}, try one of: {', '.join(sorted(self.k.get_voices()))}")
-        self.voice, self.speed = voice, speed
+        self.voice, self.speed, self.lang = voice, speed, "es" if lang == "es" else "en-us"
 
     def pcm(self, text: str) -> bytes:
-        samples, rate = self.k.create(text, voice=self.voice, speed=self.speed, lang="en-us")
+        samples, rate = self.k.create(text, voice=self.voice, speed=self.speed, lang=self.lang)
         if rate != SAMPLE_RATE:
             raise Refusal(f"Kokoro returned {rate} Hz, expected {SAMPLE_RATE}")
         return samples.astype("<f4").tobytes()
 
 
-def load_engine(root: Path, voice: str, speed: float) -> KokoroEngine:
-    return KokoroEngine(root, voice, speed)
+def load_engine(root: Path, voice: str, speed: float, lang: str = "en") -> KokoroEngine:
+    return KokoroEngine(root, voice, speed, lang)
 
 
 def synthesize(engine, text: str) -> bytes:
@@ -273,6 +280,114 @@ def synthesize(engine, text: str) -> bytes:
 
 def missing_models(root: Path, names: tuple[str, ...] = MODELS) -> list[str]:
     return [name for name in names if not (root / "models" / name).is_file()]
+
+
+def said_dates_es(text: str) -> str:
+    def say(match: re.Match) -> str:
+        day, month, year = (int(value) for value in match.groups())
+        if len(match[3]) == 2:
+            year += 2000
+        try:
+            date(year, month, day)
+        except ValueError:
+            return match[0]
+        return f"{day} de {MONTHS_ES[month - 1]} de {year}"
+    return DATE_PATTERN.sub(say, text)
+
+
+def translate_spans(text: str, runner) -> str:
+    """Translate marked owner text only. A truncated final span runs to the end."""
+    result, buf, inside = [], [], False
+    for char in text:
+        if char == SPAN_OPEN:
+            if not inside:
+                result.append("".join(buf))
+                buf, inside = [], True
+        elif char == SPAN_CLOSE:
+            if inside:
+                span = "".join(buf)
+                result.append(runner(span) if span.strip() else "")
+                buf, inside = [], False
+        else:
+            buf.append(char)
+    tail = "".join(buf)
+    result.append(runner(tail) if inside and tail.strip() else tail)
+    return "".join(result)
+
+
+def require_translate(root: Path) -> None:
+    missing = missing_models(root, TRANSLATE_MODELS)
+    if missing:
+        raise Refusal(f"missing translator models: {', '.join(missing)}", "models")
+    try:
+        importlib.import_module("sentencepiece")
+    except Exception as exc:
+        raise Refusal(f"sentencepiece does not import: {type(exc).__name__}", "models") from exc
+
+
+class MarianTranslator:
+    """Pinned local ONNX encoder and decoder, greedy decoding with no network."""
+
+    def __init__(self, root: Path):
+        require_translate(root)
+        import numpy as np
+        import onnxruntime as rt
+        import sentencepiece as spm
+
+        self.np = np
+        opts = rt.SessionOptions()
+        opts.intra_op_num_threads, opts.inter_op_num_threads = THREADS, 1
+        paths = [str(root / "models" / name) for name in TRANSLATE_MODELS]
+        self.encoder = rt.InferenceSession(paths[0], opts, providers=["CPUExecutionProvider"])
+        self.decoder = rt.InferenceSession(paths[1], opts, providers=["CPUExecutionProvider"])
+        self.source = spm.SentencePieceProcessor(model_file=paths[2])
+        self.target = spm.SentencePieceProcessor(model_file=paths[3])
+        self.vocab = json.loads(Path(paths[4]).read_text(encoding="utf-8"))
+        self.inverse = {value: piece for piece, value in self.vocab.items()}
+
+    def __call__(self, text: str) -> str:
+        np = self.np
+        ids = [self.vocab.get(piece, 1) for piece in self.source.encode(text, out_type=str)]
+        if not ids or ids[-1] != 0:
+            ids.append(0)
+        inputs = np.array([ids], dtype=np.int64)
+        mask = np.ones_like(inputs)
+        hidden = self.encoder.run(None, {"input_ids": inputs, "attention_mask": mask})[0]
+        output = [65000]
+        for _ in range(3 * len(ids) + 10):
+            logits = self.decoder.run(None, {"input_ids": np.array([output], dtype=np.int64),
+                                            "encoder_hidden_states": hidden, "encoder_attention_mask": mask})[0]
+            step = logits[0, -1]
+            step[65000] = -np.inf
+            token = int(step.argmax())
+            if token == 0:
+                break
+            output.append(token)
+        return self.target.decode_pieces([self.inverse[token] for token in output[1:]
+                                          if token in self.inverse and token not in (0, 1, 65000)])
+
+
+def load_translator(root: Path) -> MarianTranslator:
+    return MarianTranslator(root)
+
+
+def spanish_text(root: Path, text: str) -> str:
+    require_translate(root)
+    # Load one encoder/decoder per job, only if an owner span needs it.
+    runner = None
+    def run(span: str) -> str:
+        nonlocal runner
+        if runner is None:
+            runner = load_translator(root)
+        return runner(span)
+    return translate_spans(text, run)
+
+
+def translate(args: argparse.Namespace) -> dict:
+    text = Path(args.text_file).read_text(encoding="utf-8")
+    with stdout_to_stderr():
+        translated = spanish_text(voice_root(), text)
+    return {"ok": True, "text": translated}
 
 
 def check(args: argparse.Namespace) -> dict:
@@ -297,6 +412,11 @@ def check(args: argparse.Namespace) -> dict:
             importlib.import_module(module)
         except Exception as exc:
             result.update(hear=False, hear_error=f"{module} does not import: {type(exc).__name__}: {exc}")
+    try:
+        require_translate(root)
+        result["translate"] = True
+    except Refusal as exc:
+        result.update(translate=False, translate_error=str(exc))
     return result
 
 
@@ -325,7 +445,11 @@ def speak(args: argparse.Namespace) -> dict:
     cache_dir = root / "cache" / "tts"
     cache_dir.mkdir(parents=True, exist_ok=True)
     sweep(cache_dir)
-    key = cache_key(text, args.voice, args.speed)
+    voice = args.voice or ("em_alex" if args.lang == "es" else DEFAULT_VOICE)
+    if args.lang == "es":
+        with stdout_to_stderr():
+            text = said_dates_es(spanish_text(root, text))
+    key = cache_key(text, voice, args.speed, args.lang)
 
     hit = None if args.no_cache else cached(cache_dir, key)
     if hit:
@@ -344,7 +468,9 @@ def speak(args: argparse.Namespace) -> dict:
     encoded = Path(tmp)
     try:
         with stdout_to_stderr():
-            pcm = synthesize(load_engine(root, args.voice, args.speed), text)
+            engine = (load_engine(root, voice, args.speed, lang="es") if args.lang == "es"
+                      else load_engine(root, voice, args.speed))
+            pcm = synthesize(engine, text)
             if not pcm:
                 raise Refusal("the engine produced no audio")
             seconds = math.ceil(len(pcm) / 4 / SAMPLE_RATE)
@@ -442,10 +568,14 @@ def parser() -> Parser:
     say = verbs.add_parser("speak", help="voice a text file as an OGG/Opus voice note")
     say.add_argument("--text-file", required=True)
     say.add_argument("--out", required=True)
-    say.add_argument("--voice", default=DEFAULT_VOICE)
+    say.add_argument("--lang", choices=("en", "es"), default="en")
+    say.add_argument("--voice", default=None)
     say.add_argument("--speed", type=float, default=1.0)
     say.add_argument("--no-cache", action="store_true", help="neither read nor write the cache")
     say.set_defaults(func=speak)
+    translation = verbs.add_parser("translate", help="translate marked spans locally without speaking")
+    translation.add_argument("--text-file", required=True)
+    translation.set_defaults(func=translate)
     listen = verbs.add_parser("hear", help="transcribe an OGG/Opus voice note")
     listen.add_argument("--in", dest="input", required=True)
     listen.set_defaults(func=hear)

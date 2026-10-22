@@ -6,3 +6,10 @@ parakeet/decoder_joint-model.int8.onnx eea7483ee3d1a30375daedc8ed83e3960c91b0988
 parakeet/vocab.txt d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/vocab.txt
 parakeet/config.json 666903c76b9798caf2c210afd4f6cd60b08a8dbf9800ec8d7a3bc0d2148ac466 https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/config.json
 silero/silero_vad.onnx 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3 https://huggingface.co/istupakov/silero-vad-onnx/resolve/b3e3ee3cce4c11ceb63b1a0b229d916069c1ddf6/silero_vad.onnx
+
+# Offline English-to-Spanish translation. Upstream tokenizer, quantized ONNX export.
+marian/onnx/encoder_model_quantized.onnx 03434edd1147e6c49e22066e9dc5888235e99cc35a6711d1c4ea5b06455d5da9 https://huggingface.co/Xenova/opus-mt-en-es/resolve/4b002a4c7edd54a7ced58877258b87f7efd3f892/onnx/encoder_model_quantized.onnx
+marian/onnx/decoder_model_quantized.onnx 2b45074cc819f1d901e40510d7bc0781d99327d16c7eca04518c4ee0c3d6ba10 https://huggingface.co/Xenova/opus-mt-en-es/resolve/4b002a4c7edd54a7ced58877258b87f7efd3f892/onnx/decoder_model_quantized.onnx
+marian/source.spm 4dd547c24816a335e7b0b2e63376a8f1b3cbfc671eda5ab808dd44fdadaa8791 https://huggingface.co/Helsinki-NLP/opus-mt-en-es/resolve/5bc4493d463cf000c1f0b50f8d56886a392ed4ab/source.spm
+marian/target.spm e236ee6d866b635c0142114f8647f39831f9d92534aa2aad75c942f6a78ad0e3 https://huggingface.co/Helsinki-NLP/opus-mt-en-es/resolve/5bc4493d463cf000c1f0b50f8d56886a392ed4ab/target.spm
+marian/vocab.json 257f346d7a6b2ecceafcca8ba05648ce2fd68dfaf105fb0e913dca7198f3f6d5 https://huggingface.co/Helsinki-NLP/opus-mt-en-es/resolve/5bc4493d463cf000c1f0b50f8d56886a392ed4ab/vocab.json

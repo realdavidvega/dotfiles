@@ -30,7 +30,7 @@ on. A second run with nothing changed installs and downloads nothing.
 ### requirements.in and requirements.txt
 
 `os/linux/srv/voice/requirements.in` names the direct dependencies,
-`kokoro-onnx` and `onnx-asr[cpu]`, with minimum versions. `requirements.txt` is the frozen set, made on the hub's own
+`kokoro-onnx`, `onnx-asr[cpu]` and `sentencepiece`, with minimum versions. `requirements.txt` is the frozen set, made on the hub's own
 Mint Python from a clean venv:
 
 ```bash
@@ -43,7 +43,7 @@ installs the frozen file as is. A different release refreezes it.
 
 ### Pinning the speech-to-text models
 
-`models.lock` ships with the Kokoro lines only. The Parakeet and Silero lines
+`models.lock` pins Kokoro, Parakeet, Silero and the Marian translator. Lines
 are written on a host that can reach Hugging Face, by `scripts/voice_pin.py`,
 which resolves a revision to its commit and prints lines pinned to it:
 
@@ -89,9 +89,10 @@ a `reason` (below).
 
 | Verb | Does | Success line |
 |---|---|---|
-| `speak --text-file F --out X.ogg [--voice am_michael] [--speed 1.0] [--no-cache]` | Voices the text and writes mono OGG/Opus at 32 kbps to `--out` | `{"ok": true, "path": "X.ogg", "seconds": 93, "cached": false, "peak_mb": 820}` |
+| `speak --text-file F --out X.ogg [--lang en|es] [--voice VOICE] [--speed 1.0] [--no-cache]` | Voices the text and writes mono OGG/Opus at 32 kbps to `--out` | `{"ok": true, "path": "X.ogg", "seconds": 93, "cached": false, "peak_mb": 820}` |
+| `translate --text-file F` | Translates marked owner spans locally without speaking | `{"ok": true, "text": "..."}` |
 | `hear --in X.ogg` | Decodes the note to 16 kHz mono WAV and transcribes it | `{"ok": true, "text": "call the dentist", "seconds": 4, "peak_mb": 1400}` |
-| `check` | Confirms the speaking model files, ffmpeg and the engine imports, with no inference, and says whether `hear` is installed | `{"ok": true, "models": [...], "ffmpeg": "/usr/bin/ffmpeg", "hear": true, "hear_missing": []}` |
+| `check` | Confirms the speaking model files, ffmpeg and the engine imports, with no inference, and says whether `hear` and translation are installed | `{"ok": true, "models": [...], "ffmpeg": "/usr/bin/ffmpeg", "hear": true, "hear_missing": [], "translate": true}` |
 
 - `seconds` is whole seconds rounded up, because Telegram's `duration` is an
   integer.
@@ -119,10 +120,11 @@ line at all. Callers treat a missing or unparseable last line as a failure.
 
 ## The cache
 
-`speak` caches by a hash of the cleaned text, the model file, the voice and the
+`speak` caches by a hash of the cleaned text, the model file, language, voice and
 speed. Each entry is the OGG plus a small JSON file holding `seconds`, written
-last and atomically, so a half-written entry is never a hit. The cache is read
-before any engine is imported, so a hit costs no model load. Every `speak`
+last and atomically, so a half-written entry is never a hit. For English the cache is read
+before any engine is imported, so a hit costs no model load. Spanish prepares
+the translated text before checking its cache. Every `speak`
 removes files in `cache/tts/` older than 14 days, and a hit refreshes its
 entry. `--no-cache` neither reads nor writes it.
 
@@ -177,3 +179,34 @@ venv or uv cache under a deep temporary directory is not.
 
 **check reports missing model files.** Rerun `54-voice.sh`, which downloads and
 verifies them. A hash mismatch leaves the old file and deletes the download.
+
+## Spanish speech and translation
+
+`speak --lang es` uses Kokoro's Spanish phonemizer and `em_alex`. English defaults
+to `am_michael`, and `--voice` overrides either. System text outside `⟦…⟧` is
+spoken as written. Only marked spans pass through the offline English-to-Spanish
+translator. Stops belong outside the spans. Empty spans vanish, a nested opening
+marker is ignored, a stray closing marker is dropped, and an opening marker with
+no closing marker translates through the end of the input. No translated text
+is returned by `speak` or saved outside its optional audio cache.
+
+Spanish dates are expanded after translation, so `16/07/24` is said as
+`16 de julio de 2024`. Invalid calendar dates and longer slash-separated values
+are left alone. The `translate` verb prints translated text for an explicit
+inspection and never creates audio.
+
+The five pinned files live under `models/marian/`: the quantized encoder and
+decoder retain their `onnx/` subfolder, and `source.spm`, `target.spm` and
+`vocab.json` sit beside it. Pin them with:
+
+```bash
+python3 scripts/voice_pin.py marian Xenova/opus-mt-en-es main onnx/encoder_model_quantized.onnx onnx/decoder_model_quantized.onnx
+python3 scripts/voice_pin.py marian Helsinki-NLP/opus-mt-en-es main source.spm target.spm vocab.json
+```
+
+The pin tool lists nested paths recursively. Commit its output in `models.lock`
+and rerun `54-voice.sh`. Marian uses onnxruntime and the pinned `sentencepiece`
+dependency in `requirements.txt`. `check` sets `translate: true` only when all
+five files exist and `sentencepiece` imports. Missing translator files or its
+library make Spanish `speak` refuse with `reason: "models"`, while English stays
+available. The installer runs a fixed-span translation smoke check when ready.

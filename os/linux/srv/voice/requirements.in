@@ -3,3 +3,4 @@
 # Python from a clean venv built from this file.
 kokoro-onnx>=0.6.1
 onnx-asr[cpu]>=0.12
+sentencepiece>=0.2.2
