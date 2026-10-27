@@ -1,0 +1,107 @@
+{
+  "doc": "design/0002-voice-agents.md",
+  "doc_sha256": "1851c478cb28f6d8bb6b985516592aed3274c6082f51ab6e59430fc737f6081c",
+  "hash_method": "sha256 of the UTF-8 body after the frontmatter, stripped. design/check_gates.py does not exist in this repository, so the hash was computed with that rule. It is the round-3 text all three gates read.",
+  "status": "Three rounds run, the cap. Not approved. Round 3 still has a blocker and major findings, and the critic named first-party alternatives the doc never evaluated, so per design-first the problem is upstream and the doc goes back to the owner instead of a fourth round.",
+  "scope_changes": [
+    "After round 1 the original doc was split: the Command topic and the live call became issue drafts in design/issues/voice-agents-next/ (0003, 0004).",
+    "After round 2 the owner set voice approval aside (design/issues/voice-agents-next/voice-approvals.md) and chose tap approvals through the PermissionRequest hook, a button per question option, redacted cards, and a reply keyboard."
+  ],
+  "checks_run": {
+    "date": "2026-10-26",
+    "claude_code": "2.1.310",
+    "B1-B5": "PermissionRequest hook: allow and deny work, input carries the full tool_input, the prompt shows while the hook waits, a late hook decision closes it, a terminal answer wins",
+    "B6": "the hook keeps running after a terminal answer, and the transcript grew at the answer (one 5-second Bash run only)",
+    "C": "UserPromptSubmit additionalContext produced a final Spoken: line",
+    "D": "Stop carries last_assistant_message",
+    "E": "allow with updatedInput.answers answered an AskUserQuestion",
+    "A": "a digit selects on a numbered dialog with no Enter"
+  },
+  "runs": [
+    {
+      "gate": "comprehension",
+      "round": 1,
+      "verdict": "fail",
+      "findings": [
+        "16 gaps, chiefly event delivery, spoken-reply identity, Telegram cannot be hands-free, command session lifecycle, call-server auth. Led to the split."
+      ]
+    },
+    {
+      "gate": "critic",
+      "round": 1,
+      "verdict": "fail",
+      "findings": [
+        "Blockers: confirm not tied to the read-back prompt, auto-send approving a prompt, the call confirming itself, no call-server auth, the command session hijacking the vault conversation. Found the PermissionRequest hook."
+      ]
+    },
+    {
+      "gate": "readiness",
+      "round": 1,
+      "verdict": "fail",
+      "findings": [
+        "9 blocking questions, folded into the split and the round-2 doc"
+      ]
+    },
+    {
+      "gate": "comprehension",
+      "round": 2,
+      "verdict": "fail",
+      "findings": [
+        "17 mechanics gaps: write order, unmute verb, hook lifetime after a terminal answer, the bell fallback, event-log lifecycle"
+      ]
+    },
+    {
+      "gate": "readiness",
+      "round": 2,
+      "verdict": "fail",
+      "findings": [
+        "11 blocking: read-back speech queueing, bell fallback owner, seq and cursor, footer pattern, allowed() reuse, session key versus topic"
+      ]
+    },
+    {
+      "gate": "critic",
+      "round": 2,
+      "verdict": "fail",
+      "findings": [
+        "Blocker: a spoken read-back does not let the ear verify a shell command. Major: the hook also fires for questions and plans, request files outlive prompts, the approval round trip does not fit, Codex and OpenCode have dialogs, typed control words bypass the read-back, unmute announces everything, new data class. Led to setting voice approval aside."
+      ]
+    },
+    {
+      "gate": "comprehension",
+      "round": 3,
+      "verdict": "fail",
+      "doc_sha256": "1851c478cb28f6d8bb6b985516592aed3274c6082f51ab6e59430fc737f6081c",
+      "findings": [
+        "Detail gaps: session key to topic mapping, module import path, helper mute status, kill-switch writer, S job schema, spelled-out numbers in the hold"
+      ]
+    },
+    {
+      "gate": "readiness",
+      "round": 3,
+      "verdict": "fail",
+      "doc_sha256": "1851c478cb28f6d8bb6b985516592aed3274c6082f51ab6e59430fc737f6081c",
+      "findings": [
+        "8 blocking: the PreToolUse question card fires before the request exists, trim changes the inode and skips events, done files lack message ids, no mute-status verb, no kill-switch writer, no store for partial answers, Send, /say, Edit replies and Enter can still approve an open prompt, prompt cards silent in hands-free topics"
+      ]
+    },
+    {
+      "gate": "critic",
+      "round": 3,
+      "verdict": "fail",
+      "doc_sha256": "1851c478cb28f6d8bb6b985516592aed3274c6082f51ab6e59430fc737f6081c",
+      "findings": [
+        "Blocker: atomic-rewrite trim gives a new inode, which resets the cursor and drops the spoken line of the trimming stop",
+        "Major: transcript growth is not a reliable 'answered elsewhere' signal (async rows such as away_summary, parallel tool results); bind the request to its tool_use_id instead",
+        "Major: two cards per question, since PreToolUse runs before PermissionRequest",
+        "Major: question handling while the hook waits was never verified",
+        "Major: done files lack message ids; import path and hook/bridge version skew; cards skip the session allowlist; journal text through Bash cards; auto-send can type into a shell after a crash; /say, Control Send, Send and Enter still type into an open prompt; prompt cards silent in hands-free; helper cannot report mute state",
+        "Minor: auto mode auto-denies unattended safety prompts after 120 s; act only on tools a card can describe; session key sanitisation breaks topic lookup; nested headless runs; kill switch has no writer",
+        "Alternatives not evaluated: Claude Code 2.1.310 ships a channel permission relay that dismisses a prompt answered elsewhere, and Remote Control (/rc). Both give request ids and cancellation natively."
+      ]
+    }
+  ],
+  "open": [
+    "Evaluate Claude Code's first-party Remote Control and channel permission relay before redesigning prompt cards",
+    "Every round-3 finding above"
+  ]
+}
