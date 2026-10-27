@@ -96,7 +96,10 @@ attaches. In Telegram it binds the session's topic.
 `claude` is the default agent. `codex`, `opencode` and `shell` are also accepted.
 `open` takes the agent positionally or as `--agent NAME`, `--dir PATH` for a
 custom directory, `--fresh` to start blank, `--resume` to insist on continuing,
-and `--detached` to start without attaching.
+and `--detached` to start without attaching. `--resolve` prints the directory a
+new session would start in and exits, or exits 1 when that directory is
+missing. It never runs tmux, so paneport can ask before it creates the session
+itself.
 
 `new NAME` is `open --fresh --detached`, `resume NAME` is
 `open --resume --detached`, and `kill` is `close`. They stay for scripts and the
@@ -314,6 +317,8 @@ session, and when `close` ends one, `agent-session.sh` runs
 the staged bridge or `bridge.env` is missing, so machines without a bridge are
 unaffected, and it never makes the terminal wait on Telegram. The bridge sets
 `AGENT_BRIDGE_QUIET` when it calls the launcher, so an `/open` is announced once.
+paneport sets `PANEPORT_QUIET` for the same reason, and either one stops the
+announcement.
 `AGENT_BRIDGE_BIN` points the launcher at another bridge, which the tests use.
 
 Every notification carries Peek and Esc. Only a Claude Code permission prompt,

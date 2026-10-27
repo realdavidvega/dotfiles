@@ -137,5 +137,66 @@ class SessionTests(unittest.TestCase):
             finally:
                 subprocess.run(['tmux', 'kill-server'], env=env, capture_output=True)
 
+class FakeTmuxTests(unittest.TestCase):
+    # A fake tmux on PATH records every call and has no sessions, so these run
+    # without tmux installed and can show that a command never reached it.
+    def environment(self, root):
+        binary = root / '.local/bin'
+        binary.mkdir(parents=True)
+        fake = binary / 'tmux'
+        fake.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$TMUX_TEST_RECORD"\n'
+                        '[[ "$1" != has-session ]]\n')
+        fake.chmod(0o755)
+        env = dict(os.environ, HOME=str(root), TMUX='', TMUX_TEST_RECORD=str(root / 'tmux-calls'),
+                   AGENT_SESSION_REPOS=str(root / 'repos'), AGENT_BRIDGE_BIN=str(root / 'none'))
+        for name in ('AGENT_BRIDGE_QUIET', 'PANEPORT_QUIET'):
+            env.pop(name, None)
+        return env
+
+    def test_resolve_prints_the_directory_without_tmux(self):
+        with tempfile.TemporaryDirectory(prefix='agent-session-test-') as directory:
+            root = Path(directory).resolve()
+            repos, vault = root / 'repos', root / 'vault'
+            vault.mkdir()
+            for repo in ('github/tools/skp', 'github/tools/skills-registry'):
+                (repos / repo / '.git').mkdir(parents=True)
+            env = dict(self.environment(root), AGENT_SESSION_ROOT=str(vault))
+            def resolve(*args):
+                result = subprocess.run(['bash', str(SCRIPT), 'open', *args, '--resolve'], env=env,
+                                        capture_output=True, text=True, timeout=10)
+                return result.returncode, result.stdout
+            self.assertEqual(resolve('skp'), (0, f'{repos}/github/tools/skp\n'))
+            self.assertEqual(resolve('skills'), (0, f'{repos}/github/tools/skills-registry\n'))
+            self.assertEqual(resolve('house'), (0, f'{vault}\n'))
+            self.assertEqual(resolve('skp', '--dir', str(vault)), (0, f'{vault}\n'))
+            self.assertEqual(resolve('skp', '--dir', str(root / 'missing')), (1, ''))
+            self.assertFalse((root / 'tmux-calls').exists())
+
+    def test_either_quiet_variable_stops_the_announcement(self):
+        with tempfile.TemporaryDirectory(prefix='agent-session-test-') as directory:
+            root = Path(directory).resolve()
+            announced = root / 'announced'
+            bridge = root / 'bridge.py'
+            bridge.write_text('import sys\nwith open(%r, "a") as handle:\n'
+                              '    handle.write(" ".join(sys.argv[1:]) + "\\n")\n' % str(announced))
+            bridge_env = root / 'bridge.env'
+            bridge_env.write_text('')
+            env = dict(self.environment(root), AGENT_SESSION_ROOT=str(root),
+                       AGENT_BRIDGE_BIN=str(bridge), AGENT_BRIDGE_ENV=str(bridge_env))
+            def opened(name, **extra):
+                subprocess.run(['bash', str(SCRIPT), 'open', name, 'shell', '--detached'],
+                               env=dict(env, **extra), check=True, capture_output=True, text=True, timeout=10)
+            opened('paneport', PANEPORT_QUIET='1')
+            opened('bridge', AGENT_BRIDGE_QUIET='1')
+            opened('terminal')
+            for _ in range(40):
+                if announced.exists(): break
+                time.sleep(.05)
+            time.sleep(.3)
+            self.assertIn('new-session -d -s paneport', (root / 'tmux-calls').read_text())
+            lines = announced.read_text().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertTrue(lines[0].startswith('topic terminal --text '))
+
 if __name__ == '__main__':
     unittest.main()

@@ -34,6 +34,8 @@ Options for open:
   --agent <a>              Select the agent (alternative to the positional agent)
   --dir <path>             Override the working directory
   --detached              Start or reuse without attaching
+  --resolve               Print the directory a new session would start in, and
+                          exit without running tmux
 
 Where a session starts:
   A session named after a git repository under AGENT_SESSION_REPOS starts in
@@ -61,6 +63,8 @@ Environment:
   AGENT_SESSION_REPOS  Where named repositories are looked up, colon separated
                        (default: ~/Workspace/repos:/srv/services)
   AGENT_SESSION_HOST   SSH host for `remote` (default: mint)
+  PANEPORT_QUIET       Set by paneport, so a session it opens is not announced
+  AGENT_BRIDGE_QUIET   Set by the Telegram bridge, for the same reason
 
 A session gets three windows: agent, shell, git. The agent is typed into a
 shell rather than run as the window's command, so that when it exits or
@@ -202,13 +206,13 @@ has_conversation() {
 # started at a terminal gets its topic without a trip through /bind. It runs in
 # the background and says nothing. No bridge, no configuration or no network
 # all mean nothing happens, and the terminal never waits on Telegram. The
-# bridge sets AGENT_BRIDGE_QUIET when it calls this launcher, since it
-# announces its own sessions.
+# bridge sets AGENT_BRIDGE_QUIET and paneport sets PANEPORT_QUIET when they
+# call this launcher, since each announces its own sessions.
 announce_session() {
   local bridge="${AGENT_BRIDGE_BIN:-/srv/services/agents/bin/agent-bridge.py}"
   local env_file="${AGENT_BRIDGE_ENV:-/srv/services/agents/bridge.env}"
 
-  [[ -z "${AGENT_BRIDGE_QUIET:-}" ]] || return 0
+  [[ -z "${AGENT_BRIDGE_QUIET:-}" && -z "${PANEPORT_QUIET:-}" ]] || return 0
   [[ -r "$bridge" && -r "$env_file" ]] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
 
@@ -248,6 +252,19 @@ agent_command() {
   esac
 }
 
+# Where a new session starts, or an error when that directory is missing.
+start_dir() {
+  local name="$1" dir="$2"
+
+  [[ -n "$dir" ]] || dir="$(session_dir "$name")"
+
+  if [[ ! -d "$dir" ]]; then
+    printf 'Working directory does not exist: %s\n' "$dir" >&2
+    return 1
+  fi
+  printf '%s\n' "$dir"
+}
+
 # Inside tmux, attaching is an error. Switching is what was meant.
 enter_session() {
   local name="$1"
@@ -261,7 +278,7 @@ enter_session() {
 
 cmd_open() {
   local name="" dir="" agent="claude" agent_cmd agent_bin mode=auto resume=false detached=false
-  local conversation
+  local conversation resolve=false
 
   while (($# > 0)); do
     case "$1" in
@@ -270,6 +287,7 @@ cmd_open() {
       --resume) mode=resume; shift ;;
       --fresh)  mode=fresh; shift ;;
       --detached) detached=true; shift ;;
+      --resolve) resolve=true; shift ;;
       -h|--help) usage; exit 0 ;;
       *)
         if [[ -z "$name" ]]; then
@@ -296,6 +314,13 @@ cmd_open() {
   # tmux treats . and : as address separators in a session name.
   name="${name//[.:]/-}"
 
+  # paneport asks where a session would start before it creates one itself, so
+  # this answers from the filesystem and never touches a tmux server.
+  if [[ "$resolve" == true ]]; then
+    start_dir "$name" "$dir" || exit 1
+    return 0
+  fi
+
   if tmux has-session -t "=$name" 2>/dev/null; then
     if [[ "$detached" == true ]]; then
       printf '%s is already running. Use ags open %s to attach.\n' "$name" "$name"
@@ -313,12 +338,7 @@ cmd_open() {
 
   ensure_config
 
-  [[ -n "$dir" ]] || dir="$(session_dir "$name")"
-
-  if [[ ! -d "$dir" ]]; then
-    printf 'Working directory does not exist: %s\n' "$dir" >&2
-    exit 1
-  fi
+  dir="$(start_dir "$name" "$dir")" || exit 1
 
   agent_bin="$(agent_binary "$agent")"
   if [[ "$mode" == resume ]] || { [[ "$mode" == auto ]] && has_conversation "$agent" "$dir"; }; then
