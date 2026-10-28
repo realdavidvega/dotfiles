@@ -98,11 +98,15 @@ a `reason` (below).
   integer.
 - `peak_mb` is the larger of the process's and its children's peak resident
   memory.
-- `speak` cleans its input first. It drops emoji and symbols, reads `·` as a
-  comma and collapses whitespace. Callers with markup of their own strip it
-  before calling.
-- Text is voiced in sentence groups of about 320 characters with a short
-  pause between them, which keeps each call inside Kokoro's context.
+- A blank line is a paragraph break, and the voice pauses there for 0.75
+  seconds. `speak` cleans each paragraph first. It drops emoji and symbols,
+  reads `·` as a comma and collapses whitespace, and a paragraph left empty is
+  dropped with its pause. Callers with markup of their own strip it before
+  calling.
+- Each paragraph is voiced in sentence groups of about 320 characters with a
+  short pause between them, which keeps each call inside Kokoro's context. No
+  group crosses a paragraph break.
+- `seconds` includes the pauses.
 - `--speed` runs from 0.5 to 2.0.
 - `hear` transcribes 20 seconds or less in one pass. Longer audio is split at
   pauses by Silero VAD into pieces of at most 20 seconds, and their texts are
@@ -120,8 +124,9 @@ line at all. Callers treat a missing or unparseable last line as a failure.
 
 ## The cache
 
-`speak` caches by a hash of the cleaned text, the model file, language, voice and
-speed. Each entry is the OGG plus a small JSON file holding `seconds`, written
+`speak` caches by a hash of the cleaned paragraphs joined by a blank line, the
+model file, language, voice and speed. A text with no break hashes exactly as
+the whole cleaned text. Each entry is the OGG plus a small JSON file holding `seconds`, written
 last and atomically, so a half-written entry is never a hit. For English the cache is read
 before any engine is imported, so a hit costs no model load. Spanish prepares
 the translated text before checking its cache. Every `speak`

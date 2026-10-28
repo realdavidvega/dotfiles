@@ -413,10 +413,60 @@ class VoiceTests(unittest.TestCase):
     def test_synthesize_puts_a_short_gap_between_batches(self):
         engine = FakeEngine(samples_per_batch=100)
         with patch.object(v, 'batches', return_value=['one', 'two', 'three']):
-            pcm = v.synthesize(engine, 'ignored')
+            pcm = v.synthesize(engine, ['ignored'])
         gap = int(v.SAMPLE_RATE * v.BATCH_GAP_S)
         self.assertEqual(len(pcm), 4 * (3 * 100 + 2 * gap))
         self.assertEqual(engine.calls, ['one', 'two', 'three'])
+
+
+    # paragraphs
+
+    def test_a_text_with_no_break_keeps_its_cache_key_and_batches(self):
+        raw = 'Good morning. 🌅 Three tasks · two anchors.\nAnd one more line.\n'
+        self.text.write_text(raw)
+        self.assertEqual(self.speak()[0], 0)
+        self.assertTrue((self.cache() / f"{v.cache_key(v.clean(raw), 'am_michael', 1.0)}.ogg").is_file())
+        self.assertEqual(self.engine.calls, v.batches(v.clean(raw)))
+
+    def test_a_spanish_text_with_no_break_keeps_its_cache_key_and_batches(self):
+        self.translator_files()
+        self.text.write_text('Hoy: ⟦Call the bank⟧. Sigue así.')
+        with patch.object(v.importlib, 'import_module'), \
+                patch.object(v, 'load_translator', return_value=lambda text: 'Llama al banco'), \
+                patch.object(v, 'load_engine', return_value=self.engine):
+            self.assertEqual(self.speak('--lang', 'es')[0], 0)
+        said = 'Hoy: Llama al banco. Sigue así.'
+        self.assertTrue((self.cache() / f"{v.cache_key(said, 'em_alex', 1.0, 'es')}.ogg").is_file())
+        self.assertEqual(self.engine.calls, v.batches(said))
+
+    def test_three_paragraphs_give_two_pauses_and_no_batch_crosses_a_break(self):
+        engine = FakeEngine(samples_per_batch=100)
+        pcm = v.synthesize(engine, ['One. Two.', 'Three.', 'Four.'])
+        pause = int(v.SAMPLE_RATE * v.PARAGRAPH_GAP_S)
+        self.assertEqual(engine.calls, ['One. Two.', 'Three.', 'Four.'])
+        self.assertEqual(len(pcm), 4 * (3 * 100 + 2 * pause))
+        self.text.write_text('One.\n\n  \n\nTwo.\n \nThree.')
+        code, result = self.speak()
+        self.assertEqual(self.engine.calls, ['One.', 'Two.', 'Three.'])
+        # Three seconds of speech and two pauses.
+        self.assertEqual((code, result['seconds']), (0, 5))
+
+    def test_a_paragraph_left_empty_by_cleaning_is_dropped_with_its_pause(self):
+        self.text.write_text('One.\n\n🎉 🎉\n\nTwo.')
+        code, result = self.speak()
+        self.assertEqual(self.engine.calls, ['One.', 'Two.'])
+        self.assertEqual((code, result['seconds']), (0, 3))
+
+    def test_spanish_loads_the_translator_once_for_spans_in_three_paragraphs(self):
+        self.translator_files()
+        self.text.write_text('Hoy: ⟦Call the bank⟧.\n\nLuego, ⟦Keep going⟧.\n\nY ⟦Rest⟧.')
+        names = {'Call the bank': 'Llama al banco', 'Keep going': 'Sigue', 'Rest': 'Descansa'}
+        with patch.object(v.importlib, 'import_module'), \
+                patch.object(v, 'load_translator', return_value=names.get) as loaded, \
+                patch.object(v, 'load_engine', return_value=self.engine):
+            self.assertEqual(self.speak('--lang', 'es', '--no-cache')[0], 0)
+        loaded.assert_called_once_with(self.root)
+        self.assertEqual(self.engine.calls, ['Hoy: Llama al banco.', 'Luego, Sigue.', 'Y Descansa.'])
 
 
 class HearTests(unittest.TestCase):

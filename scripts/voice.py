@@ -90,6 +90,11 @@ CACHE_DAYS = 14
 # characters keeps each call well inside it, so nothing is silently cut off.
 BATCH_CHARS = 320
 BATCH_GAP_S = 0.12
+# A blank line in the text is a paragraph break, and the voice pauses there.
+# The length pr-briefing leaves between chapters, shortened for a note heard in
+# one go.
+PARAGRAPH = "\n\n"
+PARAGRAPH_GAP_S = 0.75
 # Emoji glue that is not itself a symbol: variation selectors, the zero-width
 # joiner and the keycap mark.
 EMOJI_GLUE = {"\ufe0e", "\ufe0f", "\u200d", "\u20e3"}
@@ -119,6 +124,11 @@ def clean(text: str) -> str:
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     text = re.sub(r",(?:\s*,)+", ",", text)
     return text.strip(" ,")
+
+
+def paragraphs(text: str) -> list[str]:
+    """Split at blank lines, dropping any paragraph left empty."""
+    return [part for part in re.split(r"\n\s*\n", text) if part.strip()]
 
 
 def sentences(text: str) -> list[str]:
@@ -273,9 +283,11 @@ def load_engine(root: Path, voice: str, speed: float, lang: str = "en") -> Kokor
     return KokoroEngine(root, voice, speed, lang)
 
 
-def synthesize(engine, text: str) -> bytes:
+def synthesize(engine, paragraphs: list[str]) -> bytes:
+    """Batch each paragraph on its own, so no batch crosses a break, and pause between paragraphs."""
     gap = bytes(4 * int(SAMPLE_RATE * BATCH_GAP_S))
-    return gap.join(engine.pcm(batch) for batch in batches(text))
+    pause = bytes(4 * int(SAMPLE_RATE * PARAGRAPH_GAP_S))
+    return pause.join(gap.join(engine.pcm(batch) for batch in batches(part)) for part in paragraphs)
 
 
 def missing_models(root: Path, names: tuple[str, ...] = MODELS) -> list[str]:
@@ -435,7 +447,10 @@ def place(source: Path, out: Path) -> None:
 def speak(args: argparse.Namespace) -> dict:
     if not 0.5 <= args.speed <= 2.0:
         raise Refusal("speed must be between 0.5 and 2.0")
-    text = clean(Path(args.text_file).read_text(encoding="utf-8"))
+    # Clean each paragraph and rejoin, so the text is translated once and a span
+    # never crosses a break. A text with no break is cleaned exactly as a whole.
+    raw = Path(args.text_file).read_text(encoding="utf-8")
+    text = PARAGRAPH.join(filter(None, (clean(part) for part in paragraphs(raw))))
     if not text:
         raise Refusal("nothing to say after cleaning the text")
     out = Path(args.out)
@@ -470,7 +485,7 @@ def speak(args: argparse.Namespace) -> dict:
         with stdout_to_stderr():
             engine = (load_engine(root, voice, args.speed, lang="es") if args.lang == "es"
                       else load_engine(root, voice, args.speed))
-            pcm = synthesize(engine, text)
+            pcm = synthesize(engine, paragraphs(text))
             if not pcm:
                 raise Refusal("the engine produced no audio")
             seconds = math.ceil(len(pcm) / 4 / SAMPLE_RATE)
