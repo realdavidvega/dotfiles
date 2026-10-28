@@ -1,0 +1,14 @@
+{
+  "serverMode": "self-hosted",
+  "apiUrl": "http://localhost:8888",
+  "optInOnly": true,
+  "optInPaths": [
+    "~/Workspace/github",
+    "~/Workspace/repos/github"
+  ],
+  "banks": {
+    "coding-agent::skills-registry": {
+      "disabled": true
+    }
+  }
+}

@@ -28,7 +28,8 @@
     ~/.p10k.zsh: shell/zsh/themes/.p10k.zsh
     ~/.claude/CLAUDE.md: config/claude/CLAUDE.md
     ~/.config/opencode/opencode.json: config/opencode/opencode.json
-    ~/.config/opencode/oh-my-openagent.json: config/opencode/oh-my-openagent.json
+    ~/.config/opencode/hindsight-opencode2: config/opencode/hindsight-opencode2
+    ~/.hindsight/coding-agent.json: config/hindsight/coding-agent.json
     ~/.config/opencode/ocx.jsonc: config/opencode/ocx.jsonc
     ~/.config/opencode/commands: config/opencode/commands
     ~/.config/opencode/philosophy: config/opencode/philosophy

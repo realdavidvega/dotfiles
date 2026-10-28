@@ -127,14 +127,14 @@ git-crypt unlock /path/to/dotfiles-key.bin
 
 The dotfiles are the source of truth for the OpenCode setup:
 
-- `config/opencode/opencode.json` tracks providers, plugins, MCPs, and skill paths
+- `config/opencode/opencode.json` tracks providers, plugins, and skill paths
 - `skp sync` (from the skp repo, on `PATH` via `SKP_REPO`) links global skills into `~/.claude/skills`, `~/.agents/skills` and `~/.codex/skills`, then links project-scoped skills into each mapped repo's `.claude/skills`, `.codex/skills` and `.opencode/skills`
 - `config/opencode/global/AGENTS.md` is shared through `~/.agents/AGENTS.md` and `~/.codex/AGENTS.md`; Codex's mutable `~/.codex/config.toml` remains machine-local
 - `~/.skp/profiles.json` decides which skills are global and which are opt-in per project; `skp add` / `skp rm` edit it. It is local state, versioned in no repo
 - Third-party skills are vendored in skills-registry under `external-skills/<domain>/<skill>`, pinned by SHA and hash-locked by `sync-external.sh` from the skp repo
 - `scripts/opencode-session.sh` is the dotfiles-owned OpenCode launcher used by `ocv`
 - `scripts/hindsight-local.sh` is the dotfiles-owned launcher for the local Hindsight backend used by `ochl`
-- the Hindsight plugin is configured in `config/opencode/opencode.json` and defaults to `http://localhost:8888`
+- Hindsight is wired through `config/opencode/hindsight-opencode2` and configured in `config/hindsight/coding-agent.json`: the self-hosted server on `http://localhost:8888`, personal GitHub checkouts only. See `doc/opencode/configuration.md`
 
 To restore the setup on a new machine:
 
