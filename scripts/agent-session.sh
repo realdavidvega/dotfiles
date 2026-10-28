@@ -106,11 +106,22 @@ resolve_config() {
 # server here.
 TMUX_CONF="$(resolve_config)"
 
+# The command that starts the server also seeds tmux's global environment, which
+# every later pane inherits. The callers' quiet flags and paneport's settings
+# describe this one call, so they stay out of it, or a session opened later at
+# a terminal would go unannounced.
 tmux_with_conf() {
+  local name
+  local -a scrub=()
+  for name in $(compgen -e); do
+    if [[ "$name" == AGENT_BRIDGE_QUIET || "$name" == PANEPORT_* ]]; then
+      scrub+=(-u "$name")
+    fi
+  done
   if [[ -n "$TMUX_CONF" ]]; then
-    tmux -f "$TMUX_CONF" "$@"
+    env ${scrub[@]+"${scrub[@]}"} tmux -f "$TMUX_CONF" "$@"
   else
-    tmux "$@"
+    env ${scrub[@]+"${scrub[@]}"} tmux "$@"
   fi
 }
 

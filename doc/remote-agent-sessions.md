@@ -318,7 +318,10 @@ the staged bridge or `bridge.env` is missing, so machines without a bridge are
 unaffected, and it never makes the terminal wait on Telegram. The bridge sets
 `AGENT_BRIDGE_QUIET` when it calls the launcher, so an `/open` is announced once.
 paneport sets `PANEPORT_QUIET` for the same reason, and either one stops the
-announcement.
+announcement. Neither reaches tmux: the launcher starts the server without
+them or any other `PANEPORT_*` variable, since tmux copies the starting
+command's environment into every later pane, and a terminal `open` from one of
+those panes would otherwise go unannounced.
 `AGENT_BRIDGE_BIN` points the launcher at another bridge, which the tests use.
 
 Every notification carries Peek and Esc. Only a Claude Code permission prompt,

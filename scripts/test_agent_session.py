@@ -137,6 +137,37 @@ class SessionTests(unittest.TestCase):
             finally:
                 subprocess.run(['tmux', 'kill-server'], env=env, capture_output=True)
 
+    def test_quiet_flags_stay_out_of_the_servers_environment(self):
+        with tempfile.TemporaryDirectory(prefix='agent-session-test-') as directory:
+            root = Path(directory)
+            (root / '.tmux.conf').write_text(
+                'set -g default-shell /bin/bash\n'
+                'set -g default-command "bash --noprofile --norc"\n'
+            )
+            announced = root / 'announced'
+            bridge = root / 'bridge.py'
+            bridge.write_text('import sys\nwith open(%r, "a") as handle:\n'
+                              '    handle.write(" ".join(sys.argv[1:]) + "\\n")\n' % str(announced))
+            bridge_env = root / 'bridge.env'
+            bridge_env.write_text('')
+            env = dict(os.environ, HOME=directory, TMUX='', TMUX_TMPDIR=directory,
+                       AGENT_SESSION_ROOT=directory, AGENT_BRIDGE_BIN=str(bridge),
+                       AGENT_BRIDGE_ENV=str(bridge_env), PANEPORT_QUIET='1',
+                       AGENT_BRIDGE_QUIET='1', PANEPORT_CONFIG='/nowhere.toml')
+            def global_env(name):
+                return subprocess.run(['tmux', 'show-environment', '-g', name], env=env,
+                                      capture_output=True, text=True, timeout=10).stdout.strip()
+            try:
+                subprocess.run(['bash', str(SCRIPT), 'open', 'quiet', 'shell', '--detached'],
+                               env=env, check=True, capture_output=True, text=True, timeout=10)
+                for name in ('PANEPORT_QUIET', 'AGENT_BRIDGE_QUIET', 'PANEPORT_CONFIG'):
+                    self.assertEqual(global_env(name), '', name)
+                self.assertEqual(global_env('HOME'), f'HOME={directory}')
+                time.sleep(.3)
+                self.assertFalse(announced.exists())
+            finally:
+                subprocess.run(['tmux', 'kill-server'], env=env, capture_output=True)
+
 class FakeTmuxTests(unittest.TestCase):
     # A fake tmux on PATH records every call and has no sessions, so these run
     # without tmux installed and can show that a command never reached it.
