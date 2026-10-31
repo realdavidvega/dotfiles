@@ -5,6 +5,7 @@ import argparse
 import fnmatch
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -21,6 +22,10 @@ SYNCTHING_FOLDER: Final = "blackvault"
 SYNCTHING_CANARY: Final = "AGENTS.md"
 SYNCTHING_CONTENT_DEVICES: Final[frozenset[str]] = frozenset({"black-pc"})
 SYNCTHING_COORDINATION_DEVICES: Final[frozenset[str]] = frozenset({"xebia-macbook"})
+# A peer that ignores a file it once synced keeps announcing the same version
+# with this flag set, and Syncthing 2 still lists it under "availability". So
+# the role check reads the flag from Syncthing's own index, opened read-only.
+SYNCTHING_FLAG_REMOTE_INVALID: Final = 1 << 6
 # The modifications used to arrive as a patch carried in this repo. They live in
 # the private bridge repository now, so what matters is that the checkout is that
 # repository rather than upstream.
@@ -107,6 +112,24 @@ def check_services() -> None:
         report("fail", "bridge source lacks the exclude handling, hidden files are unfiltered on upload")
 
 
+def invalid_peers(folder: str, name: str) -> set[str]:
+    """Device IDs whose record of this file is flagged invalid, an ignored file among them."""
+    index = SYNCTHING_HOME / "index-v2"
+    with sqlite3.connect(f"file:{index / 'main.db'}?mode=ro", uri=True) as main:
+        row = main.execute("SELECT database_name FROM folders WHERE folder_id = ?", (folder,)).fetchone()
+    if row is None:
+        raise LookupError(f"folder {folder} not in the index")
+    with sqlite3.connect(f"file:{index / row[0]}?mode=ro", uri=True) as db:
+        rows = db.execute(
+            "SELECT d.device_id FROM files f"
+            " JOIN file_names n ON n.idx = f.name_idx"
+            " JOIN devices d ON d.idx = f.device_idx"
+            " WHERE n.name = ? AND f.local_flags & ? != 0",
+            (name, SYNCTHING_FLAG_REMOTE_INVALID),
+        ).fetchall()
+    return {device for (device,) in rows}
+
+
 def check_syncthing_roles() -> None:
     result = run([
         "syncthing", "cli", "-H", str(SYNCTHING_HOME), "debug", "file",
@@ -122,9 +145,15 @@ def check_syncthing_roles() -> None:
         for device in devices
     }
     info = json.loads(result.stdout)
+    try:
+        invalid = invalid_peers(SYNCTHING_FOLDER, SYNCTHING_CANARY)
+    except (sqlite3.Error, LookupError) as error:
+        invalid = set()
+        report("warn", f"cannot read Syncthing's index flags ({error}), so an ignoring peer counts as advertising")
     available = {
         names_by_id.get(entry["id"], entry["id"])
         for entry in info.get("availability") or []
+        if entry["id"] not in invalid
     }
     missing = sorted(SYNCTHING_CONTENT_DEVICES - available)
     unexpected = sorted(SYNCTHING_COORDINATION_DEVICES & available)
