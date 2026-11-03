@@ -255,6 +255,9 @@ So everything the hub serves lives under `/srv`, which is plain:
 /srv/services/syncthing     device IDs and folder keys
 /srv/services/couchdb       compose, .env, database files
 /srv/services/livesync-bridge
+/srv/services/git           the GitHub mirror token, .env
+/srv/git                    bare repositories, see Leaving the Mac
+/srv/archive                files copied off the Mac, one folder per host
 ```
 
 The cost is that the hub's copy is unencrypted at rest. That is a smaller loss than it sounds:
@@ -528,6 +531,9 @@ The hub service files are managed from these versioned paths:
 /srv/services/bin/leased-service.sh -> scripts/leased-service.sh
 /srv/services/bin/bridge-lease.sh   -> scripts/bridge-lease.sh
 /srv/services/bin/bridge-status.sh  -> scripts/bridge-status.sh
+/srv/services/bin/hub_store.py      -> scripts/hub_store.py
+/etc/systemd/system/hub-git-mirror.{service,timer}
+                                    -> os/linux/srv/git/
 ```
 
 The bridge's own files, `Dockerfile.hub`, `compose.yaml` and `healthcheck.sh`, are no longer
@@ -648,8 +654,8 @@ Three rules hold in every phase:
 | Phase | Work | Gate |
 |---|---|---|
 | A. Inventory | `scripts/home_inventory.py`, run on the Mac. Walks the top level of `$HOME` (Desktop, Documents, Downloads, Pictures, Movies, Music, the workspace root, dotfiles not already managed here) and skips `Library` except iCloud Drive. Every git repository found gets its remotes, current branch, dirty file count, commits ahead of upstream per branch, stash count, and whether it has an upstream at all. Each entry is tagged `personal`, `work` or `unknown`, by remote against an untracked list of work org patterns in `~/.config/home-inventory/work-orgs`, otherwise `unknown`. The user classifies the rest in `~/.config/home-inventory/marks`, and `--expand` splits a folder such as Documents into subfolders. Writes a markdown inventory, `personal-files.txt` and `personal-repos.txt` to `~/.local/state/home-inventory/`, outside every repository, with work entries as aggregates and a total personal size | `--check` passes, meaning the user has marked every `unknown` entry personal, work or discard, and the personal total fits the hub with room left for phase 3 |
-| B. Repositories | Bare repositories on the hub at `/srv/git/<name>.git`, reached over SSH on the tailnet. Each personal repository gets a `hub` remote and pushes `--all` and `--tags`. A repository with no upstream gets the hub as its first. Uncommitted work and stashes are the user's to commit or drop first, since the inventory names them. A hub timer runs `git fetch --mirror` for every personal GitHub repository with a read-only token, kept in KeePass and in `/srv/services/git/.env` at 0600, so losing the GitHub account costs nothing either | Every personal repository in the inventory is zero commits ahead of `hub`, and a fresh clone from the hub builds |
-| C. Files | `rsync -a -r --files-from=personal-files.txt ~ <hub>:/srv/archive/<host>/<YYYY-MM-DD>/` over the tailnet, personal entries only. That tree is not a Syncthing folder, so nothing in it propagates. Triage then copies what belongs into `documents` or `media`, and the rest stays archived as it was. If Desktop and Documents sync to iCloud on that Mac, mark them Keep Downloaded first, or rsync copies placeholders | File count and total size per entry match the inventory, and once phase 0 has passed a snapshot contains `/srv/archive` |
+| B. Repositories | `leave_mac.py repos --hub <hub>` on the Mac. Each repository in `personal-repos.txt` gets a `hub` remote at `/srv/git/<name>.git`, which `hub_store.py init` creates over SSH, and pushes every branch and tag. The hub repositories refuse deletes and force-pushes, so a later push cannot destroy what an earlier one saved. Uncommitted work and stashes are reported and never pushed, because committing them is the user's call. `hub-git-mirror.timer` runs `hub_store.py mirror` daily at 03:30, fetching every personal GitHub repository into the same repositories, fast-forward only and never pruning, with a read-only token kept in KeePass and in `/srv/services/git/.env` at 0600. Losing the GitHub account then costs nothing either | Every personal repository in the inventory is zero commits ahead of `hub`, and a fresh clone from the hub builds |
+| C. Files | `leave_mac.py files --hub <hub>` on the Mac. It runs `rsync -a -r --files-from=personal-files.txt` into `/srv/archive/<host>/` over the tailnet, personal entries only, then compares file counts and sizes per path on both sides. It never deletes, so a rerun adds what changed and restic keeps the history. That tree is not a Syncthing folder, so nothing in it propagates. Triage then copies what belongs into `documents` or `media`, and the rest stays archived as it was. If Desktop and Documents sync to iCloud on that Mac, mark them Keep Downloaded first, or rsync copies placeholders | `leave_mac.py files` reports no mismatch, and once phase 0 has passed a snapshot contains `/srv/archive` |
 | D. Secrets | Anything the inventory found only on the Mac, an SSH key, a token, a `.env`, goes into KeePass by hand, or is revoked and reissued from another device. Keys are never copied to the hub | No secret in the inventory exists only on the Mac |
 | E. Stay off | Re-run the inventory monthly. A personal entry newer than its hub copy, or with no hub copy, is the finding | Two consecutive runs find nothing personal that lives only on the Mac |
 

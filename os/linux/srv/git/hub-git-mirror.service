@@ -1,0 +1,10 @@
+[Unit]
+Description=Mirror GitHub repositories into /srv/git
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=black
+EnvironmentFile=/srv/services/git/.env
+ExecStart=/usr/bin/python3 /srv/services/bin/hub_store.py mirror

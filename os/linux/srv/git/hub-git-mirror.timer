@@ -1,0 +1,10 @@
+[Unit]
+Description=Mirror GitHub repositories into /srv/git daily, before the 04:30 backup
+
+[Timer]
+OnCalendar=*-*-* 03:30
+# A missed window fires on next boot rather than being skipped.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

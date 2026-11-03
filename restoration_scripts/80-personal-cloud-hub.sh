@@ -63,9 +63,9 @@ sudo mkdir -p /srv/sync/blackvault \
               /srv/services/couchdb/local.d \
               /srv/services/couchdb/data \
               /srv/services/livesync-bridge
-sudo mkdir -p /srv/services/bin
-sudo chown -R "$HUB_USER:$HUB_USER" /srv/sync /srv/services
-sudo chmod 0750 /srv/sync /srv/services
+sudo mkdir -p /srv/services/bin /srv/services/git /srv/git /srv/archive
+sudo chown -R "$HUB_USER:$HUB_USER" /srv/sync /srv/services /srv/git /srv/archive
+sudo chmod 0750 /srv/sync /srv/services /srv/git /srv/archive
 
 # The lease wrappers. They live outside the encrypted home for the same reason
 # everything else here does: a timer firing on an unattended boot cannot read
@@ -75,6 +75,26 @@ for LEASE_SCRIPT in leased-service.sh bridge-lease.sh bridge-status.sh; do
   install -m 0755 "$DOTFILES_PATH/scripts/$LEASE_SCRIPT" \
     "/srv/services/bin/$LEASE_SCRIPT" || FAILED=1
 done
+
+# ---------------------------------------------------------------------------
+# 1a. Git store and file archive
+#
+# What leaves a managed Mac lands here: bare repositories under /srv/git, which
+# refuse deletes and force-pushes, and copied files under /srv/archive. The Mac
+# reaches hub_store.py over ssh. The GitHub mirror timer needs a token, so it
+# is enabled only once /srv/services/git/.env exists.
+# ---------------------------------------------------------------------------
+echo "==> git store"
+install -m 0755 "$DOTFILES_PATH/scripts/hub_store.py" /srv/services/bin/hub_store.py || FAILED=1
+for UNIT in hub-git-mirror.service hub-git-mirror.timer; do
+  sudo install -o root -g root -m 0644 "$SRV_ROOT/git/$UNIT" "/etc/systemd/system/$UNIT" || FAILED=1
+done
+sudo systemctl daemon-reload
+if [ -f /srv/services/git/.env ]; then
+  sudo systemctl enable --now hub-git-mirror.timer || FAILED=1
+else
+  echo "GitHub mirror off: copy $SRV_ROOT/git/git.env.sample to /srv/services/git/.env (0600)"
+fi
 
 # ---------------------------------------------------------------------------
 # 1b. inotify headroom
