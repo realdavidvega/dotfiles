@@ -486,6 +486,11 @@ the list below has to be set there explicitly, colon-separated.
 - `/srv/services/agents`, the Telegram bridge's `bridge.env` and its topic mapping.
   Both are reconstructible, the token from KeePass and the chat id from
   `agent-bridge.py discover`, so this is convenience rather than the only copy
+- `/srv/git`, the bare repositories, once phase B of [Leaving the Mac](#leaving-the-mac) creates
+  them. The GitHub mirrors among them are reconstructible, but a repository that never had a
+  GitHub remote is not
+- `/srv/archive`, the files copied off the Mac in phase C, which exist nowhere else once the Mac
+  is gone
 
 Excluded deliberately: `/srv/sync/blackvault/.git`, which is 450MB reconstructible from GitHub,
 `.stversions`, which is already a versioning layer, and the bridge's `voice` folder, which holds
@@ -613,6 +618,45 @@ Two rules hold in every phase:
 **Deferred:** any attempt to put the Obsidian vault on iOS Syncthing, which is impossible rather
 than merely unwise.
 
+### Leaving the Mac
+
+A second track, run alongside the phases above. The Mac is employer-managed, so its owner can
+lock or erase it remotely. FileVault covers the whole data volume and an MDM lock or erase acts
+on the whole machine, so no second user, partition or unencrypted volume on its internal disk
+survives either. The only protection is that nothing personal lives only on it. This track gets
+everything personal off the Mac and onto the hub, then keeps it that way.
+
+> [!warning] Work data never leaves the Mac
+> The employer's code, client repositories and anything produced for a client stay where they
+> are. They are excluded before anything is copied, read or listed off the machine. A machine
+> managed for a client is out of scope entirely, and its personal repositories leave as git
+> bundles, as they already do.
+
+Three rules hold in every phase:
+
+- **Classify on the Mac, before anything leaves it.** The scan runs locally and reads metadata
+  only: paths, sizes, counts, modification dates and git remotes. A work entry is reduced to a
+  count and a size before the inventory is written, so no work repository name or path reaches
+  the hub, and none reaches a model.
+- **An agent reads the inventory, never the files, until the user has classified them.** Finding
+  what is worth keeping means reading metadata. Contents are read only for entries already marked
+  personal. Secrets are listed by name and never opened: `.env`, `*.pem`, `id_*`, `*.kdbx`,
+  token and credential files.
+- **Copy, never move.** Same rule as iCloud. The Mac keeps its copy, and nothing is deleted from
+  it as part of this track.
+
+| Phase | Work | Gate |
+|---|---|---|
+| A. Inventory | `scripts/home-inventory.sh`, run on the Mac. Walks the top level of `$HOME` (Desktop, Documents, Downloads, Pictures, Movies, Music, the workspace root, dotfiles not already managed here) and skips `Library` except iCloud Drive. Every git repository found gets its remotes, current branch, dirty file count, commits ahead of upstream per branch, stash count, and whether it has an upstream at all. Each entry is tagged `personal`, `work` or `unknown`, by remote against an untracked list of work org patterns in `~/.config/home-inventory/work-orgs`, otherwise `unknown`. Writes a markdown inventory to `~/.local/state/home-inventory/`, outside every repository, with work entries as aggregates and a total personal size | The user has marked every `unknown` entry personal, work or discard, and the personal total fits the hub with room left for phase 3 |
+| B. Repositories | Bare repositories on the hub at `/srv/git/<name>.git`, reached over SSH on the tailnet. Each personal repository gets a `hub` remote and pushes `--all` and `--tags`. A repository with no upstream gets the hub as its first. Uncommitted work and stashes are the user's to commit or drop first, since the inventory names them. A hub timer runs `git fetch --mirror` for every personal GitHub repository with a read-only token, kept in KeePass and in `/srv/services/git/.env` at 0600, so losing the GitHub account costs nothing either | Every personal repository in the inventory is zero commits ahead of `hub`, and a fresh clone from the hub builds |
+| C. Files | `rsync -a` over the tailnet into `/srv/archive/<host>/<YYYY-MM-DD>/`, personal entries only, from the phase A list. That tree is not a Syncthing folder, so nothing in it propagates. Triage then copies what belongs into `documents` or `media`, and the rest stays archived as it was. If Desktop and Documents sync to iCloud on that Mac, mark them Keep Downloaded first, or rsync copies placeholders | File count and total size per entry match the inventory, and once phase 0 has passed a snapshot contains `/srv/archive` |
+| D. Secrets | Anything the inventory found only on the Mac, an SSH key, a token, a `.env`, goes into KeePass by hand, or is revoked and reissued from another device. Keys are never copied to the hub | No secret in the inventory exists only on the Mac |
+| E. Stay off | Re-run the inventory monthly. A personal entry newer than its hub copy, or with no hub copy, is the finding | Two consecutive runs find nothing personal that lives only on the Mac |
+
+Phases A to C do not wait for phase 0. A copy adds a second copy and touches nothing on the
+source, so a hub copy without a backup is still strictly better than none, and a lockout will not
+wait for the backup to be enabled. The snapshot joins each gate once phase 0 passes.
+
 ***
 
 ## Open questions
@@ -627,3 +671,6 @@ than merely unwise.
   built from source. The fallback is the LiveSync plugin on a desktop, which needs no new
   infrastructure but reintroduces a dependency on Obsidian being open
 - Whether `media` stays desktop-only or the phone joins
+- Whether the hub's repositories stay bare over SSH or move behind a forge such as Forgejo. Bare
+  repositories need no new service and are enough for a mirror. A forge only earns its place if
+  the hub replaces GitHub as the primary remote, with issues, a web view or access for others
