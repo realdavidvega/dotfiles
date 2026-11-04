@@ -1,0 +1,49 @@
+{
+  "doc": "design/0005-ags-restore.md",
+  "doc_sha256": "f1e289d6ab3059ef941a86df44dbc89dd5fa8b815c8a73cc5d10318aae1542a1",
+  "hash_method": "SHA-256 of the UTF-8 body after the frontmatter's closing --- line, stripped. design/check_gates.py was absent in this repository.",
+  "status": "stopped after round 3, all three gates failed, doc to be split",
+  "runs": [
+    {
+      "gate": "comprehension",
+      "verdict": "fail",
+      "round": 3,
+      "gaps": [
+        "a closed record with a new agent starts as --fresh, and --fresh skips the record's directory, so /close X then /open X codex moves X",
+        "newest transcript by ls -t also sees <uuid>/ and memory/ directories, and may pick a claude -p transcript",
+        "adopt with a name outside [A-Za-z0-9_-] or a case clash, and how grouped clients are recognised",
+        "pane is never refreshed while a session runs",
+        "rollout for a conversation that started in a repository subdirectory",
+        "external launcher callers beyond paneport and the bridge are not listed",
+        "earlier rounds: comprehension failed rounds 1 and 2 on the conversation rules and the bridge close path, fixed in the rewrites"
+      ]
+    },
+    {
+      "gate": "critic",
+      "verdict": "fail",
+      "round": 3,
+      "findings": [
+        "M1 re-entry from the first precmd runs while p10k instant prompt still redirects stdin and stdout (cleanup is sched +0 at p10k.zsh:6526), so tmux attach fails",
+        "M2 newest-transcript lookup must glob *.jsonl, check the UUID and skip one-shot runs",
+        "M3 an opened, unused session already has a transcript (3 of 1767 local transcripts carry no user line), so rule 4 is not what restore meets",
+        "M4 --fresh behaves differently on open and closed records",
+        "M5 NAME-m grouped clients are excluded only from no-argument adopt, so open or close NAME-m can record a duplicate of NAME",
+        "M6 closing a Mac tab now only detaches, so idle Claude processes accumulate, and this is not admitted",
+        "M7 paneport calls open (PANEPORT_QUIET), so rule 4 may move its sessions",
+        "minors: dir written first as the existence marker, old bridge during rollout, unbounded restore on the hub, in-app /resume repin unverified, phone cannot list stopped records, cc-status under tmux unverified, rename-session orphans records, version skew between ~/.dotfiles and /srv copies",
+        "earlier rounds: periodic snapshot rejected with measurement, launcher-chosen id, bridge close through the launcher, locked-home refusals, env scrub, restore race on unpinned records, all fixed"
+      ]
+    },
+    {
+      "gate": "readiness",
+      "verdict": "fail",
+      "round": 3,
+      "findings": [
+        "B1 the SetUserVar fallback for a failed C1 is only sketched",
+        "B2 which attach paths adopt a running session, and what happens to an existing session whose name fails the new character set",
+        "B3 grouped clients detected by -m suffix or by session_group",
+        "non-blocking: test_agent_session.py :72-76 and :227 also break, tmux.conf:38-42 comment, agent-bridge.py :208-210 and :1937, env clearing order, /close NAME forget parsing, ls ordering, unlock exit status"
+      ]
+    }
+  ]
+}
