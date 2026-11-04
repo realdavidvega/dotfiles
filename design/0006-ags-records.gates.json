@@ -1,19 +1,20 @@
 {
   "doc": "design/0006-ags-records.md",
-  "doc_sha256": "f3f523047e3269562ae826d23b95a5b2d966ecb2608a181a97f21bab683c2e35",
+  "doc_sha256": "6c6f85ad2811634af5821fc2c60c2fdd2e940deba89a741741c26580ca1bed37",
   "hash_method": "design/check_gates.py is absent in this repo. Hash is SHA-256 of the UTF-8 body after the frontmatter's closing --- line, stripped, as check_gates.py computes it.",
-  "status": "stopped after round 3. Readiness passed, comprehension and critic failed. Not approved. Waiting on the author to choose between a narrow fourth round, a rescope, or shelving.",
+  "status": "stopped after round 3 of the rewrite. Round 3 reviewed 6794cc8ee49fccafe04de383a97016f6ee3d853dda6e8ff7d8acb510d668dd53: comprehension and readiness passed, the critic failed on three majors, fixed afterwards in the doc at doc_sha256, which no gate has read. Not approved. Waiting on the author.",
   "runs": [
     {
       "gate": "comprehension",
-      "verdict": "fail",
+      "verdict": "pass",
       "rounds": 3,
       "gaps": [
-        "round 3: pinning an id equal to the current pin is not stated as a no-op, so the startup SessionStart hook would overwrite conversation.prev and log a false replaced line on every launch, contradicting D3",
-        "round 3 minor: who creates the XDG state directory, locked-home test on Linux hosts with ecryptfs-utils but no encrypted home, close running the process lookup, restore on a locked home, --detached when new-session races, HOME versus temp repo in tests, off-by-one line refs"
+        "round 3 trivial: notfound AGE source, close on a running session with a closed record, the vault guide has no data section, guide :427 names no file, yes button and seen, home page allowlist and closed rows, history on an unwritable state directory, Claude internals deferred to H2"
       ],
       "findings": [
-        "round 1 and 2: five gaps fixed in the round-2 and round-3 rewrites"
+        "rewrite round 2 FAIL on one real gap: a restore-driven open touched seen, so a hub rebooted more often than every 14 days never expired an unused session. Fixed, restore's starts leave seen alone. Trivial items fixed too: expired panel label, running page reads the foreground from tmux",
+        "rewrite round 1 FAIL, 8 gaps (glossary terms for idleness and recordable names, what expiry is measured against, a replaced agent's pin, close on a closed record, the restore lock, history while locked, test environment for the new verbs): fixed in the round-2 revision",
+        "before the rewrite: round 3: pinning an id equal to the current pin is not stated as a no-op, so the startup SessionStart hook would overwrite conversation.prev and log a false replaced line on every launch, contradicting D3 | round 3 minor: who creates the XDG state directory, locked-home test on Linux hosts with ecryptfs-utils but no encrypted home, close running the process lookup, restore on a locked home, --detached when new-session races, HOME versus temp repo in tests, off-by-one line refs | round 1 and 2: five gaps fixed in the round-2 and round-3 rewrites"
       ]
     },
     {
@@ -21,17 +22,14 @@
       "verdict": "fail",
       "rounds": 3,
       "findings": [
-        "round 3 B1: FakeTmuxTests (test_agent_session.py:171) set no TMUX_TMPDIR or AGENT_SESSION_STATE, so on the hub they write live records under /srv/services/agents/state that make every later restore and unlock fail. Verified",
-        "round 3 B2: paneport design 0005-crews opens crew-<repo>-<run>-* sessions through the launcher and kills them with tmux directly, so a pp-* prefix exclusion records them and restore revives finished crews. Verified",
-        "round 3 B3: the hub's new hooks.SessionStart list blocks paneport 0001's planned seeded SessionStart hook (0001-architecture.md:500), because the seeder never extends a list. Verified",
-        "round 3 M1: --resolve keeps repository-then-root while open defaults to the current directory, so paneport's preview can differ from the real start",
-        "round 3 M2: a tmux server first started by the bridge inherits its sandbox and AGENT_BRIDGE_* environment, including the bot token",
-        "round 3 M3: record dir is pwd -P while Claude may encode a logical path, so rule 2 and the hook would never match across a symlink",
-        "round 3 M4: the panel always sends an agent, so a stopped Codex record is refused from the phone's main path",
-        "round 3 M5 to M8: rollout step 3 from inside the session, undocumented Claude internals with no re-check trigger, conversation changes without SessionStart, agsrv --repo only where tmux exists",
-        "round 3 low: notfound age from pin mtime, conversation.prev not counted as pinned, announce HUP on self-close, restore wording, vault guide recovery steps, dispatch order with 0005-crews AX1",
-        "round 2 M1 (test helper dropped TMUX_TMPDIR), M2 (Mac regression, dismissed), M3 (inherited CLAUDE_CODE_ENTRYPOINT): fixed in round 3",
-        "round 1: findings fixed in round 2"
+        "rewrite round 3 FAIL. M1: the expiry test depended on uptime. Fixed after the run, restore cases set AGENT_SESSION_BOOT_EPOCH and acceptance runs after a reboot. M2: rule 3 could resume a conversation live in another process. Fixed after the run, a transcript held by a live ~/.claude/sessions/<pid>.json is skipped, with a test and an H2 check. M3: a nested claude -p may record cli. Fixed after the run, H2 checks it and a cli result turns off rule 3 for unpinned records. Left open: --resume on a live id forking, checkout and staged launcher drift, old bridge rejecting --no-buttons in the rollout window, unbounded closed rows on the panel, /clear with no message pinning an id with no transcript, the admitted rule 3 race, new and resume using --repo while open does not, the client attach harness, restore inheriting a sandboxed server, a record dead after boot waiting for the next reboot, nits 14 to 18",
+        "rewrite round 2 FAIL. M1: activity between the boot and restore made the reference now. Fixed, the host's last activity counts only activity older than the boot. M2: a bare claude --resume might move the transcript. H2 checks it, with the last user or assistant timestamp as the fallback. Minors fixed: stale restore.lock after a power cut (pid check), GIT_EDITOR=true and two more Bash-tool variables scrubbed, close announces under nohup with --no-buttons, bridge launcher timeouts and act() placement, record_create logs the new pin. Left open: missing-directory records fail every restore until they expire, closed records kept forever, switch-client fires no attach hook, nits n1 to n10",
+        "rewrite round 1 M1: the close-time lookup replaced an existing pin. Fixed, the lookup only fills an empty pin",
+        "rewrite round 1 M2: the scrub removed AGENT_BRIDGE_BIN and AGENT_BRIDGE_ENV, which announce needs. Fixed, both are kept",
+        "rewrite round 1 M3: AGENT_SESSION_VIA leaked into the server environment. Fixed, it is scrubbed",
+        "rewrite round 1 M4: expiry measured to now would expire every record after two weeks with the hub off or locked. Fixed, measured to the host's last activity",
+        "rewrite round 1 M5: adopted sessions had no seen hooks and looked idle. Fixed, adopt sets them",
+        "before the rewrite: round 3 B1: FakeTmuxTests (test_agent_session.py:171) set no TMUX_TMPDIR or AGENT_SESSION_STATE, so on the hub they write live records under /srv/services/agents/state that make every later restore and unlock fail. Verified | round 3 B2: paneport design 0005-crews opens crew-<repo>-<run>-* sessions through the launcher and kills them with tmux directly, so a pp-* prefix exclusion records them and restore revives finished crews. Verified | round 3 B3: the hub's new hooks.SessionStart list blocks paneport 0001's planned seeded SessionStart hook (0001-architecture.md:500), because the seeder never extends a list. Verified | round 3 M1: --resolve keeps repository-then-root while open defaults to the current directory, so paneport's preview can differ from the real start | round 3 M2: a tmux server first started by the bridge inherits its sandbox and AGENT_BRIDGE_* environment, including the bot token | round 3 M3: record dir is pwd -P while Claude may encode a logical path, so rule 2 and the hook would never match across a symlink | round 3 M4: the panel always sends an agent, so a stopped Codex record is refused from the phone's main path | round 3 M5 to M8: rollout step 3 from inside the session, undocumented Claude internals with no re-check trigger, conversation changes without SessionStart, agsrv --repo only where tmux exists | round 3 low: notfound age from pin mtime, conversation.prev not counted as pinned, announce HUP on self-close, restore wording, vault guide recovery steps, dispatch order with 0005-crews AX1 | round 2 M1 (test helper dropped TMUX_TMPDIR), M2 (Mac regression, dismissed), M3 (inherited CLAUDE_CODE_ENTRYPOINT): fixed in round 3 | round 1: findings fixed in round 2"
       ]
     },
     {
@@ -39,9 +37,10 @@
       "verdict": "pass",
       "rounds": 3,
       "findings": [
-        "round 3 non-blocking: the rejected-pin line printed before Started would become the Telegram reply, since launch posts the first stdout line (agent-bridge.py:1755)",
-        "round 3 non-blocking: FakeTmux cases need AGENT_SESSION_STATE, existing tests affected by moving HOME, wrong-parent pin recipe collapses under exec, close_session return contract, portable mtime and git top-level methods, doc sections in remote-agent-sessions.md beyond step 11",
-        "round 2 B1 (--resolve contract) and B2 (rule order and conversation.prev): fixed in round 3"
+        "rewrite round 3 PASS. Fixed after it because it contradicted D6: record_create logs the first pin with its rule's source. Left open: open --detached on a running session and seen, restore's per-record lines, --conversation on a new or unrecordable name, control characters in a rule 4 or adopted dir, ls --json ordering and a running session with a closed record, the stopped page's Manage and Back, macOS expiry without BOOT_EPOCH, tmux absent on the Mac so real-tmux tests run only on the hub",
+        "rewrite round 2 PASS. Fixed after it because they were wrong: D7 Resume wording against D3, the stale changed-unit rollout sentence, two stale guide paragraphs, .wiki/index.md and log.md, close_session with no launcher. Left open: sessions() fallback row shape, history dedupe and layout, notfound age source, the old third positional of open, accept_new_session for a closed record without a topic",
+        "rewrite round 1 PASS",
+        "before the rewrite: round 3 non-blocking: the rejected-pin line printed before Started would become the Telegram reply, since launch posts the first stdout line (agent-bridge.py:1755) | round 3 non-blocking: FakeTmux cases need AGENT_SESSION_STATE, existing tests affected by moving HOME, wrong-parent pin recipe collapses under exec, close_session return contract, portable mtime and git top-level methods, doc sections in remote-agent-sessions.md beyond step 11 | round 2 B1 (--resolve contract) and B2 (rule order and conversation.prev): fixed in round 3"
       ]
     }
   ]
