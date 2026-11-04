@@ -1,8 +1,8 @@
 {
   "doc": "design/0006-ags-records.md",
-  "doc_sha256": "389883122adf9408643378d6db1bbabb674ccb19087aaf981b1a364882f9bdf7",
+  "doc_sha256": "25a46deb44bd5d77b29d4b7e8bc83b779d3944febe36c3e4dda206ab471aa066",
   "hash_method": "design/check_gates.py is absent in this repo. Hash is SHA-256 of the UTF-8 body after the frontmatter's closing --- line, stripped, as check_gates.py computes it.",
-  "status": "stopped after a narrow round 5 critic, which failed on one finding conditional on H2. Not approved. Waiting on the author to choose between folding it or rescoping.",
+  "status": "rescoped after the round 5 critic: H2 run on the Mac (2.1.281) with design/checks/0006-h2.sh, every Claude item passing, so the conditional fallback is removed and transcript activity reads line timestamps. The hub run is still due before rollout. A narrow readiness pass on the rescoped text is next. Not approved.",
   "runs": [
     {
       "gate": "comprehension",
@@ -46,5 +46,8 @@
         "before the rewrite: round 3 non-blocking: the rejected-pin line printed before Started would become the Telegram reply, since launch posts the first stdout line (agent-bridge.py:1755) | round 3 non-blocking: FakeTmux cases need AGENT_SESSION_STATE, existing tests affected by moving HOME, wrong-parent pin recipe collapses under exec, close_session return contract, portable mtime and git top-level methods, doc sections in remote-agent-sessions.md beyond step 11 | round 2 B1 (--resolve contract) and B2 (rule order and conversation.prev): fixed in round 3"
       ]
     }
+  ],
+  "evidence": [
+    "2026-11-04, Mac, Claude 2.1.281, design/checks/0006-h2.sh: flags listed, interactive hook carries TMUX_PANE, a CLAUDE_PID whose parent is the pane shell and entrypoint cli, the sessions file holds pid and sessionId, a nested claude -p records sdk-cli in transcript and hook with a parent other than the pane shell, /clear moves the sessions file's sessionId to the hook's new id, claude --resume keeps the id but writes to the transcript before any message (an attachment line), claude -p outside tmux gives sdk-cli. Symlink item not run"
   ]
 }
