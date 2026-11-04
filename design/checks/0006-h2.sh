@@ -4,9 +4,9 @@
 # Nothing outside the scratch directory, its Claude project directory and the
 # private tmux socket is written. ~/.claude/settings.json is never touched.
 #
-#   bash design/checks/0006-h2.sh [SYMLINKED_DIR]
+#   bash design/checks/0006-h2.sh [SYMLINKED_VAULT]
 #
-# SYMLINKED_DIR is optional: a symlinked path to the vault, for the encoding item.
+# SYMLINKED_VAULT is optional: a symlinked path to the vault, for the encoding item.
 set -u
 
 SOCK=ags-h2-$$
@@ -137,7 +137,7 @@ if wait_for "$WAIT" transcripts_above "$before"; then
   if [ "$en" = sdk-cli ] && [ "$nep" = ok ] && [ "$npar" = other ]; then
     result PASS "nested claude -p: transcript and hook say sdk-cli, parent is not the pane shell (rule 3 as written)"
   else
-    result FAIL "nested claude -p: transcript=$en hook=$envn parent=$npar (D3 fallback applies)"
+    result FAIL "nested claude -p: transcript=$en hook=$envn parent=$npar, a different result stops rollout until D3 is revised"
   fi
 else
   result FAIL "nested claude -p: no new transcript within ${WAIT}s (check the pane for a permission prompt)"
@@ -158,7 +158,7 @@ if wait_for "$WAIT" hooks_above "$n_before"; then
   if [ "$sid" = "$ID2" ] && [ "$ID2" != "$ID1" ]; then
     result PASS "/clear: hook source $src, new id $ID2, sessions file follows (rule 3 as written)"
   else
-    result FAIL "/clear: hook source $src id $ID2, sessions file says $sid, startup id $ID1 (D3 fallback applies)"
+    result FAIL "/clear: hook source $src id $ID2, sessions file says $sid, startup id $ID1, a different result stops rollout until D3 is revised"
   fi
 else
   result FAIL "/clear: no SessionStart hook within ${WAIT}s"
@@ -195,7 +195,8 @@ sleep 3
 n_before=$(hook_lines)
 (cd "$SCRATCH" && "${CLEAN[@]}" claude -p --settings "$SETTINGS" 'say ok' >/dev/null 2>&1)
 envp=$(nth_env $((n_before + 1)))
-case "$envp" in *"entrypoint=sdk-cli") result PASS "claude -p hook: entrypoint sdk-cli, pane empty | $envp" ;;
+case "$envp" in *"pane= "*"entrypoint=sdk-cli") result PASS "claude -p hook: entrypoint sdk-cli, pane empty | $envp" ;;
+  *"entrypoint=sdk-cli") result PASS "claude -p hook: entrypoint sdk-cli, pane set | $envp" ;;
   *) result FAIL "claude -p hook: $envp" ;; esac
 
 # 8. A symlinked path files under the physical path's encoding.
