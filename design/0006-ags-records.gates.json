@@ -1,8 +1,8 @@
 {
   "doc": "design/0006-ags-records.md",
-  "doc_sha256": "6c6f85ad2811634af5821fc2c60c2fdd2e940deba89a741741c26580ca1bed37",
+  "doc_sha256": "389883122adf9408643378d6db1bbabb674ccb19087aaf981b1a364882f9bdf7",
   "hash_method": "design/check_gates.py is absent in this repo. Hash is SHA-256 of the UTF-8 body after the frontmatter's closing --- line, stripped, as check_gates.py computes it.",
-  "status": "stopped after round 3 of the rewrite. Round 3 reviewed 6794cc8ee49fccafe04de383a97016f6ee3d853dda6e8ff7d8acb510d668dd53: comprehension and readiness passed, the critic failed on three majors, fixed afterwards in the doc at doc_sha256, which no gate has read. Not approved. Waiting on the author.",
+  "status": "stopped after a narrow round 4 on the post-round-3 fixes, which reviewed 6c6f85ad2811634af5821fc2c60c2fdd2e940deba89a741741c26580ca1bed37. Readiness passed, the critic failed on three findings, all answered afterwards in the doc at doc_sha256, which no gate has read. Not approved. Waiting on the author.",
   "runs": [
     {
       "gate": "comprehension",
@@ -20,8 +20,9 @@
     {
       "gate": "critic",
       "verdict": "fail",
-      "rounds": 3,
+      "rounds": 4,
       "findings": [
+        "narrow round 4 FAIL. F1: H2's /clear check said it decided nothing while rule 3 now reads the same sessionId. Fixed after the run, a mismatch applies D3's fallback. F2: a boot epoch of now made the expiry and held-lock cases depend on timing. Fixed after the run, every restore case fixes an epoch E with fixture times relative to it, and the held-lock case puts the boot an hour before the lock. F3: a nested claude -p might record cli, making the fallback the real branch. Refuted on 2.1.281 on the Mac (a claude -p run from this session's Bash tool, environment cli, recorded sdk-cli in its transcript and its own environment), and the fallback now names its knock-ons and the pp-* case. Also folded: sessions files older than the boot are ignored, the path uses CLAUDE_CONFIG_DIR, record_create gains the adopt source, the acceptance item sets times before the reboot with the agent stopped, the dead pid is a reaped child",
         "rewrite round 3 FAIL. M1: the expiry test depended on uptime. Fixed after the run, restore cases set AGENT_SESSION_BOOT_EPOCH and acceptance runs after a reboot. M2: rule 3 could resume a conversation live in another process. Fixed after the run, a transcript held by a live ~/.claude/sessions/<pid>.json is skipped, with a test and an H2 check. M3: a nested claude -p may record cli. Fixed after the run, H2 checks it and a cli result turns off rule 3 for unpinned records. Left open: --resume on a live id forking, checkout and staged launcher drift, old bridge rejecting --no-buttons in the rollout window, unbounded closed rows on the panel, /clear with no message pinning an id with no transcript, the admitted rule 3 race, new and resume using --repo while open does not, the client attach harness, restore inheriting a sandboxed server, a record dead after boot waiting for the next reboot, nits 14 to 18",
         "rewrite round 2 FAIL. M1: activity between the boot and restore made the reference now. Fixed, the host's last activity counts only activity older than the boot. M2: a bare claude --resume might move the transcript. H2 checks it, with the last user or assistant timestamp as the fallback. Minors fixed: stale restore.lock after a power cut (pid check), GIT_EDITOR=true and two more Bash-tool variables scrubbed, close announces under nohup with --no-buttons, bridge launcher timeouts and act() placement, record_create logs the new pin. Left open: missing-directory records fail every restore until they expire, closed records kept forever, switch-client fires no attach hook, nits n1 to n10",
         "rewrite round 1 M1: the close-time lookup replaced an existing pin. Fixed, the lookup only fills an empty pin",
@@ -35,8 +36,9 @@
     {
       "gate": "readiness",
       "verdict": "pass",
-      "rounds": 3,
+      "rounds": 4,
       "findings": [
+        "narrow round 4 PASS. Folded after it because they were wrong: the boot epoch timing (as the critic's F2), the acceptance item's when, the adopt source. Left open: which pid field is read (the JSON pid, now stated), what the skip case asserts after skipping, set_pin's DIR argument rationale",
         "rewrite round 3 PASS. Fixed after it because it contradicted D6: record_create logs the first pin with its rule's source. Left open: open --detached on a running session and seen, restore's per-record lines, --conversation on a new or unrecordable name, control characters in a rule 4 or adopted dir, ls --json ordering and a running session with a closed record, the stopped page's Manage and Back, macOS expiry without BOOT_EPOCH, tmux absent on the Mac so real-tmux tests run only on the hub",
         "rewrite round 2 PASS. Fixed after it because they were wrong: D7 Resume wording against D3, the stale changed-unit rollout sentence, two stale guide paragraphs, .wiki/index.md and log.md, close_session with no launcher. Left open: sessions() fallback row shape, history dedupe and layout, notfound age source, the old third positional of open, accept_new_session for a closed record without a topic",
         "rewrite round 1 PASS",
