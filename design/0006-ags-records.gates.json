@@ -1,6 +1,6 @@
 {
   "doc": "design/0006-ags-records.md",
-  "doc_sha256": "83769e325de4080a3878adbddd4ce2867a7934a39d174aae6a037cf88fc803be",
+  "doc_sha256": "aba959480af9f423e8356f4665e590c63d9a8b7280cfafd78db82d4f0ec714e1",
   "hash_method": "design/check_gates.py is absent in this repo. Hash is SHA-256 of the UTF-8 body after the frontmatter's closing --- line, stripped, as check_gates.py computes it.",
   "status": "rescoped after the round 5 critic and passed a narrow readiness round on the rescope (Mac H2 on 2.1.281 with design/checks/0006-h2.sh, conditional fallback removed). The hub H2 run is due before rollout, and a different result there stops rollout until D3 is revised. Ready for the approval walkthrough. Not approved",
   "runs": [
@@ -39,7 +39,7 @@
       "verdict": "pass",
       "rounds": 5,
       "findings": [
-        "narrow round 5 on the rescope PASS. Folded after it because they were wrong: GNU-only date -d (now date -u -d with BSD date -j -u -f as fallback), the stale lines calling /clear unchecked in D5's close bullet, the process lookup and its Alternatives row, the transcript-expiry test lacking a fresh second record, the refused record's seen, the H2 symlink wording, the check script's fallback strings and argument name. Also stated: the top-level timestamp and type keys, a line with no timestamp adds nothing, and lock age is the restore.lock directory's modification time",
+        "narrow round 5 on the rescope PASS. Folded after it because they were wrong: GNU-only date -d (now date -u -d with BSD date -j -u -f as fallback), the stale lines calling /clear unchecked in D5's close bullet, the process lookup and its Alternatives row, the transcript-expiry test lacking a fresh second record, the refused record's seen, the H2 symlink wording, the check script's fallback strings and argument name. Also stated: the top-level timestamp and type keys, a line with no timestamp adds nothing, and lock age is the restore.lock directory's modification time. After it, the hub's Claude version was corrected to 2.1.310 (a factual fix, no decision moved)",
         "narrow round 4 PASS. Folded after it because they were wrong: the boot epoch timing (as the critic's F2), the acceptance item's when, the adopt source. Left open: which pid field is read (the JSON pid, now stated), what the skip case asserts after skipping, set_pin's DIR argument rationale",
         "rewrite round 3 PASS. Fixed after it because it contradicted D6: record_create logs the first pin with its rule's source. Left open: open --detached on a running session and seen, restore's per-record lines, --conversation on a new or unrecordable name, control characters in a rule 4 or adopted dir, ls --json ordering and a running session with a closed record, the stopped page's Manage and Back, macOS expiry without BOOT_EPOCH, tmux absent on the Mac so real-tmux tests run only on the hub",
         "rewrite round 2 PASS. Fixed after it because they were wrong: D7 Resume wording against D3, the stale changed-unit rollout sentence, two stale guide paragraphs, .wiki/index.md and log.md, close_session with no launcher. Left open: sessions() fallback row shape, history dedupe and layout, notfound age source, the old third positional of open, accept_new_session for a closed record without a topic",

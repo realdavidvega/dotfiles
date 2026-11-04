@@ -10,7 +10,7 @@ code_paths: [scripts/agent-session.sh, scripts/test_agent_session.py, restoratio
 
 # ags records, restore after a reboot, expiry and history, and starts that never take another session's conversation
 
-Line references point at commit `39439ee`, and the scripts have not changed since. paneport paths are relative to its repository, `~/Workspace/repos/github/tools/paneport`. This doc split out of [0005](0005-ags-restore.md), which stopped after three gate rounds. It also defines the contract paneport adopts in a design of its own (D8). The Mac port and iTerm tabs that re-enter their session will follow as separate docs. Claude Code facts were checked on the Mac's 2.1.281 on 2026-11-04. The hub runs an older version (2.1.268 per the vault guide), so H2 re-checks each one there before anything is rolled out.
+Line references point at commit `39439ee`, and the scripts have not changed since. paneport paths are relative to its repository, `~/Workspace/repos/github/tools/paneport`. This doc split out of [0005](0005-ags-restore.md), which stopped after three gate rounds. It also defines the contract paneport adopts in a design of its own (D8). The Mac port and iTerm tabs that re-enter their session will follow as separate docs. Claude Code facts were checked on the Mac's 2.1.281 on 2026-11-04. The hub runs a different version (2.1.310 when the agent gateway hooks were checked on 2026-10-26), so H2 re-checks each one there before anything is rolled out.
 
 ## Summary
 
