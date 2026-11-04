@@ -2,7 +2,7 @@
   "doc": "design/0005-ags-restore.md",
   "doc_sha256": "f1e289d6ab3059ef941a86df44dbc89dd5fa8b815c8a73cc5d10318aae1542a1",
   "hash_method": "SHA-256 of the UTF-8 body after the frontmatter's closing --- line, stripped. design/check_gates.py was absent in this repository.",
-  "status": "stopped after round 3, all three gates failed, doc to be split",
+  "status": "stopped after round 3, all three gates failed. Superseded by design/0006-ags-records.md, with 0007 (Mac port) and 0008 (iTerm re-entry) planned. doc_sha256 is the body the gates read, before the superseded pointer was added.",
   "runs": [
     {
       "gate": "comprehension",

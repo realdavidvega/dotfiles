@@ -1,6 +1,7 @@
 ---
 title: ags save and restore, the Mac port, and iTerm tabs that re-enter their session
-status: draft
+status: superseded
+superseded_by: [design/0006-ags-records.md]
 tier: significant
 author: David Vega Lichacz
 created: 2026-11-04
@@ -9,6 +10,8 @@ code_paths: [scripts/agent-session.sh, scripts/test_agent_session.py, shell/zsh/
 ---
 
 # ags save and restore, the Mac port, and iTerm tabs that re-enter their session
+
+> **Superseded.** This draft stopped after three gate rounds and was split. [0006](0006-ags-records.md) covers records and predictable starts on the hub. A planned 0007 covers the Mac port, and a planned 0008 covers iTerm re-entry once checks C1 and C3 below have run. Kept as a record of the review.
 
 Line references point at commit `39439ee`. Numbers 0003 and 0004 are held by the issue drafts in `design/issues/voice-agents-next/`, so this is 0005. Claude Code facts were checked on the Mac's 2.1.281 on 2026-11-04, iTerm facts on 3.7.6 and the iTerm2 source on `master` the same day.
 
