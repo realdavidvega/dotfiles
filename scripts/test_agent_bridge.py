@@ -16,6 +16,9 @@ class BridgeTests(unittest.TestCase):
         offline = patch.object(b, "find_user_command", return_value=None)
         offline.start()
         self.addCleanup(offline.stop)
+        no_launcher = patch.object(b, "find_launcher", return_value=None)
+        no_launcher.start()
+        self.addCleanup(no_launcher.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'state.json'
@@ -348,9 +351,15 @@ class BridgeTests(unittest.TestCase):
         from unittest.mock import patch
         with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), patch.object(b.subprocess, 'run', return_value=Mock(returncode=0, stdout='', stderr='')) as run:
             self.bridge.launch('vault', 'codex')
-            self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'open', 'vault', 'codex', '--detached'])
+            self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'open', 'vault', 'codex', '--repo', '--detached'])
+            self.bridge.launch('vault', None)
+            self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'open', 'vault', '--repo', '--detached'])
+            self.bridge.launch('vault', None, mode='fresh')
+            self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'new', 'vault'])
             self.bridge.launch('vault', 'codex', mode='fresh')
             self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'new', 'vault', 'codex'])
+            self.bridge.launch('vault', None, mode='resume')
+            self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'resume', 'vault'])
             self.bridge.launch('vault', 'codex', mode='resume')
             self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'resume', 'vault', 'codex'])
 
@@ -367,11 +376,150 @@ class BridgeTests(unittest.TestCase):
         self.tmux.exists.return_value = False
         self.bridge.launch = Mock(return_value='started')
         self.bridge.handle_command('open', 'skp', None, None)
-        self.bridge.launch.assert_called_with('skp', 'claude', mode='open')
+        self.bridge.launch.assert_called_with('skp', None, mode='open')
+        self.bridge.handle_command('open', 'skp codex', None, None)
+        self.bridge.launch.assert_called_with('skp', 'codex', mode='open')
         self.bridge.handle_command('open', 'skp codex fresh', None, None)
         self.bridge.launch.assert_called_with('skp', 'codex', mode='fresh')
         self.bridge.handle_command('open', 'skp --fresh', None, None)
-        self.bridge.launch.assert_called_with('skp', 'claude', mode='fresh')
+        self.bridge.launch.assert_called_with('skp', None, mode='fresh')
+
+    def test_new_running_session_without_agent_names_none(self):
+        self.bridge.config.session_patterns = ['*']
+        self.tmux.running.return_value = 'claude'
+        self.bridge.launch = Mock()
+        self.bridge.handle_command('new', 'skp', None, None)
+        self.bridge.launch.assert_not_called()
+        text = self.tg.send.call_args.args[1]
+        self.assertIn('skp is already running claude', text)
+        self.assertIn('/close skp, then /new skp.', text)
+        self.tmux.exists.return_value = False
+        self.bridge.handle_command('new', 'skp', None, None)
+        self.bridge.launch.assert_called_once_with('skp', None, mode='fresh')
+
+    def test_launcher_refusal_is_posted_as_could_not_start(self):
+        self.bridge.config.session_patterns = ['*']
+        self.tmux.exists.return_value = False
+        refused = Mock(returncode=1, stdout='', stderr='skp is open with codex. Close it first, or use another name.\n')
+        with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), \
+                patch.object(b.subprocess, 'run', return_value=refused):
+            self.bridge.handle_command('open', 'skp claude', None, None)
+        self.assertEqual(self.tg.send.call_args.args[1],
+                         'could not start skp: skp is open with codex. Close it first, or use another name.')
+
+    def launcher(self, returncode=0, stdout='', stderr=''):
+        """The launcher found, and every subprocess.run answered the same way."""
+        run = Mock(return_value=Mock(returncode=returncode, stdout=stdout, stderr=stderr))
+        for active in (patch.object(b, 'find_launcher', return_value='/fake/agent-session'),
+                       patch.object(b.subprocess, 'run', run)):
+            active.start()
+            self.addCleanup(active.stop)
+        return run
+
+    def test_close_stopped_session_goes_through_the_launcher(self):
+        self.tmux.exists.return_value = False
+        run = self.launcher()
+        self.bridge.handle_command('close', 'vault', None, None)
+        self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'close', 'vault'])
+        self.assertEqual(run.call_args.kwargs['env']['AGENT_BRIDGE_QUIET'], '1')
+        self.tmux.kill.assert_not_called()
+        self.assertTrue(self.tg.send.call_args.args[1].startswith('closed vault.'))
+
+    def test_close_name_forget_forgets_the_record(self):
+        run = self.launcher()
+        self.bridge.handle_command('close', 'vault forget', None, None)
+        self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'close', 'vault', '--forget'])
+        self.assertEqual(self.tg.send.call_args.args[1],
+                         'Closed vault and forgot its record. /open vault starts it again by name.')
+
+    def test_close_forget_inside_a_topic_forgets_that_session(self):
+        run = self.launcher()
+        self.bridge.handle_command('close', 'forget', 'vault', 6)
+        self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'close', 'vault', '--forget'])
+
+    def test_close_forget_in_general_names_a_session(self):
+        self.bridge.config.session_patterns = ['*']
+        run = self.launcher()
+        self.bridge.handle_command('close', 'forget', None, None)
+        self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'close', 'forget'])
+
+    def test_close_failure_is_reported(self):
+        self.launcher(returncode=1, stderr='No session or record named vault.\n')
+        self.bridge.handle_command('close', 'vault', None, None)
+        self.assertEqual(self.tg.send.call_args.args[1], 'could not close vault: No session or record named vault.')
+
+    def test_close_without_launcher_reports_it(self):
+        self.bridge.handle_command('close', 'vault', None, None)
+        self.assertEqual(self.tg.send.call_args.args[1],
+                         'could not close vault: agent-session launcher not found on this host')
+        self.tmux.kill.assert_not_called()
+
+    def test_sessions_falls_back_to_tmux_when_the_launcher_fails(self):
+        self.tmux.summary.return_value = [{'name': 'vault', 'windows': '2', 'attached': '1'},
+                                          {'name': 'vault-m', 'windows': '2', 'attached': '1'}]
+        fallback = [{'name': 'vault', 'state': 'running', 'agent': None, 'dir': None, 'recorded': False,
+                     'attached': True, 'windows': '2', 'idle_days': None}]
+        self.assertEqual(self.bridge.sessions(), fallback)
+        for reply in (Mock(returncode=1, stdout='[]', stderr='boom'), Mock(returncode=0, stdout='not json', stderr=''),
+                      Mock(returncode=0, stdout='{"name": "vault"}', stderr='')):
+            with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), \
+                    patch.object(b.subprocess, 'run', return_value=reply):
+                self.assertEqual(self.bridge.sessions(), fallback)
+        with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), \
+                patch.object(b.subprocess, 'run', side_effect=b.subprocess.TimeoutExpired('ls', 5)):
+            self.assertEqual(self.bridge.sessions(), fallback)
+        rows = [{'name': 'api', 'state': 'stopped', 'agent': 'codex', 'recorded': True}]
+        with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), \
+                patch.object(b.subprocess, 'run', return_value=Mock(returncode=0, stdout=json.dumps(rows), stderr='')) as run:
+            self.assertEqual(self.bridge.sessions(), rows)
+        self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'ls', '--all', '--json'])
+        self.assertEqual(run.call_args.kwargs['timeout'], 5)
+
+    def test_ls_lists_a_stopped_record_after_the_running_ones(self):
+        self.bridge.config.session_patterns = ['*']
+        self.bridge.sessions = Mock(return_value=[
+            {'name': 'api', 'state': 'stopped', 'agent': 'codex', 'dir': '/repos/api', 'recorded': True,
+             'attached': None, 'windows': None, 'idle_days': 3},
+            {'name': 'vault', 'state': 'running', 'agent': 'claude', 'dir': '/srv/sync/blackvault', 'recorded': True,
+             'attached': False, 'windows': 2, 'idle_days': None},
+        ])
+        self.tmux.running.return_value = 'claude'
+        self.tmux.directory.return_value = '/srv/sync/blackvault'
+        self.bridge.handle_command('ls', '', None, None)
+        text = self.tg.send.call_args.args[1]
+        self.assertIn('2 sessions', text)
+        self.assertIn('⚪ api · Stopped, codex, 3d idle\n    /repos/api', text)
+        self.assertLess(text.index('vault · claude'), text.index('api · Stopped'))
+
+    def test_empty_ls_points_at_unlock_and_restore(self):
+        self.tmux.summary.return_value = []
+        self.bridge.handle_command('ls', '', None, None)
+        text = self.tg.send.call_args.args[1]
+        self.assertIn('ags unlock', text)
+        self.assertIn('ags restore', text)
+
+    def test_delivered_message_marks_the_session_seen(self):
+        self.tmux.type_text.return_value = None
+        with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), \
+                patch.object(b.subprocess, 'Popen') as popen:
+            self.assertEqual(self.bridge.act('vault', 'say', 'hello'), 'typed into vault')
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0], ['/fake/agent-session', 'seen', 'vault'])
+        self.assertIs(popen.call_args.kwargs['stdout'], b.subprocess.DEVNULL)
+        self.tmux.type_text.return_value = 'pane gone'
+        with patch.object(b, 'find_launcher', return_value='/fake/agent-session'), \
+                patch.object(b.subprocess, 'Popen', side_effect=OSError) as popen:
+            self.assertEqual(self.bridge.act('vault', 'say', 'hello'), 'pane gone')
+        popen.assert_not_called()
+
+    def test_topic_no_buttons_posts_without_a_keyboard(self):
+        args = b.argparse.Namespace(session='vault', text='closed vault', no_create=True, no_buttons=False)
+        with patch.object(b, 'build', return_value=self.bridge), patch.object(b.Config, 'from_env'):
+            self.assertEqual(b.cmd_topic(args), 0)
+            self.assertEqual(self.tg.send.call_args.kwargs['buttons'], ['peek', 'esc'])
+            args.no_buttons = True
+            self.assertEqual(b.cmd_topic(args), 0)
+        self.assertIsNone(self.tg.send.call_args.kwargs['buttons'])
 
     def test_open_rejects_unknown_agent(self):
         self.bridge.launch = Mock()
@@ -547,10 +695,13 @@ class ControlTests(unittest.TestCase):
         self.click('session', 'vault')
         self.click('manage', 'vault')
         self.click('kill', 'vault')
-        self.tmux.kill.assert_not_called()
+        run = BridgeTests.launcher(self)
+        run.assert_not_called()
         cb = self.click('kill-confirm', 'vault')
         self.bridge.handle_callback(cb)
-        self.tmux.kill.assert_called_once_with('vault')
+        closes = [c.args[0] for c in run.call_args_list if c.args[0][1] == 'close']
+        self.assertEqual(closes, [['/fake/agent-session', 'close', 'vault']])
+        self.tmux.kill.assert_not_called()
 
     def test_send_requires_matching_reply_and_is_consumed(self):
         self.bridge.control_panel('session', 'vault')
@@ -582,9 +733,10 @@ class ControlTests(unittest.TestCase):
         cb['message'].update(message_id=50, message_thread_id=40)
         cb['from']['id'] = 999
         self.tg.reset_mock()
+        self.bridge.close_session = Mock()
         self.bridge.handle_callback(cb)
         self.tg.send.assert_not_called()
-        self.tmux.kill.assert_not_called()
+        self.bridge.close_session.assert_not_called()
 
     def test_launch_uses_selected_agent_and_resume_mode(self):
         self.tmux.exists.return_value = False
@@ -596,6 +748,96 @@ class ControlTests(unittest.TestCase):
         cb['message'].update(message_id=50, message_thread_id=40)
         self.bridge.handle_callback(cb)
         self.bridge.launch.assert_called_once_with('vault', 'codex', mode='resume')
+
+    def record(self, state='stopped', agent='codex', idle_days=3, name='vault'):
+        """Stub the launcher's listing with one recorded, stopped session."""
+        self.tmux.exists.return_value = False
+        self.bridge.sessions = Mock(return_value=[
+            {'name': name, 'state': state, 'agent': agent, 'dir': '/repos/' + name, 'recorded': True,
+             'attached': None, 'windows': None, 'idle_days': idle_days}])
+
+    def labels(self):
+        markup = next(c.kwargs['reply_markup'] for c in reversed(self.tg.call.call_args_list)
+                      if c.args[0] == 'editMessageText')
+        return [button['text'] for row in markup['inline_keyboard'] for button in row]
+
+    def press(self, action, session, agent):
+        key = next(k for k, v in self.bridge.control_actions.items() if v == (action, session, agent))
+        cb = self.callback(key)
+        cb['message'].update(message_id=50, message_thread_id=40)
+        self.bridge.handle_callback(cb)
+
+    def test_home_labels_stopped_and_closed_records_with_their_agent(self):
+        self.bridge.config.session_patterns = ['*']
+        self.bridge.sessions = Mock(return_value=[
+            {'name': 'api', 'state': 'stopped', 'agent': 'codex', 'recorded': True, 'idle_days': 3},
+            {'name': 'old', 'state': 'closed', 'agent': 'claude', 'recorded': True, 'idle_days': 20},
+            {'name': 'gone', 'state': 'expired', 'agent': 'opencode', 'recorded': True, 'idle_days': 15},
+            {'name': 'live', 'state': 'running', 'agent': None, 'recorded': False, 'idle_days': None},
+        ])
+        self.bridge.control_panel()
+        labels = self.labels()
+        for label in ('⚪ api · Stopped, codex, 3d idle', '⚪ old · Closed, claude',
+                      '⚪ gone · Expired, opencode', '🟢 live · claude', '⚪ vault · Stopped'):
+            self.assertIn(label, labels)
+
+    def test_recorded_stopped_page_resumes_with_its_agent(self):
+        self.record()
+        self.bridge.launch = Mock(return_value='started')
+        self.click('session', 'vault')
+        self.assertIn('▶️ Resume (codex)', self.labels())
+        self.click('resume-rec', 'vault')
+        self.bridge.launch.assert_called_once_with('vault', None, mode='open')
+        self.bridge.launch.reset_mock()
+        self.click('fresh-rec', 'vault')
+        self.bridge.launch.assert_called_once_with('vault', None, mode='fresh')
+
+    def test_recorded_opencode_resumes_in_resume_mode(self):
+        self.record(agent='opencode')
+        self.bridge.launch = Mock(return_value='started')
+        self.click('session', 'vault')
+        self.click('resume-rec', 'vault')
+        self.bridge.launch.assert_called_once_with('vault', None, mode='resume')
+
+    def test_change_agent_closes_then_launches_fresh(self):
+        self.record(state='closed')
+        self.bridge.launch = Mock(return_value='started')
+        self.bridge.close_session = Mock(return_value=None)
+        self.click('session', 'vault')
+        self.assertNotIn('⏹ Close session', self.labels())
+        self.click('change-agent', 'vault')
+        self.press('change-run', 'vault', 'claude')
+        self.bridge.close_session.assert_called_once_with('vault')
+        self.bridge.launch.assert_called_once_with('vault', 'claude', mode='fresh')
+
+    def test_change_agent_launches_nothing_when_close_fails(self):
+        self.record()
+        self.bridge.launch = Mock()
+        self.bridge.close_session = Mock(return_value='the home is locked')
+        self.click('session', 'vault')
+        self.click('change-agent', 'vault')
+        self.press('change-run', 'vault', 'opencode')
+        self.bridge.launch.assert_not_called()
+        self.assertIn('could not close vault: the home is locked',
+                      self.tg.call.call_args_list[-2].kwargs['text'])
+
+    def test_open_record_page_offers_close(self):
+        self.record()
+        self.bridge.close_session = Mock(return_value=None)
+        self.click('session', 'vault')
+        self.assertIn('⏹ Close session', self.labels())
+        self.click('kill', 'vault')
+        self.click('kill-confirm', 'vault')
+        self.bridge.close_session.assert_called_once_with('vault')
+        self.tmux.kill.assert_not_called()
+
+    def test_new_with_a_recorded_name_shows_its_record(self):
+        self.bridge.config.session_patterns = ['*']
+        self.record(name='api')
+        self.bridge.accept_new_session(2, 'api')
+        actions = {v[0] for v in self.bridge.control_actions.values()}
+        self.assertIn('resume-rec', actions)
+        self.assertNotIn('open-run', actions)
 
     def test_home_lists_sessions_without_duplicate_lifecycle_pickers(self):
         actions = list(self.bridge.control_actions.values())

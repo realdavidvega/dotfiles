@@ -71,6 +71,62 @@ else
 
 fi
 
+# The launcher's records live here, plaintext, so a restore can read them
+# before the home is unlocked. Private to this user.
+if install -d -m 0700 "$AGENT_ROOT/state"; then
+  chmod 0700 "$AGENT_ROOT/state" && echo "current: $AGENT_ROOT/state (0700)"
+else
+  echo "blocked: cannot create $AGENT_ROOT/state"
+  FAILED=1
+fi
+
+# The seeder never extends a list the live file already has, so a baseline
+# SessionStart entry (the launcher's pin hook) is added here. An entry counts
+# as present when any live hook runs the same command as any of its hooks.
+# User entries are kept and a present entry is never rewritten. This is the one
+# exception to "live wins" in .wiki/architecture/install-safety.md.
+ensure_session_start_hooks() {
+  local live="$HOME/.claude/settings.json"
+  local baseline="$DOTFILES_PATH/config/claude/settings.json"
+
+  if [ ! -f "$live" ]; then
+    echo "warning: $live is missing, run 02-seed-runtime-configs.sh first. No SessionStart hook added."
+    return 0
+  fi
+  python3 - "$baseline" "$live" <<'PY'
+import json, os, shutil, sys, tempfile
+
+baseline_path, live_path = sys.argv[1], sys.argv[2]
+with open(baseline_path) as handle:
+    baseline = json.load(handle).get("hooks", {}).get("SessionStart", [])
+with open(live_path) as handle:
+    live = json.load(handle)
+
+entries = live.setdefault("hooks", {}).setdefault("SessionStart", [])
+commands = {hook.get("command") for entry in entries for hook in entry.get("hooks", [])}
+missing = [entry for entry in baseline
+           if not any(hook.get("command") in commands for hook in entry.get("hooks", []))]
+if not missing:
+    print(f"current: SessionStart hooks in {live_path}")
+    sys.exit(0)
+
+backup = live_path + ".pre-ags"
+if not os.path.exists(backup):
+    shutil.copy2(live_path, backup)
+entries.extend(missing)
+folder = os.path.dirname(live_path)
+fd, temp = tempfile.mkstemp(dir=folder, prefix=".settings.", suffix=".json")
+with os.fdopen(fd, "w") as handle:
+    json.dump(live, handle, indent=2, ensure_ascii=False)
+    handle.write("\n")
+os.chmod(temp, os.stat(live_path).st_mode & 0o777)
+os.replace(temp, live_path)
+print(f"staged: {len(missing)} SessionStart hook(s) in {live_path} (backup {backup})")
+PY
+}
+
+ensure_session_start_hooks || FAILED=1
+
 # telegram-user.py acts as your Telegram account where a bot cannot: it mutes a
 # fresh topic and clears topics, for this bridge and for Black System alike.
 # Telethon lives in its own venv so both bots stay stdlib only, and under /srv
