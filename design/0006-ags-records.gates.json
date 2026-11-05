@@ -2,7 +2,7 @@
   "doc": "design/0006-ags-records.md",
   "doc_sha256": "aba959480af9f423e8356f4665e590c63d9a8b7280cfafd78db82d4f0ec714e1",
   "hash_method": "design/check_gates.py is absent in this repo. Hash is SHA-256 of the UTF-8 body after the frontmatter's closing --- line, stripped, as check_gates.py computes it.",
-  "status": "rescoped after the round 5 critic and passed a narrow readiness round on the rescope (Mac H2 on 2.1.281 with design/checks/0006-h2.sh, conditional fallback removed). The hub H2 run is due before rollout, and a different result there stops rollout until D3 is revised. Ready for the approval walkthrough. Not approved",
+  "status": "approved on 2026-11-05 after the walkthrough. The hub H2 run is due before rollout, and a different result there stops rollout until D3 is revised",
   "runs": [
     {
       "gate": "comprehension",
@@ -50,5 +50,91 @@
   ],
   "evidence": [
     "2026-11-04, Mac, Claude 2.1.281, design/checks/0006-h2.sh: flags listed, interactive hook carries TMUX_PANE, a CLAUDE_PID whose parent is the pane shell and entrypoint cli, the sessions file holds pid and sessionId, a nested claude -p records sdk-cli in transcript and hook with a parent other than the pane shell, /clear moves the sessions file's sessionId to the hook's new id, claude --resume keeps the id but writes to the transcript before any message (an attachment line), claude -p outside tmux gives sdk-cli. Symlink item not run"
-  ]
+  ],
+  "approval": {
+    "by": "David Vega Lichacz",
+    "date": "2026-11-05",
+    "doc_sha256": "aba959480af9f423e8356f4665e590c63d9a8b7280cfafd78db82d4f0ec714e1",
+    "read_confirmed": true,
+    "verdict": "approved",
+    "via": "menu",
+    "rounds": 1,
+    "decisions": [
+      {
+        "decision": "What triggers saving",
+        "choice": "Events: open, close, the hooks",
+        "matches_doc": true
+      },
+      {
+        "decision": "Which conversation to resume",
+        "choice": "An id the launcher chooses, followed by the hook",
+        "matches_doc": true
+      },
+      {
+        "decision": "Record format",
+        "choice": "A directory of one-value files",
+        "matches_doc": true
+      },
+      {
+        "decision": "Who reads records",
+        "choice": "The launcher only, others through ls --json",
+        "matches_doc": true
+      },
+      {
+        "decision": "What ends a session for good",
+        "choice": "close, and expiry at restore",
+        "matches_doc": true
+      },
+      {
+        "decision": "What close does",
+        "choice": "Marks the record closed",
+        "matches_doc": true
+      },
+      {
+        "decision": "How long a stopped session comes back",
+        "choice": "14 days of inactivity, then expired into a closed record",
+        "matches_doc": true
+      },
+      {
+        "decision": "What idleness is measured against",
+        "choice": "The host's last activity before the boot",
+        "matches_doc": true
+      },
+      {
+        "decision": "Start directory without a record",
+        "choice": "Current directory, git top level, --repo opt-in, refusing / and $HOME",
+        "matches_doc": true
+      },
+      {
+        "decision": "A new name and existing conversations",
+        "choice": "Blank unless --resume",
+        "matches_doc": true
+      },
+      {
+        "decision": "Sessions after a reboot",
+        "choice": "ags restore by hand, and from unlock",
+        "matches_doc": true
+      },
+      {
+        "decision": "Where the pin hook is installed",
+        "choice": "The baseline settings, plus 51 adding missing baseline SessionStart entries",
+        "matches_doc": true
+      },
+      {
+        "decision": "Acceptance",
+        "choice": "As written",
+        "matches_doc": true
+      }
+    ],
+    "not_walked": [
+      "A pin whose transcript is gone",
+      "Which hook runs may pin",
+      "Recognising a grouped client",
+      "How far back history reaches",
+      "How a session's activity is known",
+      "Resuming a stopped session from the panel",
+      "What --resolve answers",
+      "paneport's sessions"
+    ]
+  }
 }
