@@ -475,7 +475,11 @@ home_locked() {
   esac
   command -v ecryptfs-mount-private >/dev/null 2>&1 || return 1
   [[ -d "/home/.ecryptfs/${USER:-$(id -un)}" ]] || return 1
-  ! mount | grep -q "on $HOME type ecryptfs"
+  # Read the mount table first. Under pipefail, grep -q closing the pipe early
+  # fails mount with SIGPIPE, which would read an unlocked home as locked.
+  local mounts
+  mounts="$(mount)"
+  ! grep -q "on $HOME type ecryptfs" <<<"$mounts"
 }
 
 project_dir() {
