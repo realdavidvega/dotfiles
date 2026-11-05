@@ -444,12 +444,6 @@ valid_name() {
   [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$ ]]
 }
 
-# paneport's pp- sessions stay unrecorded until paneport closes through this
-# launcher, or a direct kill would leave a record that restore revives.
-recordable_name() {
-  valid_name "$1" && [[ "$1" != pp-* ]]
-}
-
 # Prints the record whose name differs from NAME only in case.
 name_clashes() {
   local name="$1" folded each
@@ -612,7 +606,7 @@ adopt_session() {
   tmux has-session -t "=$name" 2>/dev/null || { skip "not running"; return 1; }
   group="$(group_of "$name")"
   [[ -z "$group" ]] || { skip "grouped client of $group"; return 1; }
-  recordable_name "$name" || { skip "name not recordable"; return 1; }
+  valid_name "$name" || { skip "name not valid"; return 1; }
   if clash="$(name_clashes "$name")"; then skip "name clashes with $clash"; return 1; fi
   ! record_has "$name" || { skip "already recorded"; return 1; }
   ! unrecorded_session "$name" || { skip "started while locked"; return 1; }
@@ -877,7 +871,7 @@ cmd_open() {
   if reason="$(name_clashes "$name")"; then
     refuse "A record named $reason differs from $name only in case. Use ags open $reason, or another name."
   fi
-  recordable_name "$name" && recordable=true
+  valid_name "$name" && recordable=true
   record_has "$name" && recorded=true
   home_locked && locked=true
 
@@ -1372,7 +1366,7 @@ cmd_close() {
   fi
 
   if [[ "$running" == true && "$forget" == false ]] && ! record_has "$name" \
-     && recordable_name "$name" && ! unrecorded_session "$name" && ! home_locked; then
+     && valid_name "$name" && ! unrecorded_session "$name" && ! home_locked; then
     if ensure_state 2>/dev/null; then
       adopt_session "$name" || true
     else

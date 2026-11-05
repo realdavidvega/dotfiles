@@ -253,7 +253,7 @@ A record is written when `open` creates a session and kept when it stops.
 `close` marks it closed, so `restore` leaves it alone and a later `open`
 resumes its conversation. `close --forget` deletes it. Names are letters,
 digits, `_` and `-`, up to 64, and a name differing from a record's only in case
-is refused. `pp-*` names, paneport's, are started without a record.
+is refused.
 
 **`adopt`** records running sessions that have none: the agent read from the
 `agent` window's foreground command (a version number counts as Claude), the

@@ -390,14 +390,14 @@ class OpenTests(unittest.TestCase):
     def test_names(self):
         box = Sandbox(self)
         usable = box.transcript(box.repo)
-        self.assertEqual(box.started('pp-x')[2], f'--resume {usable}')
-        self.assertFalse((box.state / 'sessions/pp-x').exists())
+        self.assertTrue(box.started('pp-x')[2].startswith('--session-id '))
+        self.assertTrue((box.state / 'sessions/pp-x').exists())
         box.make_record('vault', box.repo)
         for name in ('a b', 'a+b', '-x', 'Vault'):
             result = box.cli('open', name, '--detached', check=False)
             self.assertNotEqual(result.returncode, 0, name)
             self.assertFalse(box.running(name), name)
-        self.assertEqual(sorted(path.name for path in (box.state / 'sessions').iterdir()), ['vault'])
+        self.assertEqual(sorted(path.name for path in (box.state / 'sessions').iterdir()), ['pp-x', 'vault'])
 
     def test_the_record_keeps_its_agent_and_a_disagreement_needs_a_close(self):
         box = Sandbox(self)
@@ -757,7 +757,7 @@ class ListAndAdoptTests(unittest.TestCase):
         self.assertIn('skipped plain: no agent window', out)
         self.assertIn('skipped busy: unknown command sleep', out)
         self.assertIn('skipped vault:', out)
-        self.assertIn('skipped pp-x:', out)
+        self.assertIn('adopted pp-x (shell', out)
         self.assertRegex(out, rf'adopted ver \(claude in {re.escape(str(box.repo))}\).*no pin')
         self.assertIn('adopted cx (shell', out)
         self.assertTrue((box.state / 'sessions/made/seen').exists())
