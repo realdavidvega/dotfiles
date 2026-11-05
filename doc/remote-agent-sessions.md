@@ -37,6 +37,7 @@ flowchart TD
 |---|---|---|
 | tmux configuration | Terminal behaviour the agent TUIs depend on | `config/tmux/tmux.conf` |
 | Session launcher | Create, attach and reach sessions, locally or over SSH | `scripts/agent-session.sh` |
+| Session records | Each session's directory, agent and Claude conversation, kept across reboots | the state directory with `sessions/` and `history.log`, the `SessionStart` pin hook in `config/claude/settings.json` |
 | Notification | Report on a detached session, finished or blocked | `scripts/agent-notify.sh`, `config/claude/settings.json`, `config/codex/config.baseline.toml` |
 | Aliases | Short forms for daily use | `aliases/.tmux-aliases` |
 | Telegram bridge | Control a session from a phone, any agent | `scripts/agent-bridge.py`, `os/linux/srv/agents/bridge.env.sample`, `os/linux/system/etc/systemd/system/agent-bridge.service` |
@@ -77,9 +78,10 @@ from another machine. Before the encrypted home is unlocked, use
 `/srv/services/agents/bin/agent-session --help`.
 
 The terminal and Telegram use the same core verbs. `open` returns to a running
-session, and starts a stopped one by continuing the agent's last conversation
-in its directory, or a fresh one when there is none. In a terminal it also
-attaches. In Telegram it binds the session's topic.
+session. A stopped one is started from its record, in the record's directory,
+with the record's agent, resuming the record's own Claude conversation. A new
+name starts a fresh conversation, and never continues another session's. In a
+terminal `open` also attaches. In Telegram it binds the session's topic.
 
 | Action | Terminal | Telegram |
 |---|---|---|
@@ -87,27 +89,36 @@ attaches. In Telegram it binds the session's topic.
 | Start or return | `ags open skp` | `/open skp` |
 | Start blank | `ags open vault codex --fresh` | `/open vault codex fresh` |
 | Stop session | `ags close vault` | `/close vault` |
+| Forget a session | `ags close vault --forget` | `/close vault forget` |
 | Read pane | `ags peek vault 15` | `/peek 15` in its topic, `/peek vault 15` in General |
 | Send input | `ags say vault "continue"` | `/say continue` in its topic, `/say vault continue` in General |
 | Interrupt | `ags esc vault` | `/esc` in its topic, `/esc vault` in General |
 | Press Enter | `ags enter vault` | `/enter` in its topic, `/enter vault` in General |
 | Help | `ags --help` or `ags help` | `/help` |
 
-`claude` is the default agent. `codex`, `opencode` and `shell` are also accepted.
-`open` takes the agent positionally or as `--agent NAME`, `--dir PATH` for a
-custom directory, `--fresh` to start blank, `--resume` to insist on continuing,
-and `--detached` to start without attaching. `--resolve` prints the directory a
-new session would start in and exits, or exits 1 when that directory is
-missing. It never runs tmux, so paneport can ask before it creates the session
-itself.
+`claude` is the default agent for a new name. `codex`, `opencode` and `shell`
+are also accepted, and a recorded name keeps its record's agent unless another
+is given. `open` takes the agent positionally or as `--agent NAME`, `--dir PATH`
+for a custom directory, `--repo` to look for a repository named after the
+session, `--fresh` to start blank, `--resume` to continue the directory's newest
+conversation that no record holds, `--conversation ID` to resume a particular
+Claude conversation, and `--detached` to start without attaching. `--resolve`
+prints the directory `open --repo` would start in and exits, or exits 1 when
+that directory is missing or the name is not valid. It never runs tmux, so
+paneport can ask before it creates the session itself.
 
-`new NAME` is `open --fresh --detached`, `resume NAME` is
-`open --resume --detached`, and `kill` is `close`. They stay for scripts and the
-Control panel buttons, and Telegram still answers `/new`, `/resume` and `/kill`.
-`ags mobile NAME` explicitly adds another terminal client,
-`ags remote COMMAND ...` runs the command on the hub, and `ags unlock` unlocks
-its encrypted home. Telegram's `/bind NAME` associates a topic with a running
-session.
+`new NAME` is `open --fresh --detached --repo`, `resume NAME` is
+`open --resume --detached --repo`, and `kill` is `close`. They stay for scripts
+and the Control panel buttons, and Telegram still answers `/new`, `/resume` and
+`/kill`. `ags mobile NAME` explicitly adds another terminal client,
+`ags remote COMMAND ...` runs the command on the hub (adding `--repo` to
+`open`), and `ags unlock` unlocks its encrypted home and then runs `restore`.
+Telegram's `/bind NAME` associates a topic with a running session.
+
+`ags adopt [NAME [AGENT]]` writes records for running sessions that predate
+them, `ags restore [--dry-run]` starts every open record that is not running,
+and `ags history [NAME]` lists each name's conversations. All three are
+described under [Records](#records).
 
 Pane commands resolve the active pane of the `agent` window, independent of
 which window a terminal client is viewing. Sessions without an `agent` window
@@ -125,16 +136,30 @@ or its equivalent. Sessions without an `agent` window use their selected
 window. `ATTACHMENT` counts terminal clients, not Telegram users. `detached`
 means no terminal is attached to that session, and does not mean it is stopped.
 `RUNNING` reports the foreground program, not an inferred busy or idle state.
+Stopped records follow the running sessions as `stopped Nd`, N being the days
+since they were last used. `--all` adds closed and expired records, and
+`--json` prints one array with `name`, `state`, `agent`, `dir`, `recorded`,
+`attached`, `windows` and `idle_days` for each, which is what the bridge reads.
 
-The working directory comes from the session name, so `/open skp` from a phone
-lands in the checkout without typing a path. A git repository named exactly
-NAME under `AGENT_SESSION_REPOS` (default `~/Workspace/repos:/srv/services`,
-searched three levels deep) wins. Failing that, the only repository named
-`NAME-something` is used, so `skills` finds `skills-registry`. Two such
-candidates, as with `black`, is ambiguous and finds nothing. Any other name
-falls back to `AGENT_SESSION_ROOT`, then `BLACK_VAULT_REPO`, then `BLACK_VAULT`,
-then the hub's vault path, then the current directory. `--dir` overrides all of
-it, and `ags ls` shows where each session landed.
+Where a session starts, first match wins. `--dir` always wins. Then the
+session's record, so a recorded name always returns to its directory. Then, with
+`--repo`, a git repository named exactly NAME under `AGENT_SESSION_REPOS`
+(default `~/Workspace/repos:/srv/services`, searched three levels deep), or
+failing that the only repository named `NAME-something`, so `skills` finds
+`skills-registry`. Two such candidates, as with `black`, is ambiguous and finds
+nothing, and a miss falls back to the default root: `AGENT_SESSION_ROOT`, then
+`BLACK_VAULT_REPO`, then `BLACK_VAULT`, then the hub's vault path. Without
+`--repo`, the current directory, moved up to its git top level. `/` and the home
+directory are refused there, and `--dir .` starts in them anyway. Telegram and
+`ags remote open` always pass `--repo`, so `/open skp` from a phone lands in the
+checkout without typing a path. The first line `open` prints names the
+directory and why, as `(its record)`, `(repository)`, `(current directory)` or
+`(default root, no repository named NAME)`.
+
+A `--dir` that disagrees with an open record is refused, since a record has one
+directory. Close it first, or use another name. A recorded name whose directory
+is gone is refused too, and the message offers `--dir` after a close, or
+`close --forget`.
 
 Four details in there are not obvious and were each found by something
 breaking.
@@ -163,23 +188,107 @@ before there is a client to attach.
 
 ### Resuming
 
-Continuing types the agent's own continue command instead of a bare
-invocation: `claude --continue`, `codex resume --last`, `opencode --continue`.
-Each resolves the most recent conversation in the session's working directory,
-so the launcher's directory resolution is what makes it deterministic.
-
-`open` continues by default when the agent has a conversation to continue in
-that directory. For Claude Code that is a transcript under
-`~/.claude/projects/<encoded directory>/`, for Codex a rollout whose
-`session_meta` carries that `cwd`. OpenCode and the shell are not checked and
-start fresh unless given `--resume`. Continuing is per directory, not per
-session name, so two vault sessions share the vault's most recent conversation.
-
 A session is a process and a conversation is a file. Killing the first, or
 rebooting the host, leaves the second alone, which is why `/open` can rebuild
-a session and carry on mid-thread. To pick from a list instead of taking the
-most recent, type `claude --resume` or `codex resume` in the pane, since those
-open an interactive picker.
+a session and carry on mid-thread.
+
+For Claude Code the launcher always names the conversation. It never types
+`claude --continue`, which takes whatever conversation in the directory is
+newest, so two sessions in the vault would trade conversations. The first rule
+that matches decides:
+
+1. `--conversation ID` resumes that id, when its transcript is in the record's
+   project directory and no other record holds it. `--fresh` starts blank.
+2. A record's pin, `claude --resume ID`, when its transcript holds a user
+   message. A pin whose transcript is missing or was never used is reported in
+   the printed line, logged as `notfound`, and replaced by a new id.
+3. With `--resume`, or for a record that has no pin, the newest transcript in
+   the directory that no record pins, no running Claude holds, and that was an
+   interactive session rather than a `claude -p` run (its first `entrypoint` is
+   not `sdk-cli`).
+4. Otherwise a new conversation, `claude --session-id ID --name NAME`, with the
+   id generated and pinned before Claude starts.
+
+Codex keeps `codex resume --last` and OpenCode `opencode --continue`, each
+continuing by directory as before, when the agent has a conversation there.
+Replacing a closed record's agent drops its pin and starts the new agent blank.
+To pick from a list instead, type `claude --resume` or `codex resume` in the
+pane, since those open an interactive picker.
+
+**The pin hook.** Claude can change conversation inside a session, with `/clear`
+or an in-app `/resume`. A `SessionStart` hook in `config/claude/settings.json`
+runs `agent-session.sh pin`, which reads the hook's `session_id` and
+`transcript_path` and moves the record's pin when, and only when, the Claude
+that fired it is this session's own: started by the agent pane's shell, an
+interactive run, a transcript in the record's project directory, and an id no
+other record holds. It prints nothing, because a hook's stdout joins the
+conversation. The seeder never extends a list the live settings already has, so
+`51-agent-sessions.sh` adds a missing baseline `SessionStart` entry to the live
+file, after one backup to `settings.json.pre-ags`.
+
+**A clean environment.** The launcher starts tmux without the variables Claude
+Code sets for its children (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_PID`
+and the rest), `AGENT_BRIDGE_*` other than `AGENT_BRIDGE_BIN` and
+`AGENT_BRIDGE_ENV`, `PANEPORT_*`, and a `GIT_EDITOR` of `true`, and removes the
+same names from a running server's global environment before each start. A
+session started from inside Claude, or by the bridge, would otherwise pass them
+to the agent it types, and Claude would record its next conversation as a
+one-shot run that rule 3 skips.
+
+## Records
+
+Each recorded session is a directory under `sessions/` in the state directory,
+one small file per field: `dir`, `agent`, `pane`, `conversation` (the Claude
+pin), `seen` (its modification time is the last use) and `closed` (absent while
+open, else `close` or `expired`). The state directory is `AGENT_SESSION_STATE`,
+else `/srv/services/agents/state` on the hub, created 0700 by
+`51-agent-sessions.sh` so a restore can read it before the home is unlocked,
+else `${XDG_STATE_HOME:-~/.local/state}/ags`. Records are plaintext and hold
+paths and ids, never conversation text. `history.log` beside them gets one
+line per pin, close, expiry, restore and `notfound`, and `ags history` reads it,
+marking each conversation `current`, `kept` or `gone` by whether its transcript
+still exists.
+
+A record is written when `open` creates a session and kept when it stops.
+`close` marks it closed, so `restore` leaves it alone and a later `open`
+resumes its conversation. `close --forget` deletes it. Names are letters,
+digits, `_` and `-`, up to 64, and a name differing from a record's only in case
+is refused. `pp-*` names, paneport's, are started without a record.
+
+**`adopt`** records running sessions that have none: the agent read from the
+`agent` window's foreground command (a version number counts as Claude), the
+directory from its pane, and an empty pin filled from Claude's own process file
+when it can be read. It skips grouped clients, sessions with no `agent` window,
+unknown commands and names it cannot record, each with its reason. `close` on an
+unrecorded running session adopts it first.
+
+**`restore`** starts every open record that is not running, each through
+`open --detached`, so each resumes its own conversation. A record idle for
+`AGENT_SESSION_EXPIRE_DAYS` (default 14) is marked expired instead, idle being
+measured up to the host's last activity before the boot, so two weeks with the
+hub off expire nothing. An expired record is closed, and `/open NAME` brings it
+back on its pin while Claude still keeps the transcript, 30 days by default.
+`--dry-run` prints what it would do. A `restore.lock` keeps two runs apart, and
+a lock from before the boot, or whose pid is gone, is taken over.
+
+**Activity.** `open` touches `seen`, except a start by `restore`. Two session
+hooks run `agent-session.sh seen NAME` when a client attaches or detaches, a
+grouped `ags mobile` client included, and the bridge runs it after each message
+it types. So a session used from the desk or the phone never looks idle.
+
+### After a reboot
+
+1. Unlock the home with `ecryptfs-mount-private`, then run
+   `/srv/services/agents/bin/agent-session unlock`, since `ags` is not
+   dependable before the unlock. `unlock` runs `restore` when it finishes, and
+   also when the home was already unlocked.
+2. Read the summary, `Restored N, expired N, failed N.`, and the line for each
+   failure.
+3. `/open NAME` brings back an expired session, and `ags ls --all` lists every
+   record.
+
+On a locked home the launcher starts only `shell` sessions, with no record,
+labelled `(home locked)`. `adopt` and `restore` refuse until `ags unlock`.
 
 ## Notifications
 
@@ -266,9 +375,10 @@ prompt from a phone is then just replying to the message that told you about it.
 ```text
 /control        restore the pinned Control panel
 /ls             list sessions, with a button that opens or creates each topic
-/open S [a] [fresh]  start or return, continuing the last conversation
+/open S [a] [fresh]  start or return, resuming its own conversation
 /bind S         bind a topic to a session that already exists
 /close S        close a session, keeping its conversation
+/close S forget close it and forget its record
 /peek [n]       colour PNG of the pane, default 30 lines, maximum 60
 /say TEXT       type text and press Enter
 /esc            interrupt
@@ -279,10 +389,11 @@ prompt from a phone is then just replying to the message that told you about it.
 /discover       run on the host, not in chat, to get ids before first start
 ```
 
-`/open` calls `agent-session open NAME AGENT --detached`, adding `--fresh` when
-asked, so it picks the same directory and conversation as `ags open`. The reply
-is the launcher's first line, which names the directory and whether the
-conversation continued. On a running session `/open` binds its topic, and asking
+`/open` calls `agent-session open NAME --repo --detached`, with the agent only
+when one is named and `--fresh` when asked, so it picks the same directory and
+conversation as `ags open`. The reply is the launcher's first line, which names
+the directory and whether the conversation resumed. A launcher refusal is posted
+as `could not start` with its reason. On a running session `/open` binds its topic, and asking
 for `fresh` or another agent there says to close it first. `/new` and `/resume`
 still call the launcher's explicit forms. The Control panel's New session
 accepts an existing name by showing that session, and a new name starts through
@@ -294,8 +405,12 @@ to an active Send prompt. Command results without a session target go to Control
 
 The Control topic holds one pinned panel listing running and stopped sessions.
 Select a running session for Open topic, Peek, Send, Escape and Enter. Manage
-holds Bind topic, Kill session and Clear. A stopped session offers Resume
-conversation and Start fresh, followed by an agent picker.
+holds Bind topic, Close session and Clear. A stopped recorded session shows its
+agent and offers Resume, Start fresh and Change agent, which closes it and
+starts the picked agent blank. An open record's page adds Close session. A
+stopped session with no record offers Resume conversation and Start fresh,
+followed by an agent picker. The panel lists sessions from `ags ls --json`,
+falling back to tmux when the launcher fails.
 
 New session asks for a new name, then the agent. Existing names return a prompt
 to choose that session from the main panel or enter a different name. The main
@@ -313,7 +428,8 @@ and pending input expire when the menu changes or the daemon restarts.
 
 The launcher gives terminal sessions their topics too. When `open` creates a
 session, and when `close` ends one, `agent-session.sh` runs
-`agent-bridge.py topic NAME --text ...` in the background. It does nothing when
+`agent-bridge.py topic NAME --text ...` in the background, the close one under
+`nohup` with `--no-buttons`, so it survives a close run inside the session. It does nothing when
 the staged bridge or `bridge.env` is missing, so machines without a bridge are
 unaffected, and it never makes the terminal wait on Telegram. The bridge sets
 `AGENT_BRIDGE_QUIET` when it calls the launcher, so an `/open` is announced once.
@@ -605,7 +721,8 @@ dangles exactly when it is needed. The same reasoning already governs
 
 **The agents themselves are unreachable before that unlock**, because they
 install into `~/.local/bin` with their state in `~/.claude` and `~/.codex`. One
-`ags unlock` fixes it for the rest of the uptime. This is accepted rather than
+`ags unlock` fixes it for the rest of the uptime, and runs `restore`, as in
+[After a reboot](#after-a-reboot). This is accepted rather than
 solved: relocating both toolchains would fight both installers and put agent
 auth tokens in plaintext.
 
@@ -617,6 +734,11 @@ unreachable until someone touches it physically.
 one, so the home copy stays authoritative while mounted and the `/etc` copy
 answers when it is not.
 
+**A tmux server the bridge started cannot `sudo`.** The bridge's unit sets
+`NoNewPrivs`, and every pane of a server it started inherits it. `restore`
+warns when it finds that, and the fix is `tmux kill-server` (when it holds only
+sessions started while the home was locked), then `ags restore` again.
+
 ## Verification
 
 ```bash
@@ -627,7 +749,7 @@ tmux -L cfgtest kill-server
 
 scripts/agent-session.sh new scratch shell --dir /tmp
 tmux list-windows -t scratch          # expect 1-indexed
-scripts/agent-session.sh kill scratch
+scripts/agent-session.sh kill scratch --forget
 
 scripts/agent-notify.sh --dry-run --label test
 ```

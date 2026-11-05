@@ -223,7 +223,13 @@ Hindsight.
 ```bash
 ags new <name> codex    # start detached, same as Telegram /new
 ags resume <name> codex # continue saved conversation, same as /resume
-ags open <name>         # attach, or create a missing session
+ags open <name>         # attach, or start it from its record
+ags open <name> --repo  # start in the repository named after it
+ags close <name>        # stop it, keeping its record and conversation
+ags close <name> --forget  # stop it and forget its record
+ags adopt               # record running sessions that predate records
+ags restore             # after a reboot, start every open record
+ags history [name]      # each name's conversations
 ags peek <name>         # read the agent pane
 ags say <name> "text"   # type into the agent pane and press Enter
 ags ls                  # list sessions
@@ -234,7 +240,11 @@ agsrv                   # open the vault session on the hub
 
 `scripts/agent-session.sh` gives each session three windows (`agent`, `shell`,
 `git`) and types the agent into a shell rather than running it as the window
-command, so a crash leaves its output visible. `config/tmux/tmux.conf` is
+command, so a crash leaves its output visible. Each session also has a record
+in the state directory (directory, agent and pinned Claude conversation), so a
+reopen or a restore after a reboot resumes that session's own conversation. A
+`SessionStart` hook in `config/claude/settings.json` runs
+`agent-session.sh pin` to follow `/clear` and in-app `/resume`. `config/tmux/tmux.conf` is
 linked to `~/.tmux.conf` and also staged as a plaintext copy under
 `/srv/services/agents/` on the hub, whose home is encrypted and unreadable
 before login. `scripts/agent-notify.sh` is a Claude Code `Stop`/`Notification` hook and the
