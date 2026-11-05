@@ -1,6 +1,6 @@
 ---
 title: ags records, restore after a reboot, expiry and history, and starts that never take another session's conversation
-status: approved
+status: implemented
 tier: significant
 author: David Vega Lichacz
 created: 2026-11-04
