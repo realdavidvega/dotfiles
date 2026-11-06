@@ -191,6 +191,10 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Opencode path
   export OPENCODE_PATH=$HOME/.opencode
 
+  # The host part of an engineering action's file name in the vault. Without it
+  # engineering.py writes the short hostname, which here is an asset name.
+  export ENGINEERING_HOST="mac"
+
   # Global Python venv for dotfiles packages
   export DOTFILES_PYTHON_VENV="$HOME/.local/share/dotfiles/python-venv"
 
@@ -302,6 +306,22 @@ do
 done
 unset _candidate
 export BLACK_VAULT_REPO="${BLACK_VAULT:-}"
+
+# engineering.py finds a code repository's area in these vaults, and its
+# checkout one folder below these roots, both colon-separated like PATH. The
+# roots are probed because checkouts sit under repos/github/{tools,projects}/
+# on some machines and a flat github/ on others.
+[ -n "${ENGINEERING_VAULTS:-${BLACK_VAULT:-}}" ] && export ENGINEERING_VAULTS="${ENGINEERING_VAULTS:-$BLACK_VAULT}"
+_roots=""
+for _candidate in \
+  "${OS_WORKSPACE:-$HOME/Workspace}/repos/github/tools" \
+  "${OS_WORKSPACE:-$HOME/Workspace}/repos/github/projects" \
+  "${OS_WORKSPACE:-$HOME/Workspace}/github"
+do
+  [ -d "$_candidate" ] && _roots="${_roots:+$_roots:}$_candidate"
+done
+[ -n "$_roots" ] && export ENGINEERING_CODE_ROOTS="$_roots"
+unset _candidate _roots
 
 # black-system is the machinery, the vault is its data. They are separate
 # checkouts and the skills address them by these two variables.

@@ -1,0 +1,21 @@
+[Unit]
+Description=Apply queued engineering task actions to the vault
+Documentation=file:///srv/services/engineering/engineering-vault/SKILL.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=black
+EnvironmentFile=/srv/services/system/system.env
+# The home is ecryptfs, so ~/.gitconfig can be unreadable at boot. This file
+# includes it when it is readable and carries the identity otherwise.
+Environment=GIT_CONFIG_GLOBAL=/srv/services/engineering/gitconfig
+# A run waits on the lock behind any direct write, and a hung one must not
+# keep the timer from ever firing again.
+TimeoutStartSec=15min
+ExecStart=/usr/bin/python3 /srv/services/engineering/engineering-vault/scripts/engineering.py apply
+WorkingDirectory=/srv/services/engineering
+NoNewPrivileges=yes
+PrivateTmp=yes
+SyslogIdentifier=engineering-apply
