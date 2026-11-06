@@ -276,6 +276,37 @@ scripts/test_voice_pin.py`. The contract, cache, pinning and install are in
 uses it to turn a voice note in a session topic into a card to Send, Edit or
 Discard, and to read a finished turn aloud from its 🔊 Listen button.
 
+### Engineering tasks (hub)
+
+The vault's `07 - Engineering/` holds one area per personal code repository,
+and skills-registry's `engineering-vault` skill finds an area and writes its
+tasks through `engineering.py`. Three variables in `shell/exports.sh`:
+
+- `ENGINEERING_VAULTS`, colon-separated vault paths, defaulting to `$BLACK_VAULT`.
+- `ENGINEERING_CODE_ROOTS`, the folders whose children are checkouts, probed
+  from `repos/github/tools`, `repos/github/projects` and a flat `github/`.
+- `ENGINEERING_HOST=mac`, in the macOS branch only, so the Mac's asset hostname
+  never names an action file in the vault.
+
+Only the hub writes task fields. `restoration_scripts/55-engineering.sh`, run
+as the desktop user, stages `engineering.py` with sdlc-init's `check_gates.py`
+and project-wiki's `lint_wiki.py` beside it under `/srv/services/engineering/`,
+taken from skills-registry's `origin/main` (`ENGINEERING_STAGE_REF` names another
+commit) and swapped in under the applier's lock. It writes the git identity the
+applier commits with, adds `ENGINEERING_VAULTS` to
+`/srv/services/system/system.env` when missing, and installs
+`os/linux/srv/engineering/engineering-apply.{service,timer}`. The timer runs
+`engineering.py apply` every five minutes with that env file. Enabling it is
+explicit: `sudo systemctl enable --now engineering-apply.timer`. While the
+ecryptfs home is locked the applier still commits, and its push waits until the
+home unlocks, since the SSH key lives there. Rerun the script after
+skills-registry changes the skill, and read `STAGED` there for the commit it
+staged.
+
+The staging swap holds the applier lock and restores existing parts if a
+replacement fails. A remaining `.old` path blocks another attempt until it is
+recovered.
+
 ## Architecture
 
 ### Directory map (top-level, what's non-obvious)
