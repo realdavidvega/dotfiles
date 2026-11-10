@@ -58,7 +58,7 @@ Most of it exists because an agent TUI is not an ordinary program.
 | `escape-time 25` | Esc is the interrupt key in both agents. The 500ms default makes it feel broken. 25ms stays responsive without splitting escape sequences that arrive in separate packets over a relayed mobile link |
 | `history-limit 200000` | The run is the artifact. A few MB per pane buys reading what happened instead of guessing |
 | `set-clipboard on` | OSC 52 copies from the remote session into the local clipboard, with no round trip through a file |
-| `after-load-buffer`, `after-set-buffer`, `copy-command` | GNOME Terminal ignores OSC 52. Each buffer write also goes through `scripts/tmux-clipboard.sh` into the Linux desktop clipboard, because Claude Code skips `xclip` in a pane whose environment still says SSH |
+| `after-load-buffer`, `after-set-buffer`, `copy-command` | GNOME Terminal ignores OSC 52. Each buffer write also goes through `scripts/tmux-clipboard.sh` into the Linux desktop clipboard, because Claude Code skips `xclip` in a pane whose environment still says SSH. On macOS only a copy-mode selection goes to `pbcopy`, as UTF-8, and the hooks pass `--buffer-hook` so the script ignores them, since a hook cannot tell which buffer fired it |
 | `window-size latest` | A phone attaching does not shrink the session for the desk. Sizing follows the active client rather than the smallest one |
 | `status-position top` | The iOS keyboard covers the bottom of the screen, which is where the session name and window list would otherwise sit |
 | `automatic-rename off` | Reattaching from a phone means picking a window from a list. A name that tracks the running process is useless for that |
@@ -116,7 +116,7 @@ and the Control panel buttons, and Telegram still answers `/new`, `/resume` and
 Telegram's `/bind NAME` associates a topic with a running session.
 
 `ags adopt [NAME [AGENT]]` writes records for running sessions that predate
-them, `ags restore [--dry-run]` starts every open record that is not running,
+them, `ags restore [--dry-run | --hint]` starts every open record that is not running,
 and `ags history [NAME]` lists each name's conversations. All three are
 described under [Records](#records).
 
@@ -229,11 +229,19 @@ file, after one backup to `settings.json.pre-ags`.
 **A clean environment.** The launcher starts tmux without the variables Claude
 Code sets for its children (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_PID`
 and the rest), `AGENT_BRIDGE_*` other than `AGENT_BRIDGE_BIN` and
-`AGENT_BRIDGE_ENV`, `PANEPORT_*`, and a `GIT_EDITOR` of `true`, and removes the
-same names from a running server's global environment before each start. A
-session started from inside Claude, or by the bridge, would otherwise pass them
-to the agent it types, and Claude would record its next conversation as a
-one-shot run that rule 3 skips.
+`AGENT_BRIDGE_ENV`, `PANEPORT_*`, a `GIT_EDITOR` of `true`, and the terminal
+tab identifiers `ITERM_SESSION_ID` and `TERM_SESSION_ID`, and removes the same
+names from a running server's global environment before each start. A session
+started from inside Claude, or by the bridge, would otherwise pass them to the
+agent it types, and Claude would record its next conversation as a one-shot run
+that rule 3 skips. A tab identifier names the tab of whichever client started
+the server, and a pane outlives that tab, so a status line keyed on it would
+update the wrong one.
+
+Each new session also sets `DISABLE_AUTO_UPDATE=true` in its own environment
+(`new-session -e`). oh-my-zsh's update check otherwise asks `[Y/n]` in a new
+pane's shell while the launcher types the agent command, and the prompt eats
+the command's first character.
 
 ## Records
 
@@ -270,6 +278,31 @@ hub off expire nothing. An expired record is closed, and `/open NAME` brings it
 back on its pin while Claude still keeps the transcript, 30 days by default.
 `--dry-run` prints what it would do. A `restore.lock` keeps two runs apart, and
 a lock from before the boot, or whose pid is gone, is taken over.
+
+**`restore --hint`** starts nothing. It prints one line when an open record is
+not running and no hint in this boot has named it yet, for a shell's first
+prompt to show after a reboot:
+
+```text
+ags: 2 recorded sessions are not running. ags restore resumes those not expired.
+```
+
+It runs without tmux too, never reads a transcript and never writes a record.
+It leaves out a record restore is sure to expire, judged by file times alone,
+so it can count one restore goes on to expire but never misses one restore
+would start. Each session it names gets an entry, a directory under
+`hint/<boot id>/` in the state directory, and every hint within 10 seconds of
+the newest entry prints again, so all the tabs a login reopens together show
+it. A running, closed or left-out session loses its entry, so its next stop is
+new again, and a new boot removes the old boot's entries. `restore` makes an
+entry for each start it reports as failed, dated outside that window, so the
+next prompt does not repeat it. The hint stays silent where it cannot judge:
+no state directory, a locked home, no boot id, a restore in progress, or a
+tmux that does not answer within a second. It always exits 0 except for a
+usage error. `AGENT_SESSION_BOOT_ID` overrides the boot id, read from
+`kern.bootsessionuuid` on macOS and `/proc/sys/kernel/random/boot_id` on
+Linux, and `AGENT_SESSION_BOOT_EPOCH` the boot time, read from `kern.boottime`
+and `/proc/stat`.
 
 **Activity.** `open` touches `seen`, except a start by `restore`. Two session
 hooks run `agent-session.sh seen NAME` when a client attaches or detaches, a
@@ -564,6 +597,9 @@ Run the offline regression suite with:
 python3 scripts/test_agent_bridge.py
 python3 scripts/test_agent_session.py
 ```
+
+On macOS `test_agent_session.py` runs the launcher with `/bin/bash`, the stock
+3.2, and prints the version it used.
 
 The bridge never deletes a topic. Removing one is a human decision about
 history.
