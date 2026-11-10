@@ -2,6 +2,190 @@
 
 set -u
 
+# The seeder never extends a list the live file already has, so a baseline
+# SessionStart entry (the launcher's pin hook) is added here. An entry counts
+# as present when any live hook runs the same command as any of its hooks.
+# User entries are kept and a present entry is never rewritten. This is the one
+# exception to "live wins" on the wiki's install safety page.
+ensure_session_start_hooks() {
+  local live="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+  local baseline="$DOTFILES_PATH/config/claude/settings.json"
+
+  if [ ! -f "$live" ]; then
+    echo "warning: $live is missing, run 02-seed-runtime-configs.sh first. No SessionStart hook added."
+    return 0
+  fi
+  python3 - "$baseline" "$live" <<'PY'
+import json, os, shutil, sys, tempfile
+
+baseline_path, live_path = sys.argv[1], sys.argv[2]
+with open(baseline_path) as handle:
+    baseline = json.load(handle).get("hooks", {}).get("SessionStart", [])
+with open(live_path) as handle:
+    live = json.load(handle)
+
+entries = live.setdefault("hooks", {}).setdefault("SessionStart", [])
+commands = {hook.get("command") for entry in entries for hook in entry.get("hooks", [])}
+missing = [entry for entry in baseline
+           if not any(hook.get("command") in commands for hook in entry.get("hooks", []))]
+if not missing:
+    print(f"current: SessionStart hooks in {live_path}")
+    sys.exit(0)
+
+backup = live_path + ".pre-ags"
+if not os.path.exists(backup):
+    shutil.copy2(live_path, backup)
+entries.extend(missing)
+folder = os.path.dirname(live_path)
+fd, temp = tempfile.mkstemp(dir=folder, prefix=".settings.", suffix=".json")
+with os.fdopen(fd, "w") as handle:
+    json.dump(live, handle, indent=2, ensure_ascii=False)
+    handle.write("\n")
+os.chmod(temp, os.stat(live_path).st_mode & 0o777)
+os.replace(temp, live_path)
+print(f"staged: {len(missing)} SessionStart hook(s) in {live_path} (backup {backup})")
+PY
+}
+
+# On a Mac, agent sessions are opt-in and need only the launcher, its shell file
+# and the pin hook. Two links are made here rather than through dotbot, because
+# running the full install would replace the user's own ~/.zshrc. Nothing below
+# changes the caller's directory, since dotly sources this script.
+AGS_MARKER='# ags (dotfiles 51-agent-sessions.sh)'
+
+setup_agent_sessions_mac() {
+  local checkout link target tmux_conf zshrc settings resolved
+  local line='[ -r "$HOME/.dotfiles/shell/zsh/ags.zsh" ] && source "$HOME/.dotfiles/shell/zsh/ags.zsh"  '"$AGS_MARKER"
+
+  echo "Setting up agent sessions on macOS..."
+
+  if [ -z "${DOTFILES_PATH:-}" ] || [ ! -f "$DOTFILES_PATH/scripts/agent-session.sh" ] \
+    || [ ! -f "$DOTFILES_PATH/shell/zsh/ags.zsh" ]; then
+    echo "blocked: DOTFILES_PATH must name a dotfiles checkout holding scripts/agent-session.sh and shell/zsh/ags.zsh"
+    FAILED=1
+  elif ! command -v python3 >/dev/null 2>&1; then
+    echo "blocked: python3 is missing, and the pin hook needs it"
+    FAILED=1
+  elif ! python3 -c 'import json, sys; json.load(open(sys.argv[1]))' \
+    "$DOTFILES_PATH/config/claude/settings.json" >/dev/null 2>&1; then
+    echo "blocked: $DOTFILES_PATH/config/claude/settings.json is not JSON, unlock the checkout with git-crypt"
+    FAILED=1
+  fi
+  [ "$FAILED" -eq 0 ] || { agent_sessions_mac_done; return; }
+  checkout="$(cd -P "$DOTFILES_PATH" >/dev/null 2>&1 && pwd -P)"
+  echo "current: checkout $checkout"
+
+  if command -v tmux >/dev/null 2>&1; then
+    echo "current: tmux $(command -v tmux)"
+  elif command -v brew >/dev/null 2>&1; then
+    if HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install tmux; then
+      echo "staged: tmux (brew install tmux)"
+    else
+      echo "blocked: brew install tmux failed"
+      FAILED=1
+    fi
+  else
+    echo "blocked: tmux is missing and there is no brew to install it"
+    FAILED=1
+  fi
+
+  # Every later step binds to the launcher behind this link.
+  link="$HOME/.dotfiles"
+  if [ ! -e "$link" ] && [ ! -L "$link" ]; then
+    if ln -s "$checkout" "$link"; then
+      echo "staged: $link -> $checkout"
+    else
+      echo "blocked: cannot link $link to $checkout"
+      FAILED=1
+    fi
+  elif [ "$(cd -P "$link" >/dev/null 2>&1 && pwd -P)" != "$checkout" ]; then
+    target="$link"
+    [ ! -L "$link" ] || target="$(readlink "$link")"
+    echo "blocked: $link is $target, not $checkout. Skipping ~/.tmux.conf, ~/.zshrc and the pin hook."
+    FAILED=1
+  else
+    echo "current: $link"
+  fi
+  [ "$(cd -P "$link" >/dev/null 2>&1 && pwd -P)" = "$checkout" ] || { agent_sessions_mac_done; return; }
+
+  # A real tmux config is the user's. The launcher starts its server with it
+  # whenever it is readable, so it must source the agent settings itself.
+  tmux_conf="$HOME/.tmux.conf"
+  if [ ! -e "$tmux_conf" ] && [ ! -L "$tmux_conf" ]; then
+    if ln -s "$HOME/.dotfiles/config/tmux/tmux.conf" "$tmux_conf"; then
+      echo "staged: $tmux_conf -> ~/.dotfiles/config/tmux/tmux.conf"
+    else
+      echo "blocked: cannot link $tmux_conf"
+      FAILED=1
+    fi
+  elif [ "$tmux_conf" -ef "$checkout/config/tmux/tmux.conf" ]; then
+    echo "current: $tmux_conf"
+  else
+    target="a file"
+    [ ! -L "$tmux_conf" ] || target="a link to $(readlink "$tmux_conf")"
+    echo "left alone: $tmux_conf is $target, so sessions run without the agent settings."
+    echo "            Add this line to it: source-file ~/.dotfiles/config/tmux/tmux.conf"
+  fi
+
+  # The marker comment is how a second run finds the line, commented out or not.
+  zshrc="${ZDOTDIR:-$HOME}/.zshrc"
+  if [ -f "$zshrc" ] && grep -qF "$AGS_MARKER" "$zshrc"; then
+    echo "current: $zshrc"
+  elif [ -L "$zshrc" ]; then
+    resolved="$(readlink -f "$zshrc" 2>/dev/null)"
+    case "$resolved" in
+      "$checkout"/*) echo "current: $zshrc (full install, aliases only, no hint)" ;;
+      *)
+        echo "left alone: $zshrc is a link to $(readlink "$zshrc")."
+        echo "            Add this line where your shell config lives:"
+        echo "            $line"
+        ;;
+    esac
+  elif [ ! -e "$zshrc" ]; then
+    if printf '%s\n' "$line" > "$zshrc"; then
+      echo "staged: $zshrc (created)"
+    else
+      echo "blocked: cannot write $zshrc"
+      FAILED=1
+    fi
+  elif [ ! -e "$zshrc.pre-ags" ] && ! cp -p "$zshrc" "$zshrc.pre-ags"; then
+    echo "blocked: cannot back up $zshrc, so nothing was appended"
+    FAILED=1
+  else
+    { [ -z "$(tail -c1 "$zshrc")" ] || printf '\n'; printf '%s\n' "$line"; } >> "$zshrc" \
+      && echo "staged: $zshrc (backup $zshrc.pre-ags)" \
+      || { echo "blocked: cannot append to $zshrc"; FAILED=1; }
+  fi
+
+  # The hub's advice to seed runtime configs would also add the baseline's
+  # Stop and Notification hooks, which are not wanted here.
+  settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+  if [ ! -f "$settings" ]; then
+    echo "blocked: $settings is missing, start claude once so it writes its settings, then run this again"
+    FAILED=1
+  else
+    ensure_session_start_hooks || FAILED=1
+  fi
+
+  agent_sessions_mac_done
+}
+
+agent_sessions_mac_done() {
+  echo
+  if [ "$FAILED" -ne 0 ]; then
+    echo "Agent session setup finished with problems. Review the output above."
+    return 1
+  fi
+  echo "Agent session setup complete."
+}
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  FAILED=0
+  setup_agent_sessions_mac
+  AGS_STATUS=$?
+  return "$AGS_STATUS" 2>/dev/null || exit "$AGS_STATUS"
+fi
+
 if [ "$(uname -s)" != "Linux" ]; then
   echo "Skipping agent session setup: not Linux."
   return 0 2>/dev/null || exit 0
@@ -79,51 +263,6 @@ else
   echo "blocked: cannot create $AGENT_ROOT/state"
   FAILED=1
 fi
-
-# The seeder never extends a list the live file already has, so a baseline
-# SessionStart entry (the launcher's pin hook) is added here. An entry counts
-# as present when any live hook runs the same command as any of its hooks.
-# User entries are kept and a present entry is never rewritten. This is the one
-# exception to "live wins" on the wiki's install safety page.
-ensure_session_start_hooks() {
-  local live="$HOME/.claude/settings.json"
-  local baseline="$DOTFILES_PATH/config/claude/settings.json"
-
-  if [ ! -f "$live" ]; then
-    echo "warning: $live is missing, run 02-seed-runtime-configs.sh first. No SessionStart hook added."
-    return 0
-  fi
-  python3 - "$baseline" "$live" <<'PY'
-import json, os, shutil, sys, tempfile
-
-baseline_path, live_path = sys.argv[1], sys.argv[2]
-with open(baseline_path) as handle:
-    baseline = json.load(handle).get("hooks", {}).get("SessionStart", [])
-with open(live_path) as handle:
-    live = json.load(handle)
-
-entries = live.setdefault("hooks", {}).setdefault("SessionStart", [])
-commands = {hook.get("command") for entry in entries for hook in entry.get("hooks", [])}
-missing = [entry for entry in baseline
-           if not any(hook.get("command") in commands for hook in entry.get("hooks", []))]
-if not missing:
-    print(f"current: SessionStart hooks in {live_path}")
-    sys.exit(0)
-
-backup = live_path + ".pre-ags"
-if not os.path.exists(backup):
-    shutil.copy2(live_path, backup)
-entries.extend(missing)
-folder = os.path.dirname(live_path)
-fd, temp = tempfile.mkstemp(dir=folder, prefix=".settings.", suffix=".json")
-with os.fdopen(fd, "w") as handle:
-    json.dump(live, handle, indent=2, ensure_ascii=False)
-    handle.write("\n")
-os.chmod(temp, os.stat(live_path).st_mode & 0o777)
-os.replace(temp, live_path)
-print(f"staged: {len(missing)} SessionStart hook(s) in {live_path} (backup {backup})")
-PY
-}
 
 ensure_session_start_hooks || FAILED=1
 
