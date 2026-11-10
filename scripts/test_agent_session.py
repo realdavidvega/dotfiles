@@ -1308,6 +1308,78 @@ class ClipboardTests(unittest.TestCase):
         self.assertEqual(self.copy('text', '--buffer-hook', DISPLAY=':99'), 'xclip|unset|unset|text')
 
 
+PIN_MISSING = ('ags: the pin hook is missing from {file}, so /clear will not be followed. Run agent session '
+               'setup again (restoration_scripts/51-agent-sessions.sh, with DOTFILES_PATH set to the checkout).')
+PIN_DANGLING = ('ags: ~/.dotfiles/scripts/agent-session.sh is missing, so the pin hook does nothing and /clear '
+                'will not be followed. Run agent session setup again (restoration_scripts/51-agent-sessions.sh, '
+                'with DOTFILES_PATH set to the checkout).')
+
+
+@real_tmux
+class PinWarningTests(unittest.TestCase):
+    def setUp(self):
+        self.box = Sandbox(self)
+        self.settings = self.box.home / '.claude/settings.json'
+        self.settings.parent.mkdir()
+        self.settings.write_text('{"hooks": {}}\n')
+
+    def merged(self, *args, **extra):
+        """stdout and stderr in the order they were written."""
+        return subprocess.run([BASH, str(SCRIPT), *args], env=dict(self.box.env, **extra),
+                              cwd=str(self.box.repo), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, timeout=60, stdin=subprocess.DEVNULL).stdout.splitlines()
+
+    def pinned(self):
+        from test_agent_sessions_setup import baseline_parses, pinned_settings
+        if not baseline_parses():
+            self.skipTest('config/claude is locked, unlock it with git-crypt')
+        pinned_settings(self, self.settings)
+
+    def test_open_warns_after_its_started_line(self):
+        lines = self.merged('open', 'w1', '--detached')
+        self.assertTrue(lines[0].startswith('Started w1 with claude'), lines)
+        self.assertEqual(lines[1], PIN_MISSING.format(file='~/.claude/settings.json'))
+        self.assertEqual(lines[2], 'Use ags open w1 to attach.')
+
+    def test_a_present_hook_warns_only_when_its_launcher_is_gone(self):
+        self.pinned()
+        dotfiles = self.box.home / '.dotfiles'
+        dotfiles.symlink_to(SCRIPT.parent.parent)
+        lines = self.merged('open', 'w1', '--detached')
+        self.assertEqual([line for line in lines if line.startswith('ags:')], [], lines)
+        dotfiles.unlink()
+        dotfiles.symlink_to(self.box.root / 'gone')
+        lines = self.merged('open', 'w2', '--detached')
+        self.assertEqual(lines[1], PIN_DANGLING, lines)
+
+    def test_claude_config_dir_names_the_file_checked(self):
+        self.pinned()
+        (self.box.home / '.dotfiles').symlink_to(SCRIPT.parent.parent)
+        other = self.box.root / 'claude-config'
+        other.mkdir()
+        (other / 'settings.json').write_text('{}\n')
+        lines = self.merged('open', 'w1', '--detached', CLAUDE_CONFIG_DIR=str(other))
+        self.assertEqual(lines[1], PIN_MISSING.format(file=other / 'settings.json'), lines)
+
+    def test_restore_warns_once(self):
+        box = self.box
+        box.env['AGENT_SESSION_BOOT_EPOCH'] = str(int(time.time()) - 3600)
+        box.make_record('r1', box.repo)
+        box.make_record('r2', box.repo)
+        dry = box.cli('restore', '--dry-run')
+        self.assertNotIn('ags:', dry.stdout + dry.stderr)
+        result = box.cli('restore')
+        self.assertEqual(result.stderr.splitlines(), [PIN_MISSING.format(file='~/.claude/settings.json')])
+        started = [line for line in result.stdout.splitlines() if line.startswith('Started')]
+        self.assertEqual(len(started), 2, result.stdout)
+        self.assertNotIn('ags:', result.stdout)
+
+    def test_no_settings_file_no_warning(self):
+        self.settings.unlink()
+        lines = self.merged('open', 'w1', '--detached')
+        self.assertEqual([line for line in lines if line.startswith('ags:')], [], lines)
+
+
 def setUpModule():
     version = subprocess.run([BASH, '-c', 'echo "$BASH_VERSION"'], capture_output=True, text=True).stdout
     print(f'launcher bash: {BASH} {version.strip()}')

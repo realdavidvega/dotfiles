@@ -792,14 +792,38 @@ newest_unpinned_transcript() {
   return 1
 }
 
-# Inside tmux, attaching is an error. Switching is what was meant.
+# Inside tmux, attaching is an error. Switching is what was meant. A message
+# shows in the status line for 10 seconds once the screen has changed.
 enter_session() {
-  local name="$1"
+  local name="$1" message="${2:-}"
+  local -a show=()
 
+  [[ -z "$message" ]] || show=(\; display-message -d 10000 "$message")
   if [[ -n "${TMUX:-}" ]]; then
-    tmux switch-client -t "=$name"
+    tmux switch-client -t "=$name" ${show[@]+"${show[@]}"}
   else
-    tmux attach-session -t "=$name"
+    tmux attach-session -t "=$name" ${show[@]+"${show[@]}"}
+  fi
+}
+
+# Why /clear would go unfollowed, or nothing. The file is the one Claude reads
+# its hooks from, and its JSON always stores the pin command's quote escaped.
+# A missing file means Claude has not run yet. The short form fits the status
+# line, which cuts a message at the client's width.
+PIN_WARNING=""
+PIN_WARNING_SHORT="ags: pin hook missing, /clear will not be followed. Run 51-agent-sessions.sh."
+pin_hook_check() {
+  local settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" shown
+  local fix="Run agent session setup again (restoration_scripts/51-agent-sessions.sh, with DOTFILES_PATH set to the checkout)."
+
+  PIN_WARNING=""
+  [[ -f "$settings" ]] || return 0
+  shown="$settings"
+  [[ "$shown" != "$HOME"/* ]] || shown="~${shown#"$HOME"}"
+  if ! grep -qF 'agent-session.sh\" pin' "$settings" 2>/dev/null; then
+    PIN_WARNING="ags: the pin hook is missing from $shown, so /clear will not be followed. $fix"
+  elif [[ ! -x "$HOME/.dotfiles/scripts/agent-session.sh" ]]; then
+    PIN_WARNING="ags: ~/.dotfiles/scripts/agent-session.sh is missing, so the pin hook does nothing and /clear will not be followed. $fix"
   fi
 }
 
@@ -1105,12 +1129,21 @@ cmd_open() {
   [[ -z "$phrase" ]] || tail=", $phrase$note"
   announce_session "$name" --text "🟢 $name $how, $agent in $dir$tail."
 
-  # The first line is what Telegram shows, so it stands on its own.
+  # The first line is what Telegram shows, so it stands on its own. restore
+  # warns once for all its starts.
   printf 'Started %s with %s in %s %s%s.\n' "$name" "$agent" "$dir" "$label" "$tail"
+  local short=""
+  if [[ "$agent" == claude && "${AGENT_SESSION_VIA:-}" != restore ]]; then
+    pin_hook_check
+    if [[ -n "$PIN_WARNING" ]]; then
+      printf '%s\n' "$PIN_WARNING" >&2
+      short="$PIN_WARNING_SHORT"
+    fi
+  fi
   if [[ "$detached" == true ]]; then
     printf 'Use ags open %s to attach.\n' "$name"
   else
-    enter_session "$name"
+    enter_session "$name" "$short"
   fi
 }
 
@@ -1710,6 +1743,15 @@ cmd_restore() {
     fi
     starting+=("$each")
   done < <(record_names)
+
+  if [[ "$dry" == false ]]; then
+    for each in ${starting[@]+"${starting[@]}"}; do
+      [[ "$(record_get "$each" agent)" == claude ]] || continue
+      pin_hook_check
+      [[ -z "$PIN_WARNING" ]] || printf '%s\n' "$PIN_WARNING" >&2
+      break
+    done
+  fi
 
   for each in ${starting[@]+"${starting[@]}"}; do
     if [[ "$dry" == true ]]; then
