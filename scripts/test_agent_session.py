@@ -120,12 +120,18 @@ class Sandbox:
         return subprocess.run(['tmux', 'has-session', '-t', '=' + name], env=self.env,
                               capture_output=True).returncode == 0
 
-    def wait_for(self, predicate, what='the expected state'):
-        for _ in range(100):
-            if predicate():
-                return
+    def wait_for(self, predicate, what='the expected state', timeout=15):
+        # Generous, since a loaded host can take seconds to start a shell.
+        deadline = time.monotonic() + timeout
+        while not predicate():
+            if time.monotonic() > deadline:
+                self.case.fail(f'timed out waiting for {what}')
             time.sleep(.05)
-        self.case.fail(f'timed out waiting for {what}')
+
+    def prompt_in(self, target):
+        """Wait for a new pane's shell to print its prompt, after which it has
+        set up its handlers and a C-c no longer kills it."""
+        self.wait_for(lambda: self.tmux('capture-pane', '-p', '-t', target).strip(), f'a prompt in {target}')
 
     def invocations(self):
         return self.record.read_text().splitlines() if self.record.exists() else []
@@ -581,10 +587,11 @@ class HookTests(unittest.TestCase):
         self.hook('p:agent', taken)
         self.assertEqual(box.field('p', 'conversation'), self.pin)
         box.cli('open', 'sh', 'shell', '--detached')
+        box.prompt_in('sh:agent')
         self.hook('sh:agent', new)
         self.assertIsNone(box.field('sh', 'conversation'))
         box.tmux('new-session', '-d', '-s', 'bare', '-n', 'agent')
-        time.sleep(.5)
+        box.prompt_in('bare:agent')
         self.hook('bare:agent', new)
         self.assertFalse((box.state / 'sessions/bare').exists())
 
@@ -1546,15 +1553,18 @@ class IdleCloseTests(unittest.TestCase):
         box = Sandbox(self, bridge=True)
         box.cli('open', 'idle', 'shell', '--detached')
         box.cli('open', 'busy', 'shell', '--detached')
-        box.wait_for(box.announced.exists, 'the open announcements')
+        def announced():
+            return box.announced.read_text().splitlines() if box.announced.exists() else []
+        box.wait_for(lambda: {'idle', 'busy'} <= {line.split()[1] for line in announced() if ' ' in line},
+                     'the open announcements')
         (box.state / 'idle-sweep').unlink(missing_ok=True)
-        before = len(box.announced.read_text().splitlines())
+        before = len(announced())
         result = box.cli('seen', 'busy', AGENT_SESSION_NOW=self.ahead)
         self.assertEqual(result.stdout + result.stderr, '')
         self.assertFalse(box.running('idle'))
         self.assertFalse(box.running('busy'))
-        box.wait_for(lambda: len(box.announced.read_text().splitlines()) >= before + 2, 'the close announcements')
-        closes = box.announced.read_text().splitlines()[before:]
+        box.wait_for(lambda: sum('--no-create' in line for line in announced()[before:]) >= 2, 'the close announcements')
+        closes = announced()[before:]
         self.assertIn('topic idle --no-create --no-buttons --text closed idle after 22 idle days. '
                       '/open idle picks the conversation up again.', closes)
 
