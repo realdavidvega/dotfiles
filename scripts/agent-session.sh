@@ -490,6 +490,14 @@ group_of() {
   done < <(tmux list-sessions -F $'#{session_name}\t#{session_group}' 2>/dev/null || true)
 }
 
+# The grouped clients that joined NAME, one per line, NAME itself left out.
+group_members() {
+  local session group
+  while IFS=$'\t' read -r session group; do
+    if [[ "$group" == "$1" && "$session" != "$1" ]]; then printf '%s\n' "$session"; fi
+  done < <(tmux list-sessions -F $'#{session_name}\t#{session_group}' 2>/dev/null || true)
+}
+
 home_locked() {
   case "${AGENT_SESSION_LOCKED:-}" in
     1) return 0 ;;
@@ -1410,12 +1418,10 @@ cmd_mobile() {
 # Kills a session and every grouped client of it, the clients first, so no
 # copy of the agent survives in a second client.
 kill_session_group() {
-  local name="$1" client group
-  while IFS=$'\t' read -r client group; do
-    if [[ "$group" == "$name" && "$client" != "$name" ]]; then
-      tmux kill-session -t "=$client" 2>/dev/null || true
-    fi
-  done < <(tmux list-sessions -F $'#{session_name}\t#{session_group}' 2>/dev/null || true)
+  local name="$1" client
+  while IFS= read -r client; do
+    tmux kill-session -t "=$client" 2>/dev/null || true
+  done < <(group_members "$name")
   tmux kill-session -t "=$name"
 }
 
