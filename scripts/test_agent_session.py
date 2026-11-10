@@ -1233,7 +1233,9 @@ class HintGuardTests(unittest.TestCase):
         write_exec(box.bin / 'tmux', 'exec sleep 5\n')
         began = time.monotonic()
         self.assertEqual(self.hint(), '')
-        self.assertLess(time.monotonic() - began, 2)
+        # The watchdog fires at 1 s and the wedged tmux would take 5, which
+        # leaves a loaded host room to start the launcher.
+        self.assertLess(time.monotonic() - began, 4)
         self.assertFalse((box.state / 'hint').exists())
 
     def test_usage(self):
@@ -1585,7 +1587,9 @@ class IdleCloseGuardTests(unittest.TestCase):
         write_exec(self.box.bin / 'tmux', '[[ "$1" != list-panes ]] || exec sleep 5\n')
         began = time.monotonic()
         result = self.box.cli('close', '--idle', check=False)
-        self.assertLess(time.monotonic() - began, 2)
+        # The watchdog fires at 1 s and the wedged tmux would take 5, which
+        # leaves a loaded host room to start the launcher.
+        self.assertLess(time.monotonic() - began, 4)
         self.assertEqual((result.returncode, result.stdout), (1, ''))
         self.assertEqual(result.stderr, 'ags: tmux did not answer, nothing closed.\n')
         self.assertIsNone(self.box.field('vault', 'closed'))
