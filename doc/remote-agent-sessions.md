@@ -41,7 +41,7 @@ flowchart TD
 | Notification | Report on a detached session, finished or blocked | `scripts/agent-notify.sh`, `config/claude/settings.json`, `config/codex/config.baseline.toml` |
 | Aliases | Short forms for daily use | `aliases/.tmux-aliases` |
 | Telegram bridge | Control a session from a phone, any agent | `scripts/agent-bridge.py`, `os/linux/srv/agents/bridge.env.sample`, `os/linux/system/etc/systemd/system/agent-bridge.service` |
-| Hub staging | Plaintext copies for a host whose home is encrypted | `restoration_scripts/51-agent-sessions.sh` |
+| Agent session setup | On the hub, plaintext copies for a host whose home is encrypted. On a Mac, the links, the shell file and the pin hook ([On a Mac](#on-a-mac)) | `restoration_scripts/51-agent-sessions.sh`, `shell/zsh/ags.zsh` |
 | Voice notes | Local speech to text and text to speech. A voice note in a session topic becomes a confirm card, and 🔊 Listen reads a finished turn aloud | `scripts/voice.py`, `os/linux/srv/voice/`, `restoration_scripts/54-voice.sh` |
 | SSH key readability | Key login that works before the home is unlocked | `os/linux/system/etc/ssh/sshd_config.d/01-dotfiles-authorized-keys.conf` |
 | Packages | `mosh` for mobile links, `claude-code-tools` for `tmux-cli` | `os/linux/apt/packages.mint.txt`, `langs/python/uv_tools.txt` |
@@ -320,8 +320,65 @@ it types. So a session used from the desk or the phone never looks idle.
 3. `/open NAME` brings back an expired session, and `ags ls --all` lists every
    record.
 
+On a Mac there is no unlock. The first prompt of a terminal tab says when
+recorded sessions are not running, and `ags restore` starts them, as in
+[On a Mac](#on-a-mac).
+
 On a locked home the launcher starts only `shell` sessions, with no record,
 labelled `(home locked)`. `adopt` and `restore` refuse until `ags unlock`.
+
+## On a Mac
+
+The launcher, its records and the pin hook run on macOS too, without the full
+dotfiles install, which would replace an existing `~/.zshrc`. Sessions are
+opt-in there. A plain `claude` in a terminal tab keeps the tab's scrollback and
+status, and only a session opened with `ags` is recorded and restored.
+
+Setup runs the Mac branch of the agent session script from a checkout:
+
+```bash
+cd path/to/dotfiles && DOTFILES_PATH="$PWD" bash restoration_scripts/51-agent-sessions.sh
+```
+
+It reports each step as `current`, `staged`, `left alone` or `blocked`, and a
+second run changes nothing.
+
+| Step | What it does |
+|---|---|
+| Checkout | `DOTFILES_PATH` must hold the launcher and `shell/zsh/ags.zsh`, and its `config/claude/settings.json` must be unlocked with git-crypt |
+| tmux | Installed with `brew install tmux` when missing, without updating Homebrew first |
+| `~/.dotfiles` | Linked to the checkout when absent. Pointing anywhere else blocks the remaining steps, since each would bind to a launcher this run did not check |
+| `~/.tmux.conf` | Linked to the agent config when absent. A config of your own is left alone, and the run names the `source-file` line to add to it |
+| `~/.zshrc` | Backed up once to `~/.zshrc.pre-ags`, then one marked line is appended that sources `ags.zsh`. `ZDOTDIR` is honoured. A `~/.zshrc` linked into the checkout, a full install, gets the aliases and no hint |
+| Pin hook | Added to `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json` beside the hooks already there, backed up once to `settings.json.pre-ags`. A missing file means Claude has not run yet, so start it once and run setup again |
+
+`ags.zsh` exports `AGENT_SESSION_REPOS`, `~/Workspace/github` unless set, and
+sources the aliases. Further roots go in `~/.zshrc` above the marked line. It
+also registers the hint, in iTerm and Terminal tabs outside tmux only: the
+first prompt runs `ags restore --hint` once and prints its line, if any, after
+the prompt is drawn.
+
+```text
+ags: 3 recorded sessions are not running. ags restore resumes those not expired.
+```
+
+Every tab a login reopens prints it, and a later tab stays silent until another
+session stops. `ags restore` then brings the sessions back.
+
+**Moving a conversation into a session.** Exit the plain `claude` first, then
+`ags open NAME --resume` in its directory, so two processes never write one
+transcript.
+
+**The pin-hook warning.** Other programs rewrite Claude's settings file. When
+the pin hook has gone from it, or `~/.dotfiles` no longer reaches the launcher,
+`ags open` and `ags restore` say so on stderr, and an `open` that attaches also
+shows a short form in tmux's status line for 10 seconds. Run setup again.
+
+**Switching it off.** Comment out the marked line in `~/.zshrc`, which removes
+the aliases and the hint. Deleting it lasts only until setup runs again. The
+pin hook can stay, since it returns at once outside a recorded pane. Never
+restore the `.pre-ags` backups, which would revert every later edit to those
+files.
 
 ## Notifications
 
@@ -596,10 +653,13 @@ Run the offline regression suite with:
 ```bash
 python3 scripts/test_agent_bridge.py
 python3 scripts/test_agent_session.py
+python3 scripts/test_agent_sessions_setup.py
 ```
 
 On macOS `test_agent_session.py` runs the launcher with `/bin/bash`, the stock
-3.2, and prints the version it used.
+3.2, and prints the version it used. `test_agent_sessions_setup.py` runs the
+Mac branch of the setup script and `ags.zsh` in sandboxes, and skips the zsh
+cases where zsh is missing.
 
 The bridge never deletes a topic. Removing one is a human decision about
 history.
@@ -798,6 +858,18 @@ sudo sshd -T | grep -i authorizedkeysfile
 sudo stat -c '%U:%G:%a %n' /etc/ssh/authorized_keys/"$USER"
 command -v mosh-server
 ```
+
+On a Mac, after setup, each on a tmux server started after it:
+
+| Check | Expect |
+|---|---|
+| M1 | `ags open probe`, then `zsh -ic "zstyle -L ':omz:update'"` in its shell window prints nothing. `/clear` in its Claude changes `~/.local/state/ags/sessions/probe/conversation` within seconds. A plain `claude` tab keeps its status. `tmux kill-session` on `probe` and a second session, then `ags restore`, brings both back with Claude in the foreground (`tmux display -p -t =probe:agent '#{pane_current_command}'`) |
+| M2 | On a server started by hand with `tmux -f config/tmux/tmux.conf new-session -d -s seed`, three terminal tabs, one attached to `probe` and focus on another: `ags say probe "reply with one word"` changes only the attached tab's status, or none. Again with `ITERM_SESSION_ID` set in the server's global environment before `probe` opens. Then `tmux kill-server` |
+| M3 | `tmux show -s copy-command` and `tmux show-hooks -g` show the script and `--buffer-hook`. With `tmux set -s set-clipboard off`, a non-ASCII copy-mode selection reaches `pbpaste`. `printf named \| tmux load-buffer -b paneport-x -` and `tmux paste-buffer -b paneport-x -d -t probe` leave `pbpaste` unchanged |
+| M4a | With one of two sessions killed and this boot's `hint/` directory removed, log out and back in. Every terminal tab reopened within 10 seconds of the first prints the hint, a tab opened a minute later prints nothing, and an IDE terminal prints nothing |
+| M4 | The same at the next reboot, and `ags restore` brings `probe` back in its own conversation |
+| M5 | `time (x=$(~/.dotfiles/scripts/agent-session.sh restore --hint))`, median of five, with 60 synthetic records in a scratch `AGENT_SESSION_STATE`: nothing stopped, six stopped with entries aged past the window. Also `time (ags restore --dry-run >/dev/null)` once |
+| M6 | Before setup adds the pin hook, the new launcher's `open probe0`, attached, shows the short warning whole in the status line, and the full one after a detach. Then `ags close probe0` |
 
 ## Troubleshooting
 
