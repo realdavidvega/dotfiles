@@ -427,9 +427,9 @@ both.
 - **New home-directory symlinks go in `symlinks/conf.yaml`** (cross-OS) or the
   per-OS variant. Do not add ad-hoc `ln -s` calls to restoration scripts for
   things that dotbot can express declaratively.
-- **Cross-OS scripts must branch on `$OSTYPE`.** See
-  `restoration_scripts/24-ollama-setup.sh` for the pattern (`darwin*` vs
-  `linux-gnu*`).
+- **Cross-OS scripts branch on `$OSTYPE` or `uname -s`.** Either can be faked
+  in tests. See `restoration_scripts/24-ollama-setup.sh` for `$OSTYPE`
+  (`darwin*` vs `linux-gnu*`) and `scripts/tmux-clipboard.sh` for `uname -s`.
 - **The `modules/dotly` submodule is upstream code.** Bumping it means
   `git -C modules/dotly pull` then committing the new submodule SHA. Do not
   patch dotly in place.
