@@ -38,6 +38,11 @@ Terminal commands:
                           --hint prints one line when a stopped session is
                           new to this boot, for a shell's first prompt
   history [name]          List each name's conversations, newest first
+  title <name> [text...]  Show or set the session's title, shown in the
+                          status line, the terminal title and ls. --clear,
+                          or a lone -, follows the agent's own title again.
+                          --edit is the editor behind a click on the
+                          status line
   unlock                  Unlock the hub's encrypted home, then run restore
                           (hub only). Runs restore when already unlocked too
 
@@ -603,6 +608,311 @@ set_seen_hooks() {
   tmux set-hook -t "=$name:" client-detached "$command" 2>/dev/null || true
 }
 
+# Session titles. A record may hold title, the user's own, and suggested, the
+# agent's latest terminal title. The user's wins until it is cleared.
+
+UTF8_LOCALE=""
+UTF8_KNOWN=false
+# The status line and ls cut a title to this many terminal cells, and every
+# title is capped at this many characters.
+TITLE_SHORT=40
+TITLE_MAX=80
+
+# The first UTF-8 locale this host has, in UTF8_LOCALE, or empty when it has
+# none. Bash counts and cuts characters by the locale, and the hub's services
+# may run with none. The answer is kept in the shell that asked, so a verb
+# calls this before its first $(clean_title), or every command substitution
+# looks it up again.
+utf8_locale() {
+  local list each
+  [[ "$UTF8_KNOWN" == false ]] || return 0
+  UTF8_KNOWN=true
+  list="$(locale -a 2>/dev/null || true)"
+  for each in C.UTF-8 en_US.UTF-8; do
+    if grep -qxF "$each" <<< "$list"; then
+      UTF8_LOCALE="$each"
+      return 0
+    fi
+  done
+  UTF8_LOCALE="$(grep -m 1 -E '\.(UTF-8|utf8)$' <<< "$list" || true)"
+}
+
+# Switches to that locale for counting. Called in a subshell, after
+# utf8_locale.
+use_utf8() {
+  export LC_ALL="${UTF8_LOCALE:-C}"
+}
+
+# The text cut to N characters, the ellipsis among them, in cut. With no UTF-8
+# locale it cuts bytes and drops a character the cut split.
+cut_text() {
+  cut="$1"
+  ((${#cut} > $2)) || return 0
+  if [[ -n "$UTF8_LOCALE" ]]; then
+    cut="${cut:0:$2-1}…"
+  else
+    cut="$(printf '%s' "${cut:0:$2-3}" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)..."
+  fi
+}
+
+# The text cut to N terminal cells, the ellipsis among them, in cut, and its
+# width in cells. CJK, Hangul, fullwidth forms and most emoji take two cells,
+# and combining marks, zero-width spaces and variation selectors none. It reads
+# UTF-8 bytes, because bash 3.2 cannot give a character's code point, so it is
+# called under LC_ALL=C and needs no UTF-8 locale.
+cut_cells() {
+  local text="$1" max="$2" i=0 len size ch width total=0 fit=0 fitcells=0
+  len=${#text}
+  while ((i < len)); do
+    case "${text:i:1}" in
+      [$'\xc0'-$'\xdf']) size=2 ;;
+      [$'\xe0'-$'\xef']) size=3 ;;
+      [$'\xf0'-$'\xf7']) size=4 ;;
+      *) size=1 ;;
+    esac
+    ch="${text:i:size}"
+    # No width: combining marks (U+0300 to U+036F), zero-width spaces and
+    # marks (U+200B to U+200F) and variation selectors (U+FE00 to U+FE0F).
+    # Two cells, in order: Hangul Jamo (U+1100), CJK radicals (U+2E80 to
+    # U+2FFF), CJK symbols, kana and ideographs (U+3000 to U+9FFF), Yi (U+A000
+    # to U+A4BF), Hangul syllables (U+AC00 to U+D7BF, three patterns), CJK
+    # compatibility ideographs (U+F900 to U+FAFF), CJK compatibility forms
+    # (U+FE30 to U+FE4F, two), fullwidth forms (U+FF01 to U+FF60, two) and
+    # signs (U+FFE0 to U+FFE6), emoji and pictographs (U+1F300 to U+1F6FF and
+    # U+1F900 to U+1FAFF), and the CJK extension planes (U+20000 to U+3FFFF).
+    case "$ch" in
+      $'\xcc'?|$'\xcd'[$'\x80'-$'\xaf']|$'\xe2\x80'[$'\x8b'-$'\x8f']|$'\xef\xb8'[$'\x80'-$'\x8f'])
+        width=0 ;;
+      $'\xe1'[$'\x84'$'\x85']?|$'\xe2'[$'\xba'-$'\xbf']?|[$'\xe3'-$'\xe9']??|$'\xea'[$'\x80'-$'\x92']?|$'\xea'[$'\xb0'-$'\xbf']?|[$'\xeb'$'\xec']??|$'\xed'[$'\x80'-$'\x9e']?|$'\xef'[$'\xa4'-$'\xab']?|$'\xef\xb8'[$'\xb0'-$'\xbf']|$'\xef\xb9'[$'\x80'-$'\x8f']|$'\xef\xbc'[$'\x81'-$'\xbf']|$'\xef\xbd'[$'\x80'-$'\xa0']|$'\xef\xbf'[$'\xa0'-$'\xa6']|$'\xf0\x9f'[$'\x8c'-$'\x9b']?|$'\xf0\x9f'[$'\xa4'-$'\xab']?|$'\xf0'[$'\xa0'-$'\xbf']??)
+        width=2 ;;
+      *) width=1 ;;
+    esac
+    ((total += width, i += size))
+    if ((total <= max - 1)); then fit=$i fitcells=$total; fi
+  done
+  if ((total <= max)); then
+    cut="$text" cells=$total
+  else
+    cut="${text:0:fit}…" cells=$((fitcells + 1))
+  fi
+}
+
+# Prints the text cleaned. With AGENT and NAME it is the agent's suggestion,
+# which also loses its status glyph and OpenCode's prefix, and prints nothing
+# when what is left is a placeholder or a shell's own title. Without them it is
+# the user's text.
+clean_title() {
+  utf8_locale
+  (
+    local text="$1" agent="${2:-}" name="${3:-}" bs='\' first host="" host_short="" cut marked=false
+    local suffixed="^${3:-}(-[A-Za-z]+)+\$" shell_title='^[^ @]+@[^ :]+:'
+    local assignment='^[A-Za-z_][A-Za-z0-9_]*=' word
+    local -a words=()
+    export LC_ALL=C
+    # Invalid UTF-8 goes first, because BSD tr stops at it.
+    text="$(printf '%s' "$text" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null | tr -d '\000-\037\177' || true)"
+    # And the C1 controls (U+0080 to U+009F), which a terminal may obey.
+    text="${text//$'\xc2'[$'\x80'-$'\x9f']/}"
+    if [[ -n "$agent" ]]; then
+      # tmux hands a written title back with each \ doubled.
+      text="${text//"$bs$bs"/$bs}"
+      # A status glyph is a first word with no ASCII from the symbol blocks
+      # (U+2000 to U+2FFF, lead byte E2) or among the emoji (F0), so a title in
+      # another script keeps its first word.
+      first="${text%% *}"
+      if [[ -z "${first//[! -~]/}" && ( "$first" == $'\xe2'* || "$first" == $'\xf0'* ) ]]; then
+        if [[ "$text" == *" "* ]]; then text="${text#* }"; else text=""; fi
+        marked=true
+      fi
+      if [[ "$text" == "OC | "* ]]; then text="${text#OC | }" marked=true; fi
+    fi
+    read -ra words <<< "$text" || true
+    text="${words[*]+"${words[*]}"}"
+    [[ -n "$text" ]] || exit 0
+    if [[ -n "$agent" ]]; then
+      IFS=$'\t' read -r host host_short < <(tmux display -p $'#{host}\t#{host_short}' 2>/dev/null || true) || true
+      shopt -s nocasematch
+      case "$text" in
+        "Claude Code"|Claude|Codex|OpenCode|Chat|"New session - "*) exit 0 ;;
+        "$agent"|"$name"|"$host"|"$host_short") exit 0 ;;
+      esac
+      [[ ! "$text" =~ $suffixed ]] || exit 0
+      shopt -u nocasematch
+      # A line typed at a shell names the agent it starts, or sets a variable,
+      # and either can carry a secret. A title the agent marked as its own,
+      # with a status glyph or OpenCode's prefix, was not typed, so it may
+      # name an agent.
+      if [[ "$marked" == false ]]; then
+        for word in "${words[@]}"; do
+          case "${word##*/}" in
+            claude|codex|opencode) exit 0 ;;
+          esac
+          [[ ! "$word" =~ $assignment ]] || exit 0
+        done
+      fi
+      [[ ! "$text" =~ $shell_title ]] || exit 0
+    fi
+    use_utf8
+    cut_text "$text" "$TITLE_MAX"
+    printf '%s' "$cut"
+  )
+}
+
+# Whether DIR is under a root whose content may leave the machine. The twin of
+# agent-notify.sh's list, with the same override, and a test keeps the default
+# lines identical.
+content_root() {
+  local dir root resolved default_roots
+  local -a roots=()
+  dir="$(physical "$1")" || return 1
+  default_roots="$HOME/Workspace/repos/github:$HOME/Workspace/repos/external"
+  default_roots+=":$HOME/workspace/repos/github:$HOME/workspace/repos/external"
+  default_roots+=":/srv/sync/blackvault:${DOTFILES_PATH:-$HOME/.dotfiles}"
+  [[ -n "${BLACK_VAULT_REPO:-}" ]] && default_roots+=":$BLACK_VAULT_REPO"
+  [[ -n "${BLACK_VAULT:-}" ]] && default_roots+=":$BLACK_VAULT"
+  IFS=: read -ra roots <<< "${AGENT_NOTIFY_BODY_ROOTS:-$default_roots}" || true
+  for root in ${roots[@]+"${roots[@]}"}; do
+    [[ -n "$root" ]] || continue
+    # agent-notify.sh expands a leading ~ in an override, so this does too.
+    case "$root" in "~"|"~/"*) root="$HOME${root:1}" ;; esac
+    resolved="$(physical "$root")" || continue
+    if [[ "$dir" == "$resolved" || "$dir" == "$resolved/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Whether the agent runs in the pane's foreground. Judged by its arguments,
+# because its process name is claude, a version number, node or python
+# depending on how it was installed: the agent itself, or an interpreter
+# running a script of its name. macOS's framework Python re-executes itself as
+# Python. With anything else in front, the title is the typed command line,
+# secrets included.
+agent_in_front() {
+  local pane="$1" agent="$2" tty state arg1 arg2 rest
+  tty="$(tmux display -p -t "$pane" '#{pane_tty}' 2>/dev/null)" || return 1
+  [[ -n "$tty" ]] || return 1
+  while read -r state arg1 arg2 rest; do
+    [[ "$state" == *+* ]] || continue
+    arg1="${arg1##*/}"
+    arg2="${arg2##*/}"
+    [[ "$arg1" != "$agent" ]] || return 0
+    case "$arg1" in
+      node|nodejs|bun|deno|python|python3|python3.*|Python) ;;
+      *) continue ;;
+    esac
+    case "$arg2" in
+      "$agent"|"$agent".js|"$agent".mjs|"$agent".cjs) return 0 ;;
+    esac
+  done < <(ps -t "${tty#/dev/}" -o stat=,args= 2>/dev/null || true)
+  return 1
+}
+
+# tmux reads a final ; as a command separator, so it is escaped, and -- keeps
+# a value starting with - from being read as a flag. Every set of title text
+# goes through here.
+set_text_option() {
+  local target="$1" option="$2" value="$3"
+  [[ "$value" != *';' ]] || value="${value%;}\\;"
+  tmux set-option -t "$target" -- "$option" "$value"
+}
+
+# A record's field without control characters, C1 included, in field_text, so
+# a hand-edited file cannot break a row or the JSON or reach the terminal.
+read_field() {
+  local LC_ALL=C
+  field_text=""
+  [[ -f "$SESSIONS_DIR/$1/$2" ]] || return 0
+  IFS= read -r field_text < "$SESSIONS_DIR/$1/$2" || true
+  field_text="${field_text//[[:cntrl:]]/}"
+  field_text="${field_text//$'\xc2'[$'\x80'-$'\x9f']/}"
+}
+
+# The title a record holds by itself, the user's or else the stored
+# suggestion, in field_text.
+record_title() {
+  read_field "$1" title
+  [[ -n "$field_text" ]] || read_field "$1" suggested
+}
+
+# Prints the title in force and its source, yours or suggested, separated by a
+# tab: the user's, else the running session's suggestion, else the stored one.
+# A tmux client without a UTF-8 locale prints each non-ASCII character as _,
+# so every read of title text passes -u.
+effective_title() {
+  local name="$1" live
+  read_field "$name" title
+  if [[ -n "$field_text" ]]; then
+    printf 'yours\t%s\n' "$field_text"
+    return 0
+  fi
+  live="$(tmux -u show-options -qv -t "=$name:" @ags-suggested 2>/dev/null || true)"
+  if [[ -n "$live" ]]; then
+    printf 'suggested\t%s\n' "$live"
+    return 0
+  fi
+  read_field "$name" suggested
+  [[ -z "$field_text" ]] || printf 'suggested\t%s\n' "$field_text"
+}
+
+# Shows the title in force on the session and its grouped clients. The status
+# line reads its own copy, cut short and with # doubled, because it treats
+# #[...] in an expanded option as a style.
+apply_title() {
+  local name="$1" source="" text="" short="" session hash='#'
+  local -a sessions=("$name")
+  tmux has-session -t "=$name" 2>/dev/null || return 0
+  tmux set-option -g @ags-launcher "$(launcher_path)" 2>/dev/null || true
+  IFS=$'\t' read -r source text <<< "$(effective_title "$name")" || true
+  if [[ -n "$text" ]]; then
+    short="$(export LC_ALL=C; cut_cells "$text" "$TITLE_SHORT"; printf '%s' "${cut//"$hash"/$hash$hash}")"
+  fi
+  while IFS= read -r session; do
+    sessions+=("$session")
+  done < <(group_members "$name")
+  for session in "${sessions[@]}"; do
+    if [[ -n "$text" ]]; then
+      set_text_option "=$session:" @ags-title "$text" 2>/dev/null || true
+      set_text_option "=$session:" @ags-title-status "$short" 2>/dev/null || true
+    else
+      tmux set-option -u -t "=$session:" @ags-title 2>/dev/null || true
+      tmux set-option -u -t "=$session:" @ags-title-status 2>/dev/null || true
+    fi
+  done
+}
+
+# Installs the hook that turns the agent's terminal title into a suggestion,
+# shows the title in force, and reads the title once in case the agent wrote
+# it before the hook existed. The read runs in the background, so an open never
+# waits for it. With new, the session was just created and its agent is not
+# typed yet, so there is nothing to read. Claude rewrites its title at every
+# change of its status glyph, so the hook compares the title without its first
+# glyph word against the last one seen and starts the launcher only when it
+# differs. Only the session name and the pane id reach the shell, never the
+# title.
+set_title_hook() {
+  local name="$1" created="${2:-}" pane="" launcher hook strip='#{s/^[^A-Za-z0-9 ]+ //:pane_title}'
+  valid_name "$name" && record_open "$name" || return 0
+  if [[ "$(record_get "$name" agent)" != shell ]]; then
+    pane="$(record_get "$name" pane)"
+    launcher="$(launcher_path)"
+    hook="if -F '#{!=:$strip,#{@ags-seen-title}}' {
+  set -pF @ags-seen-title '$strip'
+  run-shell -b '\"$launcher\" suggest $name #{pane_id} >/dev/null 2>&1 || true'
+}"
+    tmux set-hook -w -t "=$name:agent" pane-title-changed "$hook" 2>/dev/null || true
+    if [[ -n "$pane" ]]; then
+      tmux set-option -pF -t "$pane" @ags-seen-title "$strip" 2>/dev/null || true
+    fi
+  fi
+  apply_title "$name"
+  # After the title in force is shown, so the read's own apply_title is the last.
+  if [[ -n "$pane" && "$created" != new ]]; then
+    tmux run-shell -b "\"$launcher\" suggest $name $pane >/dev/null 2>&1 || true" 2>/dev/null || true
+  fi
+}
+
 # The conversation a running Claude in this pane holds, from Claude's own
 # per-process file. Internal to Claude Code, so it only ever fills an empty pin.
 claude_pid_conversation() {
@@ -692,6 +1002,7 @@ adopt_session() {
   fi
   record_create "$name" "$dir" "$agent" "$pane" "$pin" adopt
   set_seen_hooks "$name"
+  set_title_hook "$name"
   printf 'adopted %s (%s in %s)%s\n' "$name" "$agent" "$dir" "$note"
 }
 
@@ -877,7 +1188,7 @@ cmd_open() {
   local name="" dir="" agent="" agent_explicit=false mode=auto detached=false
   local resolve=false repo=false conversation_arg="" resume=false
   local recordable=false recorded=false closed=false replaced=false locked=false
-  local record_agent="" record_dir="" pin="" source="" label="" phrase="" note=""
+  local record_agent="" record_dir="" record_pin="" pin="" source="" label="" phrase="" note=""
   local notfound="" agent_cmd agent_bin pane top home reason folder
 
   while (($# > 0)); do
@@ -936,6 +1247,7 @@ cmd_open() {
       record_seen "$name"
       fill_pin_by_lookup "$name"
     fi
+    set_title_hook "$name"
     if [[ "$detached" == true ]]; then
       printf '%s is already running. Use ags open %s to attach.\n' "$name" "$name"
       return 0
@@ -983,6 +1295,7 @@ cmd_open() {
       record_closed "$name" && closed=true
       record_agent="$(record_get "$name" agent)"
       record_dir="$(record_get "$name" dir)"
+      record_pin="$(record_get "$name" conversation)"
     fi
     [[ -n "$agent" ]] || agent="${record_agent:-claude}"
     agent_binary "$agent" >/dev/null
@@ -1115,6 +1428,7 @@ cmd_open() {
        -P -F '#{pane_id}' 2>&1)"; then
     # Another start won the race. Nothing was written, so attach to it.
     if tmux has-session -t "=$name" 2>/dev/null; then
+      set_title_hook "$name"
       if [[ "$detached" == true ]]; then
         printf '%s is already running.\n' "$name"
         return 0
@@ -1137,8 +1451,20 @@ cmd_open() {
     else
       record_create "$name" "$dir" "$agent" "$pane" "" ""
     fi
+    # A title describes one piece of work, so only a start meant as new work
+    # drops it. A Claude start on any conversation but the record's is other
+    # work, whatever chose it. A record that never learned its conversation, as
+    # an adoption can leave one, drops it only for a new conversation, because
+    # the one found is likely the one it held. The other agents start fresh at
+    # every restore where they keep no history, so for them only --fresh or a
+    # replaced record says so.
+    if [[ "$mode" == fresh || "$replaced" == true ]] \
+       || [[ "$agent" == claude && ( "$source" == new || ( -n "$record_pin" && "$pin" != "$record_pin" ) ) ]]; then
+      rm -f "$SESSIONS_DIR/$name/title" "$SESSIONS_DIR/$name/suggested"
+    fi
   fi
   set_seen_hooks "$name"
+  set_title_hook "$name" new
 
   tmux new-window -t "=$name:" -c "$dir" -n shell
   tmux new-window -t "=$name:" -c "$dir" -n git
@@ -1175,8 +1501,8 @@ cmd_open() {
 # The foreground program is observable. An agent's internal task state is not.
 cmd_ls() {
   local all=false json=false sessions="" sid name windows attached group detail window running
-  local directory program path attachment state agent recorded idle first=true now each row
-  local r_name r_state r_running r_attachment r_windows r_directory r_agent r_recorded r_extra r_rdir rdir
+  local directory program path attachment state agent recorded idle first=true now each row title
+  local r_name r_state r_running r_attachment r_windows r_directory r_agent r_recorded r_extra r_rdir r_title rdir
   local US=$'\x1f'
   local -a rows=() running_names=()
 
@@ -1201,8 +1527,10 @@ cmd_ls() {
   now="$(date +%s)"
 
   # Each row: name, state, running, attachment, windows, directory, agent,
-  # recorded, and attached count or idle days. Unit-separator delimited,
-  # because read collapses runs of tabs and an empty field would shift the rest.
+  # recorded, attached count or idle days, record dir and title. The title is
+  # read from the record only, so a suggestion kept off the disk never shows
+  # here. Unit-separator delimited, because read collapses runs of tabs and an
+  # empty field would shift the rest.
   if [[ -n "$sessions" ]]; then
     while IFS=$'\t' read -r sid name windows attached group; do
       running_names+=("$name")
@@ -1230,11 +1558,12 @@ cmd_ls() {
         [[ -z "$group" || "$group" == "$name" ]] || continue
         [[ "$name" != *[[:cntrl:]]* ]] || continue
       fi
-      agent="" rdir="" recorded=0
+      agent="" rdir="" recorded=0 field_text=""
       if record_has "$name"; then
         agent="$(record_get "$name" agent)" rdir="$(record_get "$name" dir)" recorded=1
+        record_title "$name"
       fi
-      rows+=("$name$US""running$US${running:-unknown}$US$attachment$US$windows$US$directory$US$agent$US$recorded$US$attached$US$rdir")
+      rows+=("$name$US""running$US${running:-unknown}$US$attachment$US$windows$US$directory$US$agent$US$recorded$US$attached$US$rdir$US$field_text")
     done <<< "$sessions"
   fi
 
@@ -1252,13 +1581,14 @@ cmd_ls() {
       state=stopped running="stopped ${idle}d"
     fi
     rdir="$(record_get "$name" dir)"
-    rows+=("$name$US$state$US$running$US-$US-$US$rdir$US$(record_get "$name" agent)${US}1$US$idle$US$rdir")
+    record_title "$name"
+    rows+=("$name$US$state$US$running$US-$US-$US$rdir$US$(record_get "$name" agent)${US}1$US$idle$US$rdir$US$field_text")
   done < <(record_names)
 
   if [[ "$json" == true ]]; then
     printf '['
     for row in ${rows[@]+"${rows[@]}"}; do
-      IFS="$US" read -r r_name r_state r_running r_attachment r_windows r_directory r_agent r_recorded r_extra r_rdir <<< "$row"
+      IFS="$US" read -r r_name r_state r_running r_attachment r_windows r_directory r_agent r_recorded r_extra r_rdir r_title <<< "$row"
       [[ "$first" == true ]] || printf ','
       first=false
       printf '{"name":"%s","state":"%s",' "$(json_escape "$r_name")" "$r_state"
@@ -1269,10 +1599,11 @@ cmd_ls() {
       fi
       if [[ "$r_state" == running ]]; then
         if [[ "$r_extra" -gt 0 ]]; then printf '"attached":true,'; else printf '"attached":false,'; fi
-        printf '"windows":%s,"idle_days":null}' "$r_windows"
+        printf '"windows":%s,"idle_days":null,' "$r_windows"
       else
-        printf '"attached":null,"windows":null,"idle_days":%s}' "$r_extra"
+        printf '"attached":null,"windows":null,"idle_days":%s,' "$r_extra"
       fi
+      if [[ -n "$r_title" ]]; then printf '"title":"%s"}' "$(json_escape "$r_title")"; else printf '"title":null}'; fi
     done
     printf ']\n'
     return 0
@@ -1282,11 +1613,18 @@ cmd_ls() {
     printf 'No sessions.\n'
     return 0
   fi
-  printf '%-16s  %-14s  %-12s  %-7s  %s\n' SESSION RUNNING ATTACHMENT WINDOWS DIRECTORY
-  for row in "${rows[@]}"; do
-    IFS="$US" read -r name state running attachment windows directory _ <<< "$row"
-    printf '%-16s  %-14s  %-12s  %-7s  %s\n' "$name" "$running" "$attachment" "$windows" "$directory"
-  done
+  printf '%-16s  %-14s  %-12s  %-7s  %-*s  %s\n' SESSION RUNNING ATTACHMENT WINDOWS "$TITLE_SHORT" TITLE DIRECTORY
+  # The title is padded by its width in cells, because bash 3.2's printf pads
+  # by bytes.
+  (
+    export LC_ALL=C
+    for row in "${rows[@]}"; do
+      IFS="$US" read -r name state running attachment windows directory _ _ _ _ title <<< "$row"
+      cut_cells "${title:--}" "$TITLE_SHORT"
+      printf '%-16s  %-14s  %-12s  %-7s  %s%*s  %s\n' "$name" "$running" "$attachment" "$windows" \
+        "$cut" $((TITLE_SHORT - cells)) '' "$directory"
+    done
+  )
 }
 
 # Shared lifecycle verbs are detached so a command has the same effect from
@@ -1397,6 +1735,7 @@ attach_grouped() {
     tmux set-hook -t "$client" client-attached "$seen"
     tmux set-hook -t "$client" client-detached "$seen ; kill-session -t '$client'"
   fi
+  apply_title "$name"
 
   enter_session "$client"
 }
@@ -2111,6 +2450,170 @@ cmd_seen() {
   idle_sweep
 }
 
+# The session a pane belongs to, its group's name when it has one, or nothing.
+pane_session() {
+  tmux display -p -t "$1" '#{?#{!=:#{session_group},},#{session_group},#{session_name}}' 2>/dev/null || true
+}
+
+# Run by the pane-title-changed hook. Stores the agent's terminal title as the
+# session's suggestion, and writes it to the record only under the content
+# roots, because the hub's state directory sits outside its encrypted home.
+cmd_suggest() {
+  local name="${1:-}" pane="${2:-}" agent record_pane text now retry
+  umask 077
+  valid_name "$name" && record_open "$name" || return 0
+  agent="$(record_get "$name" agent)"
+  [[ -n "$agent" && "$agent" != shell ]] || return 0
+  # A pane id the record has not caught up with, or an agent briefly out of
+  # the foreground, says nothing about the title. The hook already marked it
+  # seen, so that mark is dropped and the next write tries again. Not for
+  # another pane while the record's is alive in this session, such as a split,
+  # which no retry can make the agent's. At most once in 5 seconds, or an agent
+  # out of the foreground while its glyph spins would start a launcher at every
+  # frame. A miss inside the window queues one retry for its end instead, and
+  # the retry lands where a miss opens a new window rather than queuing, so a
+  # pane whose agent has gone is never polled.
+  record_pane="$(record_get "$name" pane)"
+  if [[ -z "$pane" || "$pane" != "$record_pane" ]] || ! agent_in_front "$pane" "$agent"; then
+    [[ "$pane" =~ ^%[0-9]+$ && "$(pane_session "$pane")" == "$name" ]] || return 0
+    if [[ "$pane" != "$record_pane" && -n "$record_pane" && "$(pane_session "$record_pane")" == "$name" ]]; then
+      return 0
+    fi
+    now="$(date +%s)"
+    retry="$(tmux show-options -pqv -t "$pane" @ags-retry-at 2>/dev/null || true)"
+    [[ "$retry" =~ ^[0-9]+$ ]] || retry=0
+    if ((now >= retry)); then
+      tmux set-option -pu -t "$pane" @ags-seen-title \; set-option -p -t "$pane" @ags-retry-at "$((now + 5))" \
+        2>/dev/null || true
+    elif [[ "$(tmux show-options -pqv -t "$pane" @ags-retry-queued 2>/dev/null || true)" != "$retry" ]]; then
+      tmux set-option -p -t "$pane" @ags-retry-queued "$retry" \; run-shell -b -d "$((retry - now))" \
+        "\"$(launcher_path)\" suggest $name $pane >/dev/null 2>&1 || true" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  # A record left open across a reboot can hold a pane id the new server gave
+  # to another session, so the pane must be in this one or its group. The
+  # session's name comes first because a name holds no space.
+  text="$(tmux -u display -p -t "$pane" \
+    '#{?#{!=:#{session_group},},#{session_group},#{session_name}} #{pane_title}' 2>/dev/null)" || return 0
+  [[ "${text%% *}" == "$name" ]] || return 0
+  utf8_locale
+  text="$(clean_title "${text#* }" "$agent" "$name")"
+  [[ -n "$text" ]] || return 0
+  [[ "$text" != "$(tmux -u show-options -qv -t "=$name:" @ags-suggested 2>/dev/null || true)" ]] || return 0
+  set_text_option "=$name:" @ags-suggested "$text" || return 0
+  if content_root "$(record_get "$name" dir)"; then
+    record_set "$name" suggested "$text"
+  fi
+  apply_title "$name"
+}
+
+# The tests wait on this line, so it is written once suggest has finished.
+log_suggest() {
+  [[ -n "${AGENT_SESSION_SUGGEST_LOG:-}" ]] || return 0
+  printf '%s %s\n' "${1:-}" "${2:-}" >> "$AGENT_SESSION_SUGGEST_LOG"
+}
+
+title_usage() {
+  printf 'Usage: ags title <name> [text...|--clear|-]\n       ags title --edit\n' >&2
+}
+
+cmd_title() {
+  local name="${1:-}" source="" text=""
+  umask 077
+  utf8_locale
+  case "$name" in
+    "") title_usage; return 1 ;;
+    -h|--help) title_usage; return 0 ;;
+    --edit)
+      shift
+      if (($# > 0)); then title_usage; return 1; fi
+      title_edit
+      return
+      ;;
+    -*) printf 'Unknown option: %s\n\n' "$name" >&2; title_usage; return 1 ;;
+  esac
+  shift
+  name="${name//[.:]/-}"
+  valid_name "$name" || refuse "Session name $name is not valid."
+  record_has "$name" || refuse "No record named $name."
+
+  if (($# == 0)); then
+    IFS=$'\t' read -r source text <<< "$(effective_title "$name")" || true
+    if [[ -n "$text" ]]; then
+      printf '%s (%s)\n' "$text" "$source"
+    else
+      printf 'No title.\n'
+    fi
+    return 0
+  fi
+  # A lone - follows the agent, as it does in the popup.
+  if [[ $# -eq 1 && "$1" == - ]]; then set -- --clear; fi
+  case "$1" in
+    --clear)
+      if (($# > 1)); then title_usage; return 1; fi
+      rm -f "$SESSIONS_DIR/$name/title"
+      apply_title "$name"
+      IFS=$'\t' read -r source text <<< "$(effective_title "$name")" || true
+      if [[ -n "$text" ]]; then
+        printf '%s follows the agent: %s\n' "$name" "$text"
+      else
+        printf '%s follows the agent, which has suggested nothing yet.\n' "$name"
+      fi
+      return 0
+      ;;
+    --) shift ;;
+    --*) printf 'Unknown option: %s\n\n' "$1" >&2; title_usage; return 1 ;;
+  esac
+  text="$(clean_title "$*")"
+  [[ -n "$text" ]] || refuse "The title is empty."
+  record_set "$name" title "$text"
+  apply_title "$name"
+  printf 'Title of %s: %s\n' "$name" "$text"
+}
+
+# The popup's editor. Inside a popup, display -p answers for the client that
+# opened it, so a click on the mobile client edits the session it joined. The
+# line goes from read to the record and is never parsed by a shell.
+title_edit() {
+  local name source="" current="" line="" text recall
+  utf8_locale
+  [[ -n "${TMUX:-}" ]] || refuse "--edit runs inside tmux. Click the title or press prefix T."
+  name="$(tmux display -p '#{session_group}' 2>/dev/null || true)"
+  [[ -n "$name" ]] || name="$(tmux display -p '#{session_name}' 2>/dev/null || true)"
+  if ! valid_name "$name" || ! record_has "$name"; then
+    printf 'No record for %s, so it has no title.\n' "$name" >&2
+    read -r -n 1 _ || true
+    return 1
+  fi
+  IFS=$'\t' read -r source current <<< "$(effective_title "$name")" || true
+  # The popup's shell has the server's locale, which on the hub may be none,
+  # and readline then edits bytes. It takes the locale at its first read.
+  [[ -z "$UTF8_LOCALE" ]] || export LC_ALL="$UTF8_LOCALE"
+  if ((BASH_VERSINFO[0] >= 4)); then
+    read -r -e -i "$current" -p 'Title (- follows the agent): ' line || [[ -n "$line" ]] || return 0
+  else
+    # Bash 3.2 has no read -i, so Up recalls the current title instead. set -o
+    # history is left off, or the script's own lines would be recalled.
+    if [[ -n "$current" ]]; then
+      recall="$(mktemp)"
+      printf '%s\n' "$current" > "$recall"
+      history -r "$recall"
+      rm -f "$recall"
+    fi
+    read -r -e -p 'Title (Up recalls the current one, - follows the agent): ' line || [[ -n "$line" ]] || return 0
+  fi
+  text="$(clean_title "$line")"
+  if [[ "$text" == - ]]; then
+    rm -f "$SESSIONS_DIR/$name/title"
+  elif [[ -n "$text" && "$text" != "$current" ]]; then
+    record_set "$name" title "$text"
+  else
+    return 0
+  fi
+  apply_title "$name"
+}
+
 cmd_remote() {
   local host="${AGENT_SESSION_HOST:-mint}" remote_args quoted arg
 
@@ -2154,18 +2657,20 @@ cmd_unlock() {
   return "$status"
 }
 
-# The hook and the tmux client hooks run on every Claude start and every
-# attach, including where tmux is missing, so they never fail and never speak.
+# The hook and the tmux hooks run on every Claude start, every attach and
+# every title change, including where tmux is missing, so they never fail and
+# never speak.
 case "${1:-}" in
   pin)  shift; cmd_pin "$@" 2>/dev/null || true; exit 0 ;;
   seen) shift; cmd_seen "$@" 2>/dev/null || true; exit 0 ;;
+  suggest) shift; cmd_suggest "$@" 2>/dev/null || true; log_suggest "$@" 2>/dev/null || true; exit 0 ;;
 esac
 
 # Any other verb runs the ags-<verb> command on the PATH with the remaining
 # arguments, tmux or not, so `ags crew ls` runs `ags-crew ls`. Built-in verbs
 # always win, so an extension can never shadow one. Keep this list in step with
 # the dispatch below.
-BUILTIN_VERBS=" open new resume peek say esc enter ls list mobile close kill adopt restore history remote unlock help pin seen "
+BUILTIN_VERBS=" open new resume peek say esc enter ls list mobile close kill adopt restore history remote unlock title help pin seen suggest "
 if [[ "${1:-}" =~ ^[a-z][a-z0-9-]*$ && "$BUILTIN_VERBS" != *" $1 "* ]] && command -v "ags-$1" >/dev/null 2>&1; then
   extension="ags-$1"
   shift
@@ -2204,6 +2709,7 @@ case "$command" in
   adopt)       cmd_adopt "$@" ;;
   restore)     cmd_restore "$@" ;;
   history)     cmd_history "$@" ;;
+  title)       cmd_title "$@" ;;
   remote)      cmd_remote "$@" ;;
   unlock)      cmd_unlock ;;
   help|-h|--help) usage ;;
