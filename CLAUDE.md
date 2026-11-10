@@ -217,6 +217,7 @@ ags close --idle        # close sessions idle 21 days, as restore does
 ags adopt               # record running sessions that predate records
 ags restore             # after a reboot, start every open record
 ags history [name]      # each name's conversations
+ags title <name> [text|--clear|-]  # the session's title, shown in tabs and ls
 ags peek <name>         # read the agent pane
 ags say <name> "text"   # type into the agent pane and press Enter
 ags ls                  # list sessions
