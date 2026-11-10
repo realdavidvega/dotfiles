@@ -1595,6 +1595,58 @@ class IdleCloseGuardTests(unittest.TestCase):
         self.assertIsNone(self.box.field('vault', 'closed'))
 
 
+class ExtensionTests(unittest.TestCase):
+    """AX1: a verb that is not built in runs ags-<verb> from the PATH."""
+
+    def setUp(self):
+        self.box = Sandbox(self, real=False)
+        self.ran = self.box.root / 'ran'
+
+    def extension(self, path):
+        write_exec(path, f'touch {shlex.quote(str(self.ran))}\nprintf "[%s]" "${{0##*/}}" "$@"\nexit 7\n')
+
+    def test_an_extension_runs_with_its_arguments_without_tmux(self):
+        box = self.box
+        self.extension(box.bin / 'ags-zz')
+        result = box.cli('zz', 'ls', 'a b', '--x', check=False, PATH=path_without(box.root, 'tmux'))
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (7, '[ags-zz][ls][a b][--x]', ''))
+
+    def test_a_built_in_verb_wins(self):
+        box = self.box
+        for verb in ('ls', 'help', 'pin'):
+            self.extension(box.bin / f'ags-{verb}')
+        result = box.cli('ls', check=False, PATH=path_without(box.root, 'tmux'))
+        self.assertEqual((result.returncode, result.stderr), (1, 'tmux is not installed or not on PATH.\n'))
+        self.assertTrue(box.out('help').startswith('Usage: agent-session.sh'))
+        self.assertEqual(box.out('pin'), '')
+        self.assertFalse(self.ran.exists())
+
+    def test_the_built_in_list_matches_the_dispatch(self):
+        source = SCRIPT.read_text()
+        listed = set(re.search(r'^BUILTIN_VERBS=" (.*) "$', source, re.M).group(1).split())
+        dispatch = source[source.rindex('case "$command" in'):]
+        dispatch = dispatch[:dispatch.index('\nesac')]
+        labels = {verb for line in re.findall(r'^  ([a-z|-]+)\)', dispatch, re.M) for verb in line.split('|')}
+        self.assertEqual(listed, labels - {'-h', '--help'} | {'pin', 'seen'})
+
+    def test_a_verb_with_a_slash_is_refused(self):
+        box = self.box
+        write_exec(box.bin / 'tmux', 'exit 0\n')
+        (box.repo / 'ags-x').mkdir()
+        self.extension(box.repo / 'ags-x/zz')
+        result = box.cli('x/zz', check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stderr.startswith('Unknown command: x/zz\n'))
+        self.assertFalse(self.ran.exists())
+
+    def test_an_unknown_verb_keeps_its_usage_error(self):
+        box = self.box
+        write_exec(box.bin / 'tmux', 'exit 0\n')
+        result = box.cli('zz', check=False)
+        self.assertEqual((result.returncode, result.stdout), (1, ''))
+        self.assertTrue(result.stderr.startswith('Unknown command: zz\n\nUsage: agent-session.sh'))
+
+
 def setUpModule():
     version = subprocess.run([BASH, '-c', 'echo "$BASH_VERSION"'], capture_output=True, text=True).stdout
     print(f'launcher bash: {BASH} {version.strip()}')

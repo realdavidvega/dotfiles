@@ -41,6 +41,9 @@ Terminal commands:
   unlock                  Unlock the hub's encrypted home, then run restore
                           (hub only). Runs restore when already unlocked too
 
+Any other verb runs ags-<verb> from the PATH when one exists, so ags crew runs
+ags-crew. A built-in verb always wins.
+
 Agents: claude (default for a new name), codex, opencode, shell. A recorded
 name keeps its record's agent unless another is given.
 
@@ -2151,6 +2154,17 @@ case "${1:-}" in
   pin)  shift; cmd_pin "$@" 2>/dev/null || true; exit 0 ;;
   seen) shift; cmd_seen "$@" 2>/dev/null || true; exit 0 ;;
 esac
+
+# Any other verb runs the ags-<verb> command on the PATH with the remaining
+# arguments, tmux or not, so `ags crew ls` runs `ags-crew ls`. Built-in verbs
+# always win, so an extension can never shadow one. Keep this list in step with
+# the dispatch below.
+BUILTIN_VERBS=" open new resume peek say esc enter ls list mobile close kill adopt restore history remote unlock help pin seen "
+if [[ "${1:-}" =~ ^[a-z][a-z0-9-]*$ && "$BUILTIN_VERBS" != *" $1 "* ]] && command -v "ags-$1" >/dev/null 2>&1; then
+  extension="ags-$1"
+  shift
+  exec "$extension" "$@"
+fi
 
 # A shell's first prompt runs the hint wherever tmux is missing too. Its usage
 # error still exits 1.

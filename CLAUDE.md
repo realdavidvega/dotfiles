@@ -222,6 +222,7 @@ ags say <name> "text"   # type into the agent pane and press Enter
 ags ls                  # list sessions
 ags mobile <name>       # second client, sized independently of the first
 ags remote [args]       # run the same command on the hub over SSH
+ags crew ls             # any other verb runs ags-<verb> from the PATH
 agsrv                   # open the vault session on the hub
 ```
 

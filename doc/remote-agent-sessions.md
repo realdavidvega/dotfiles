@@ -120,6 +120,14 @@ them, `ags restore [--dry-run | --hint]` starts every open record that is not ru
 and `ags history [NAME]` lists each name's conversations. All three are
 described under [Records](#records).
 
+**Extensions.** Any other verb that matches `^[a-z][a-z0-9-]*$` runs the
+`ags-<verb>` command on the PATH with the remaining arguments, tmux or not, so
+`ags crew ls` runs paneport's `ags-crew ls`. `~/.local/bin` is on the launcher's
+PATH, and paneport's crew skill links `ags-crew` there. A built-in
+verb always wins, so an extension can never shadow one, and a verb with no
+command keeps the usage error. The launcher learns nothing about what an
+extension does, and `ags-crew` works under its own name without it.
+
 Pane commands resolve the active pane of the `agent` window, independent of
 which window a terminal client is viewing. Sessions without an `agent` window
 use their selected window. Text is sent literally, with Enter as a separate
