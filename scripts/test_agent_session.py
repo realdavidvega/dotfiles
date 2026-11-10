@@ -1412,6 +1412,175 @@ class PinWarningTests(unittest.TestCase):
         self.assertEqual([line for line in lines if line.startswith('ags:')], [], lines)
 
 
+IDLE_ONE = 'ags: closed 1 session idle 21+ days: {0}. ags open {0} resumes it.\n'
+IDLE_MANY = 'ags: closed {} sessions idle 21+ days: {}. ags open NAME resumes.\n'
+IDLE_NONE = 'ags: no session idle 21+ days.\n'
+DAY = 86400
+
+
+@real_tmux
+class IdleCloseTests(unittest.TestCase):
+    """T11. Every case runs the sweep 22 days ahead of the files and tmux's
+    activity, unless it says otherwise."""
+
+    def setUp(self):
+        self.box = Sandbox(self)
+
+    @property
+    def ahead(self):
+        return str(int(time.time()) + 22 * DAY + 60)
+
+    def close_idle(self, now=None, **extra):
+        return self.box.cli('close', '--idle', AGENT_SESSION_NOW=now or self.ahead, **extra)
+
+    def shell(self, name):
+        self.box.cli('open', name, 'shell', '--detached')
+
+    def attach(self, name):
+        client = subprocess.Popen(['tmux', '-C', 'attach', '-t', name], env=self.box.env,
+                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for step in (client.stdin.close, client.wait, client.kill):
+            self.addCleanup(step)
+        self.box.wait_for(lambda: self.box.tmux('display', '-p', '-t', '=' + name, '#{session_attached}') != '0',
+                          f'a client on {name}')
+
+    def run_in(self, target, command):
+        box = self.box
+        box.tmux('send-keys', '-t', target, '-l', command)
+        box.tmux('send-keys', '-t', target, 'Enter')
+        box.wait_for(lambda: box.tmux('display', '-p', '-t', target, '#{pane_current_command}') == 'sleep',
+                     f'{command} in {target}')
+
+    def test_closes_an_idle_session_and_keeps_the_rest(self):
+        box = self.box
+        box.started('idle')
+        box.tmux('new-session', '-d', '-t', 'idle', '-s', 'idle-m')
+        for name in ('att', 'via', 'shut', 'job', 'shjob'):
+            self.shell(name)
+        self.attach('att')
+        box.tmux('new-session', '-d', '-t', 'via', '-s', 'via-m')
+        self.attach('via-m')
+        (box.state / 'sessions/shut/closed').write_text('close\n')
+        box.tmux('new-session', '-d', '-s', 'norec', '-n', 'agent')
+        self.run_in('job:shell', 'sleep 300')
+        self.run_in('shjob:agent', 'sleep 300')
+        self.assertEqual(self.close_idle().stdout, IDLE_ONE.format('idle'))
+        self.assertFalse(box.running('idle'))
+        self.assertFalse(box.running('idle-m'))
+        self.assertEqual(box.field('idle', 'closed'), 'expired')
+        self.assertIn('expired idle 22', box.log())
+        self.assertRegex(box.out('ls', '--all'), r'idle\s+expired')
+        for name in ('att', 'via', 'via-m', 'shut', 'norec', 'job', 'shjob'):
+            self.assertTrue(box.running(name), name)
+        self.assertEqual(box.field('shut', 'closed'), 'close')
+        self.assertFalse((box.state / 'sessions/via-m').exists())
+        self.assertEqual(self.close_idle().stdout, IDLE_NONE)
+
+    def test_a_login_shell_or_a_closed_shell_window_holds_no_job(self):
+        box = self.box
+        for name in ('login', 'nowin'):
+            self.shell(name)
+        box.tmux('respawn-window', '-k', '-t', 'login:shell', 'exec -l bash --noprofile --norc')
+        # Linux's tmux names the pane from argv[0], so -bash. macOS's takes the
+        # process name, which is bash either way.
+        box.wait_for(lambda: box.tmux('display', '-p', '-t', 'login:shell', '#{pane_current_command}')
+                     in ('-bash', 'bash'), 'a login shell')
+        box.tmux('kill-window', '-t', 'nowin:shell')
+        self.assertEqual(self.close_idle().stdout, IDLE_MANY.format(2, 'login, nowin'))
+        self.assertEqual(sorted(line for line in box.log() if line.startswith('expired')),
+                         ['expired login 22', 'expired nowin 22'])
+
+    def test_any_recent_signal_keeps_a_session(self):
+        box = self.box
+        now = time.time()
+        box.started('talk')
+        pin = box.field('talk', 'conversation')
+        box.transcript(box.repo, pin)
+        transcript = box.project(box.repo) / f'{pin}.jsonl'
+        os.utime(transcript, (now + 5 * DAY,) * 2)
+        self.shell('look')
+        seen = box.state / 'sessions/look/seen'
+        os.utime(seen, (now + 5 * DAY,) * 2)
+        self.assertEqual(self.close_idle().stdout, IDLE_NONE)
+        self.shell('typed')
+        for path in (transcript, seen, box.state / 'sessions/typed/seen'):
+            os.utime(path, (now - 2 * DAY,) * 2)
+        self.assertEqual(self.close_idle(now=str(int(now) + 20 * DAY)).stdout, IDLE_NONE)
+        for name in ('talk', 'look', 'typed'):
+            self.assertTrue(box.running(name), name)
+
+    def test_off(self):
+        self.shell('idle')
+        result = self.close_idle(AGENT_SESSION_IDLE_DAYS='0')
+        self.assertEqual(result.stdout, 'ags: idle close is off.\n')
+        self.assertTrue(self.box.running('idle'))
+
+    def test_restore_closes_first(self):
+        box = self.box
+        box.env['AGENT_SESSION_BOOT_EPOCH'] = str(int(time.time()) - 3600)
+        self.shell('idle')
+        box.make_record('stopped', box.repo, agent='shell')
+        dry = box.out('restore', '--dry-run', AGENT_SESSION_NOW=self.ahead)
+        self.assertEqual(dry.splitlines()[0], 'would close idle (idle 22 days)')
+        self.assertTrue(box.running('idle'))
+        lines = box.out('restore', AGENT_SESSION_NOW=self.ahead).splitlines()
+        self.assertEqual(lines[0], IDLE_ONE.format('idle').strip())
+        self.assertTrue(lines[1].startswith('Started stopped'), lines)
+        self.assertFalse(box.running('idle'))
+        self.assertTrue(box.running('stopped'))
+
+    def test_the_hint_sweeps_once_a_day(self):
+        box = self.box
+        box.env.update(AGENT_SESSION_BOOT_ID='boot-a', AGENT_SESSION_BOOT_EPOCH=str(int(time.time()) - 3600))
+        self.shell('first')
+        stamp = box.state / 'idle-sweep'
+        self.assertEqual(box.out('restore', '--hint', AGENT_SESSION_NOW=self.ahead),
+                         IDLE_ONE.format('first'))
+        self.assertLess(abs(stamp.stat().st_mtime - time.time()), 60)
+        self.shell('second')
+        self.assertEqual(box.out('restore', '--hint', AGENT_SESSION_NOW=self.ahead), '')
+        self.assertTrue(box.running('second'))
+        self.assertEqual(self.close_idle().stdout, IDLE_ONE.format('second'))
+
+    def test_seen_sweeps_where_a_bridge_announces(self):
+        box = Sandbox(self, bridge=True)
+        box.cli('open', 'idle', 'shell', '--detached')
+        box.cli('open', 'busy', 'shell', '--detached')
+        box.wait_for(box.announced.exists, 'the open announcements')
+        (box.state / 'idle-sweep').unlink(missing_ok=True)
+        before = len(box.announced.read_text().splitlines())
+        result = box.cli('seen', 'busy', AGENT_SESSION_NOW=self.ahead)
+        self.assertEqual(result.stdout + result.stderr, '')
+        self.assertFalse(box.running('idle'))
+        self.assertFalse(box.running('busy'))
+        box.wait_for(lambda: len(box.announced.read_text().splitlines()) >= before + 2, 'the close announcements')
+        closes = box.announced.read_text().splitlines()[before:]
+        self.assertIn('topic idle --no-create --no-buttons --text closed idle after 22 idle days. '
+                      '/open idle picks the conversation up again.', closes)
+
+
+class IdleCloseGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.box = Sandbox(self, real=False)
+        self.box.make_record('vault', self.box.repo, agent='shell')
+
+    def test_usage(self):
+        write_exec(self.box.bin / 'tmux', 'exit 0\n')
+        for args in (('--idle', 'vault'), ('--idle', '--forget'), ('vault', '--idle')):
+            result = self.box.cli('close', *args, check=False)
+            self.assertEqual(result.returncode, 1, args)
+            self.assertEqual(result.stderr, 'Usage: ags close NAME [--forget] | ags close --idle\n')
+
+    def test_a_wedged_tmux_closes_nothing(self):
+        write_exec(self.box.bin / 'tmux', '[[ "$1" != list-panes ]] || exec sleep 5\n')
+        began = time.monotonic()
+        result = self.box.cli('close', '--idle', check=False)
+        self.assertLess(time.monotonic() - began, 2)
+        self.assertEqual((result.returncode, result.stdout), (1, ''))
+        self.assertEqual(result.stderr, 'ags: tmux did not answer, nothing closed.\n')
+        self.assertIsNone(self.box.field('vault', 'closed'))
+
+
 def setUpModule():
     version = subprocess.run([BASH, '-c', 'echo "$BASH_VERSION"'], capture_output=True, text=True).stdout
     print(f'launcher bash: {BASH} {version.strip()}')

@@ -276,8 +276,10 @@ unrecorded running session adopts it first.
 measured up to the host's last activity before the boot, so two weeks with the
 hub off expire nothing. An expired record is closed, and `/open NAME` brings it
 back on its pin while Claude still keeps the transcript, 30 days by default.
-`--dry-run` prints what it would do. A `restore.lock` keeps two runs apart, and
-a lock from before the boot, or whose pid is gone, is taken over.
+It runs the idle close first. `--dry-run` prints what it would do, a
+`would close` line for each idle session included. A `restore.lock` keeps two
+runs apart, and a lock from before the boot, or whose pid is gone, is taken
+over.
 
 **`restore --hint`** starts nothing. It prints one line when an open record is
 not running and no hint in this boot has named it yet, for a shell's first
@@ -287,7 +289,9 @@ prompt to show after a reboot:
 ags: 2 recorded sessions are not running. ags restore resumes those not expired.
 ```
 
-It runs without tmux too, never reads a transcript and never writes a record.
+It runs without tmux too and never reads a transcript. Apart from the idle
+close, which it runs at most once a day and names on a line before its own, it
+never writes a record.
 It leaves out a record restore is sure to expire, judged by file times alone,
 so it can count one restore goes on to expire but never misses one restore
 would start. Each session it names gets an entry, a directory under
@@ -310,6 +314,31 @@ and `/proc/stat`.
 hooks run `agent-session.sh seen NAME` when a client attaches or detaches, a
 grouped `ags mobile` client included, and the bridge runs it after each message
 it types. So a session used from the desk or the phone never looks idle.
+
+**The idle close.** A running session nobody has touched for
+`AGENT_SESSION_IDLE_DAYS` (default 21) is closed, as `restore` expires a
+stopped one. Its activity is the newest of three signals: its pinned
+transcript's modification time, its `seen` file's, and its session group's
+tmux activity, which typing and attaching move and output does not. A session
+is kept when a client is attached anywhere in its group, when it has no open
+record, and when it runs a job, a command other than a shell in its `shell` or
+`git` window, or in its `agent` window when the agent is `shell`. A closed one
+is marked `closed expired`, gets an `expired` line in `history.log`, is killed
+with its grouped clients, and is announced in its topic where a bridge is
+staged. `ags open NAME` resumes its conversation. `ags close --idle` sweeps now
+and names what it closed:
+
+```text
+ags: closed 1 session idle 21+ days: probe8. ags open probe8 resumes it.
+```
+
+`restore` sweeps every time. `restore --hint`, and `seen` where a bridge is
+staged and the home is unlocked, sweep at most once a day by the real clock,
+claimed through the `idle-sweep` stamp in the state directory, and `seen`
+closes silently. A tmux that does not answer within a second closes nothing,
+and `close --idle` then says so and exits 1. `AGENT_SESSION_IDLE_DAYS=0` turns
+every sweep off. `AGENT_SESSION_NOW` replaces the current time in the idle
+comparison only, for the tests.
 
 ### After a reboot
 
@@ -436,6 +465,10 @@ The check fails closed. A path under no known root withholds the body rather
 than sending it, which is the safe direction when the list falls out of date.
 Override with `AGENT_NOTIFY_BODY_ROOTS`, colon separated.
 
+The idle close's announcement carries the session's name and its idle days,
+and nothing from the session itself, so it is sent for every session whatever
+its directory.
+
 Credentials come from `secrets/secrets.sh`, which a hook does not inherit, so
 the script sources it itself. It never fails an agent turn: every failure path
 exits 0.
@@ -525,7 +558,7 @@ and thread ids in `control-panel.json` beside the bridge state. Button tokens
 and pending input expire when the menu changes or the daemon restarts.
 
 The launcher gives terminal sessions their topics too. When `open` creates a
-session, and when `close` ends one, `agent-session.sh` runs
+session, and when `close` or the idle close ends one, `agent-session.sh` runs
 `agent-bridge.py topic NAME --text ...` in the background, the close one under
 `nohup` with `--no-buttons`, so it survives a close run inside the session. It does nothing when
 the staged bridge or `bridge.env` is missing, so machines without a bridge are
@@ -878,6 +911,7 @@ On a Mac, after setup, each on a tmux server started after it:
 | M4 | The same at the next reboot, and `ags restore` brings `probe` back in its own conversation |
 | M5 | With 60 synthetic records in a scratch `AGENT_SESSION_STATE`, `_ags_hint_due` timed at its first call in each of 21 fresh `zsh -f` processes and over 21 calls in one shell, the cold median under 150 ms with the load average noted, and answering no in two cases: six running sessions and no entries, and six stopped with entries aged past the window. The launcher's `restore --hint` timed in one shell for the record. Also `time (ags restore --dry-run >/dev/null)` once |
 | M6 | Before setup adds the pin hook, the new launcher's `open probe0`, attached, shows the short warning whole in the status line, and the full one after a detach. Then `ags close probe0` |
+| M7 | `ags open probe7`, attached in one tab, and `ags open probe8 --detached`. `AGENT_SESSION_NOW=$(( $(date +%s) + 22*86400 )) ags close --idle` closes `probe8` only and names it. `ags open probe8` resumes its conversation. Then `ags close probe7` and `ags close probe8` |
 
 ## Troubleshooting
 
