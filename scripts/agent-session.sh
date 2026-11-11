@@ -1753,7 +1753,6 @@ cmd_mobile() {
   attach_grouped "$name"
 }
 
-# How many clients are watching a session right now.
 # Kills a session and every grouped client of it, the clients first, so no
 # copy of the agent survives in a second client.
 kill_session_group() {
@@ -1764,6 +1763,7 @@ kill_session_group() {
   tmux kill-session -t "=$name"
 }
 
+# How many clients are watching a session right now.
 attached_clients() {
   tmux list-clients -t "=$1" 2>/dev/null | grep -c . || true
 }
