@@ -191,9 +191,13 @@ elif [[ "$OSTYPE" =~ ^darwin ]]; then
   # Opencode path
   export OPENCODE_PATH=$HOME/.opencode
 
-  # The host part of an engineering action's file name in the vault. Without it
-  # engineering.py writes the short hostname, which here is an asset name.
+  # The host part of an engineering action's file name in the vault, and the
+  # name the work space's hub note gives its writer. Without it engineering.py
+  # writes the short hostname, which here is an asset name.
   export ENGINEERING_HOST="mac"
+  # This host never pushes the vault, so engineering.py commits and leaves the
+  # commit for the next vault bundle.
+  export ENGINEERING_PUSH=0
 
   # Global Python venv for dotfiles packages
   export DOTFILES_PYTHON_VENV="$HOME/.local/share/dotfiles/python-venv"
@@ -307,11 +311,17 @@ done
 unset _candidate
 export BLACK_VAULT_REPO="${BLACK_VAULT:-}"
 
-# engineering.py finds a code repository's area in these vaults, and its
-# checkout one folder below these roots, both colon-separated like PATH. The
-# roots are probed because checkouts sit under repos/github/{tools,projects}/
-# on some machines and a flat github/ on others.
-[ -n "${ENGINEERING_VAULTS:-${BLACK_VAULT:-}}" ] && export ENGINEERING_VAULTS="${ENGINEERING_VAULTS:-$BLACK_VAULT}"
+# engineering.py finds a code repository's area in these spaces of the vault's
+# 07 - Engineering/, and its checkout one folder below these roots, both
+# colon-separated like PATH. Every host serves the personal space, and macOS,
+# the work space's only writer, serves that too. The roots are probed because
+# checkouts sit under repos/github/{tools,projects}/ on some machines and a
+# flat github/ on others.
+if [ -z "${ENGINEERING_VAULTS:-}" ] && [ -n "${BLACK_VAULT:-}" ]; then
+  ENGINEERING_VAULTS="$BLACK_VAULT/07 - Engineering/01 - Personal"
+  [[ "$OSTYPE" =~ ^darwin ]] && ENGINEERING_VAULTS="$ENGINEERING_VAULTS:$BLACK_VAULT/07 - Engineering/02 - Work"
+fi
+[ -n "${ENGINEERING_VAULTS:-}" ] && export ENGINEERING_VAULTS
 _roots=""
 for _candidate in \
   "${OS_WORKSPACE:-$HOME/Workspace}/repos/github/tools" \

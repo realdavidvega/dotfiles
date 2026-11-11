@@ -264,23 +264,29 @@ Discard, and to read a finished turn aloud from its 🔊 Listen button.
 
 ### Engineering tasks (hub)
 
-The vault's `07 - Engineering/` holds one area per personal code repository,
-and skills-registry's `engineering-vault` skill finds an area and writes its
-tasks through `engineering.py`. Three variables in `shell/exports.sh`:
+The vault's `07 - Engineering/` holds one space per world, `01 - Personal/` and
+`02 - Work/`, each with one area per code repository, and skills-registry's
+`engineering-vault` skill finds an area and writes its tasks through
+`engineering.py`. Four variables in `shell/exports.sh`:
 
-- `ENGINEERING_VAULTS`, colon-separated vault paths, defaulting to `$BLACK_VAULT`.
+- `ENGINEERING_VAULTS`, colon-separated space folders, defaulting to
+  `$BLACK_VAULT/07 - Engineering/01 - Personal`, plus `02 - Work` on macOS.
 - `ENGINEERING_CODE_ROOTS`, the folders whose children are checkouts, probed
   from `repos/github/tools`, `repos/github/projects` and a flat `github/`.
 - `ENGINEERING_HOST=mac`, in the macOS branch only, so the Mac's asset hostname
-  never names an action file in the vault.
+  never names an action file in the vault, and the work space's hub note names
+  the Mac as its writer by that alias.
+- `ENGINEERING_PUSH=0`, in the macOS branch only, because the Mac never pushes
+  the vault. Its engineering commits leave with the next vault bundle.
 
-Only the hub writes task fields. `restoration_scripts/55-engineering.sh`, run
+Only the hub writes personal task fields, and only the Mac writes work ones. `restoration_scripts/55-engineering.sh`, run
 as the desktop user, stages `engineering.py` with sdlc-init's `check_gates.py`
 and project-wiki's `lint_wiki.py` beside it under `/srv/services/engineering/`,
 taken from skills-registry's `origin/main` (`ENGINEERING_STAGE_REF` names another
 commit) and swapped in under the applier's lock. It writes the git identity the
-applier commits with, adds `ENGINEERING_VAULTS` to
-`/srv/services/system/system.env` when missing, and installs
+applier commits with, adds `ENGINEERING_VAULTS`, naming the personal space, to
+`/srv/services/system/system.env` when missing, moves a value that still names
+the vault root to that space, and installs
 `os/linux/srv/engineering/engineering-apply.{service,timer}`. The timer runs
 `engineering.py apply` every five minutes with that env file. Enabling it is
 explicit: `sudo systemctl enable --now engineering-apply.timer`. While the
