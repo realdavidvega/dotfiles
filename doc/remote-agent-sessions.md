@@ -156,6 +156,15 @@ and `--json` prints one array with `name`, `state`, `agent`, `dir`, `recorded`,
 `attached`, `windows`, `idle_days` and `title` for each, which is what the
 bridge reads. Both read the title from the record only, so a suggestion kept
 off the disk shows in the session's tab and as `-` or `null` here.
+A running row's `idle_days` is the idle close's count, from the same three
+signals, and null where the idle close would never close it: attached, running
+a job, or unrecorded. Closed and expired rows carry null. `--strict` is for a
+reader that acts on what is missing, the bridge's tidy. It exits 2 before
+printing when the state directory is missing or unreadable, when `sessions/`
+exists but cannot be read, when tmux cannot list its sessions for any reason
+but there being no server, or, with `--json` while tmux runs a session and
+`sessions/` exists, when its pane listing fails or takes over ten seconds. A state directory with
+no `sessions/` yet lists as empty.
 
 Where a session starts, first match wins. `--dir` always wins. Then the
 session's record, so a recorded name always returns to its directory. Then, with
@@ -401,7 +410,7 @@ is kept when a client is attached anywhere in its group, when it has no open
 record, and when it runs a job, a command other than a shell in its `shell` or
 `git` window, or in its `agent` window when the agent is `shell`. A closed one
 is marked `closed expired`, gets an `expired` line in `history.log`, is killed
-with its grouped clients, and is announced in its topic where a bridge is
+with its grouped clients, and is announced in Control where a bridge is
 staged. `ags open NAME` resumes its conversation. `ags close --idle` sweeps now
 and names what it closed:
 
@@ -625,7 +634,10 @@ agent and offers Resume, Start fresh and Change agent, which closes it and
 starts the picked agent blank. An open record's page adds Close session. A
 stopped session with no record offers Resume conversation and Start fresh,
 followed by an agent picker. The panel lists sessions from `ags ls --json`,
-falling back to tmux when the launcher fails.
+falling back to tmux when the launcher fails. It leaves out closed and expired
+records, which `/open NAME` and `/ls` still reach, and adds a session the
+launcher does not list while it still has a topic. 🟢 marks a running session, and 💤 one that is stopped or idle
+`AGENT_BRIDGE_SLEEP_DAYS` or more.
 
 New session asks for a new name, then the agent. Existing names return a prompt
 to choose that session from the main panel or enter a different name. The main
@@ -642,9 +654,12 @@ and thread ids in `control-panel.json` beside the bridge state. Button tokens
 and pending input expire when the menu changes or the daemon restarts.
 
 The launcher gives terminal sessions their topics too. When `open` creates a
-session, and when `close` or the idle close ends one, `agent-session.sh` runs
-`agent-bridge.py topic NAME --text ...` in the background, the close one under
-`nohup` with `--no-buttons`, so it survives a close run inside the session. It does nothing when
+session, `agent-session.sh` runs `agent-bridge.py topic NAME --text ...` in the
+background. When `close` or the idle close ends one, it runs the same command
+under `nohup` with `--no-buttons` and `--control`, so it survives a close run
+inside the session and lands in Control, since the session's topic goes at the
+next tidy. `--control` posts only for a session that has a topic, so one never
+seen in Telegram makes no noise there. It does nothing when
 the staged bridge or `bridge.env` is missing, so machines without a bridge are
 unaffected, and it never makes the terminal wait on Telegram. The bridge sets
 `AGENT_BRIDGE_QUIET` when it calls the launcher, so an `/open` is announced once.
@@ -714,14 +729,69 @@ next edit fails, the id is dropped, and `--pin` posts a fresh one.
 
 ### Topic lifecycle
 
-`bridge-state.json` maps session name to `message_thread_id`. Topics outlive
-sessions deliberately: the history is the record, and reusing a name returns to
-the same thread.
+`bridge-state.json` maps session name to `message_thread_id`. A topic follows
+its session: it exists while the session is running or stopped, and goes once
+the session is closed. The record stays, so `/open NAME` resumes the
+conversation in a new topic. The **tidy** keeps the forum in step with the
+launcher. It compares every mapped topic with `ags ls --all --json --strict`
+and applies the first matching rule:
+
+| The session is | Its topic |
+|---|---|
+| Refused by `AGENT_BRIDGE_SESSIONS` | Deleted |
+| Absent from the listing, closed or expired, and tmux answers that no such session runs | Deleted |
+| Stopped | 💤 |
+| Running, idle `AGENT_BRIDGE_SLEEP_DAYS` (default 3) or more | 💤 |
+| Running, under that or with `idle_days` null | 🤖 |
+| Any other state | Left as it is |
+
+`@limits` and `@control` are never touched. A refused name is deleted without
+asking tmux, even while it runs. Any other name keeps its topic while tmux still
+runs it, such as a grouped client. Each such deletion re-reads the state and
+asks tmux again under the topics lock, and only tmux saying plainly that no such
+session or no server exists counts as gone, so an error or a timeout keeps the
+topic.
+A listing that fails changes nothing. 💤 comes from
+`getForumTopicIconStickers` at run time, with no icon when the set has none.
+The Bot API cannot read a topic's icon, so `bridge-state.json` records the icon
+each topic carries under `topic_icons`, and a steady state makes no calls.
+
+The daemon runs the tidy as a child, two minutes after it starts and every ten
+minutes after that, and five seconds after a `/close`, a launch, or a message
+typed into a sleeping session. One child runs at a time, never beside the daily
+prune, and one still running after ten minutes is stopped. A re-exec or a stop
+of the daemon stops a running tidy or prune too. A run that removed topics,
+even one stopped partway, posts their names in Control, adding `/open NAME
+brings one back.` unless every name was refused.
+
+A run deletes at most 5 topics on its own. Over that it deletes none, still
+sets icons, and the daemon posts the list in Control with the command that
+confirms it, run as `black`:
+
+```bash
+AGENT_BRIDGE_ENV=/srv/services/agents/bridge.env \
+  python3 /srv/services/agents/bin/agent-bridge.py tidy --force PLAN
+```
+
+`PLAN` names that exact list, so `--force` refuses, changes nothing and prints
+the new plan when the list has moved since. `tidy --dry-run` writes nothing and
+prints the plan, the icon it would use, every topic it keeps with its link, and
+whether the bot holds the two rights it needs, Manage topics and Delete
+messages. After a third failed run in a row the daemon says so in Control, and
+again only when the kind of failure changes. A 429 is not a failure, and the
+next run waits it out. `AGENT_BRIDGE_TIDY=off` stops the timer and every
+trigger, and `tidy` by hand still works.
+
+The tidy sees only mapped topics. One that lost its mapping, through a forget,
+a lost state file or a `/bind` that moved its session elsewhere, is out of its
+reach and is deleted by hand. A topic bound with `/bind` follows its session
+and is deleted when that session closes.
 
 A deleted topic is replaced immediately on the next delivery, including a
 `/open` response. An existing session and topic are reused.
-Only Telegram's explicit missing-topic error invalidates the mapping. Network
-failures, rate limits, closed topics and formatting errors preserve it.
+Delivery forgets a mapping only on Telegram's explicit missing-topic error, and
+the tidy forgets the ones it deletes or finds gone. Network failures, rate
+limits, closed topics and formatting errors preserve it.
 If creation fails, session output is not redirected into General.
 
 Topic lookup, creation and replacement are serialized across the daemon and
@@ -786,9 +856,6 @@ On macOS `test_agent_session.py` runs the launcher with `/bin/bash`, the stock
 Mac branch of the setup script and `ags.zsh` in sandboxes, and skips the zsh
 cases where zsh is missing.
 
-The bridge never deletes a topic. Removing one is a human decision about
-history.
-
 ### The Limits topic
 
 The pinned Limits panel shows current usage. Refresh updates it in place, and
@@ -827,9 +894,13 @@ required, all fail closed:
 2. the sender's Telegram user id must be in `AGENT_BRIDGE_ALLOWED_USER_IDS`
 3. the target session must match `AGENT_BRIDGE_SESSIONS`
 
-On a single-user host, `AGENT_BRIDGE_SESSIONS=*` is reasonable, because the
-first two gates are what exclude other people. A narrower list mostly turns new
-session names into refusals.
+On a single-user host, `AGENT_BRIDGE_SESSIONS=* !pp-*` is reasonable, because
+the first two gates are what exclude other people. A narrower list mostly turns
+new session names into refusals. A pattern starting with `!` excludes: a name
+is allowed when a plain pattern matches it and no exclusion does, and a list of
+only exclusions is refused at start. `!pp-*` keeps paneport's test sessions
+out, and `agent-notify.sh` drops `pp-*` names before the bridge too. A refused
+session's topic is deleted at the next tidy.
 
 Viewing is gated separately from driving. `/peek` and the Peek button render a
 pane only when its directory is under `AGENT_BRIDGE_CONTENT_ROOTS`, which
@@ -871,8 +942,8 @@ fresh topic starts muted and one you unmute stays unmuted. `/clear`, or
 🧹 Clear on a finished turn, deletes a topic's messages after a confirmation.
 Once a day a background run deletes messages older than 7 days from every
 topic and General, since the agents keep their own transcripts. The pinned
-guide is always kept. Without the helper, topics start unmuted and nothing is
-deleted.
+guide is always kept. Without the helper, topics start unmuted and no message
+is deleted, though the tidy still deletes whole topics through the bot.
 
 Log in once with
 `/srv/services/telegram/venv/bin/python /srv/services/telegram/bin/telegram-user.py login`.
