@@ -690,6 +690,49 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('api', b.State.load(self.path).topics)
 
 
+    def asleep(self, session='vault'):
+        self.state.reload()
+        self.state.set_icon(session, 'asleep')
+        self.state.save()
+
+    def test_icon_entry_for_another_thread_is_unknown(self):
+        self.asleep()
+        self.assertEqual(b.State.load(self.path).icon_state('vault'), 'asleep')
+        self.bridge.handle_command('bind', 'vault', None, 9)
+        saved = b.State.load(self.path)
+        self.assertEqual(saved.topics['vault'], 9)
+        self.assertIsNone(saved.icon_state('vault'))
+        self.asleep()
+        self.tg.send.side_effect = [b.TelegramError('400 message thread not found'), {}]
+        self.bridge.post('vault', 'hello')
+        saved = b.State.load(self.path)
+        self.assertEqual(saved.topic_icons['vault'], {'thread': 7, 'state': 'awake'})
+        other = b.State.load(self.path)
+        other.topics['vault'] = 11
+        other.save()
+        self.assertIsNone(b.State.load(self.path).icon_state('vault'))
+
+    def test_forget_topic_drops_and_creation_records_the_icon_entry(self):
+        self.assertEqual(self.bridge.topic_for('api'), 7)
+        self.assertEqual(b.State.load(self.path).topic_icons['api'], {'thread': 7, 'state': 'awake'})
+        self.state.forget_topic('api')
+        self.assertNotIn('api', b.State.load(self.path).topic_icons)
+        self.tg.call.return_value = {'ok': True, 'result': {'message_thread_id': 8}}
+        self.assertEqual(self.bridge.topic_for(b.CONTROL), 8)
+        self.assertNotIn(b.CONTROL, b.State.load(self.path).topic_icons)
+
+    def test_stale_writer_cannot_restore_a_removed_icon_entry(self):
+        self.asleep()
+        stale = b.State.load(self.path)
+        self.state.forget_topic('vault')
+        stale.offset = 10
+        stale.topics['api'] = 12
+        stale.save()
+        saved = b.State.load(self.path)
+        self.assertEqual(saved.topics, {'api': 12})
+        self.assertEqual(saved.topic_icons, {})
+
+
     ENV = {'AGENT_BRIDGE_BOT_TOKEN': 't', 'AGENT_BRIDGE_CHAT_ID': '-1', 'AGENT_BRIDGE_ALLOWED_USER_IDS': '2',
            'AGENT_BRIDGE_SESSIONS': '* !pp-*'}
 

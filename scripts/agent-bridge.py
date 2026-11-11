@@ -625,9 +625,14 @@ class State:
     # Telegram numbers updates per bot, so an offset only means something
     # together with the bot it was read from.
     bot_id: int | None = None
+    # The icon the tidy last set on each topic, as {"thread", "state"}. The Bot
+    # API cannot read an icon back, and an entry counts only while its thread
+    # still matches the topic map.
+    topic_icons: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._snapshot = dict(self.topics)
+        self._icons_snapshot = dict(self.topic_icons)
         self._guide_snapshot = self.guide_message_id
         self._offset_snapshot = (self.offset, self.bot_id)
 
@@ -645,6 +650,10 @@ class State:
             topics={str(k): int(v) for k, v in (raw.get("topics") or {}).items()},
             guide_message_id=int(guide) if guide else None,
             bot_id=int(bot) if bot else None,
+            topic_icons={str(k): {"thread": int(v["thread"]), "state": str(v["state"])}
+                         for k, v in (raw.get("topic_icons") or {}).items()
+                         if isinstance(v, dict) and isinstance(v.get("thread"), int)
+                         and v.get("state") in ("awake", "asleep")},
         )
 
     @contextmanager
@@ -672,6 +681,14 @@ class State:
                         fresh.topics.pop(key, None)
                     else:
                         fresh.topics[key] = new
+            icons_baseline = getattr(self, "_icons_snapshot", {})
+            for key in icons_baseline.keys() | self.topic_icons.keys():
+                old, new = icons_baseline.get(key), self.topic_icons.get(key)
+                if old != new and fresh.topic_icons.get(key) == old:
+                    if new is None:
+                        fresh.topic_icons.pop(key, None)
+                    else:
+                        fresh.topic_icons[key] = new
             old_guide = getattr(self, "_guide_snapshot", None)
             if self.guide_message_id != old_guide and fresh.guide_message_id == old_guide:
                 fresh.guide_message_id = self.guide_message_id
@@ -681,10 +698,11 @@ class State:
             if (self.offset, self.bot_id) != self._offset_snapshot:
                 fresh.offset, fresh.bot_id = self.offset, self.bot_id
             self.topics = fresh.topics
+            self.topic_icons = fresh.topic_icons
             self.guide_message_id = fresh.guide_message_id
             self.offset, self.bot_id = fresh.offset, fresh.bot_id
             payload = {"offset": self.offset, "bot_id": self.bot_id, "topics": self.topics,
-                       "guide_message_id": self.guide_message_id}
+                       "topic_icons": self.topic_icons, "guide_message_id": self.guide_message_id}
             fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".bridge-state-")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -696,23 +714,39 @@ class State:
             finally:
                 Path(name).unlink(missing_ok=True)
             self._snapshot = dict(self.topics)
+            self._icons_snapshot = dict(self.topic_icons)
             self._guide_snapshot = self.guide_message_id
             self._offset_snapshot = (self.offset, self.bot_id)
 
     def reload(self) -> None:
         fresh = State.load(self.path)
         self.topics = fresh.topics
+        self.topic_icons = fresh.topic_icons
         # An unsaved local offset wins. Otherwise adopt what is on disk.
         if (self.offset, self.bot_id) == self._offset_snapshot:
             self.offset, self.bot_id = fresh.offset, fresh.bot_id
             self._offset_snapshot = (self.offset, self.bot_id)
         self.guide_message_id = fresh.guide_message_id
         self._snapshot = dict(self.topics)
+        self._icons_snapshot = dict(self.topic_icons)
         self._guide_snapshot = self.guide_message_id
 
     def forget_topic(self, session: str) -> None:
         self.topics.pop(session, None)
+        self.topic_icons.pop(session, None)
         self.save()
+
+    def icon_state(self, session: str) -> str | None:
+        """awake or asleep as last set, or None when unknown or recorded for another thread."""
+        entry = self.topic_icons.get(session)
+        thread = self.topics.get(session)
+        if entry is None or thread is None or entry["thread"] != thread:
+            return None
+        return entry["state"]
+
+    def set_icon(self, session: str, state: str) -> None:
+        """Record an icon for the session's current thread. The caller saves."""
+        self.topic_icons[session] = {"thread": self.topics[session], "state": state}
 
 
 # ── Telegram ────────────────────────────────────────────────────────────────
@@ -1530,6 +1564,9 @@ class Bridge:
             return None
         thread_id = int(result["result"]["message_thread_id"])
         self.state.topics[session] = thread_id
+        if not session.startswith("@"):
+            # Created with SESSION_ICON, so the tidy has nothing to edit.
+            self.state.set_icon(session, "awake")
         self.state.save()
         # Only here, never on reuse, so a topic unmuted in Telegram stays so.
         # It runs before the caller's first message, which then arrives silent.
