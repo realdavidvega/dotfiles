@@ -951,6 +951,17 @@ class ControlTests(unittest.TestCase):
         self.bridge.close_session.assert_called_once_with('vault')
         self.bridge.launch.assert_called_once_with('vault', 'claude', mode='fresh')
 
+    def test_change_run_queues_no_tidy_between_its_close_and_its_launch(self):
+        self.record(state='closed')
+        due = []
+        self.bridge.launch = Mock(side_effect=lambda *a, **k: due.append(self.bridge.tidy_due) or 'started')
+        self.bridge.close_session = Mock(return_value=None)
+        self.click('session', 'vault')
+        self.click('change-agent', 'vault')
+        self.press('change-run', 'vault', 'claude')
+        self.assertEqual(due, [None])
+        self.assertIsNone(self.bridge.tidy_due)
+
     def test_change_agent_launches_nothing_when_close_fails(self):
         self.record()
         self.bridge.launch = Mock()
@@ -1506,8 +1517,8 @@ class VoiceTests(unittest.TestCase):
 
 
 
-class TidyTests(unittest.TestCase):
-    """The tidy, with a fake launcher listing, a fake Telegram and tmux answers per name."""
+class TidyFixture(unittest.TestCase):
+    """A fake launcher listing, a fake Telegram and tmux answers per name."""
 
     STICKERS = [{'emoji': '⭐', 'custom_emoji_id': 'star'}, {'emoji': '\U0001F319', 'custom_emoji_id': 'moon'},
                 {'emoji': '\U0001F4A4️', 'custom_emoji_id': 'zzz'}]
@@ -1593,6 +1604,8 @@ class TidyTests(unittest.TestCase):
         lines = out.getvalue().strip().splitlines()
         return code, json.loads(lines[-1]), lines[:-1]
 
+
+class TidyTests(TidyFixture):
     def test_tidy_deletes_closed_expired_and_unlisted_topics(self):
         self.topics(old=11, gone=12, lost=13, vault=14)
         self.row('old', 'closed')
@@ -1972,12 +1985,348 @@ class TidyTests(unittest.TestCase):
         self.assertIn(f"tidy --force {result['plan']}", report)
         self.assertIn('can_delete_messages=True', report)
 
-    def test_tidy_runs_by_hand_with_the_switch_off(self):
+
+class FakeChild:
+    """A child process that runs until finished, holding any descriptor it was handed."""
+
+    def __init__(self, args, pass_fds=()):
+        self.args = args
+        self.returncode = None
+        self.stdout = io.StringIO('')
+        self.fds = [b.os.dup(fd) for fd in pass_fds]
+        self.terminated = False
+        self.killed = False
+
+    def finish(self, line=''):
+        self.stdout = io.StringIO(line)
+        self.returncode = 0
+        for fd in self.fds:
+            b.os.close(fd)
+        self.fds = []
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.finish()
+
+    def kill(self):
+        self.killed = True
+        self.finish()
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+class ScheduleTests(TidyFixture):
+    def setUp(self):
+        super().setUp()
+        self.now = 1000.0
+        self.children = []
+        clock = patch.object(b.time, 'time', side_effect=lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+        popen = patch.object(b.subprocess, 'Popen', side_effect=self.spawn)
+        popen.start()
+        self.addCleanup(popen.stop)
+        self.addCleanup(lambda: [child.finish() for child in self.children if child.returncode is None])
+
+    def spawn(self, args, **kwargs):
+        child = FakeChild(args, kwargs.get('pass_fds', ()))
+        child.kwargs = kwargs
+        self.children.append(child)
+        return child
+
+    def spawned(self, kind):
+        return [c for c in self.children if (c.args[-1] == 'tidy') == (kind == 'tidy')]
+
+    def prune_helper(self):
+        helper = patch.object(b, 'find_user_command', return_value=['py', 'helper'])
+        helper.start()
+        self.addCleanup(helper.stop)
+
+    def at(self, now):
+        self.now = now
+        self.bridge.schedule(now)
+
+    def summary(self, **fields):
+        result = {'ok': True, 'deleted': [], 'slept': [], 'woke': [], 'failed': [], 'over_cap': None,
+                  'plan': None, 'icon': None, 'retry_after': None, 'error': None}
+        result.update(fields)
+        return json.dumps(result)
+
+    def control_posts(self):
+        return [c.args[1] for c in self.tg.send.call_args_list if c.kwargs.get('thread_id') == 40]
+
+    def serve(self, hook):
+        """Run serve() until the hook asks to stop. The hook gets the poll number and the stop handler."""
+        handlers = {}
+        polls = []
+
+        def telegram(method, http_timeout=20, **params):
+            if method != 'getUpdates':
+                return self.telegram(method, http_timeout, **params)
+            polls.append(params['timeout'])
+            hook(len(polls), handlers[b.signal.SIGTERM])
+            return {'ok': True, 'result': []}
+        self.tg.call.side_effect = telegram
+        for name in ('publish_commands', 'publish_limits_panel', 'control_panel', 'drain_updates'):
+            setattr(self.bridge, name, Mock())
+        self.bridge.limits = Mock()
+        with patch.object(b.signal, 'signal', side_effect=lambda sig, handler: handlers.__setitem__(sig, handler)):
+            return self.bridge.serve(), polls
+
+    def test_serve_runs_one_tidy_at_a_time_and_never_beside_a_prune(self):
+        self.prune_helper()
+        self.bridge.next_prune, self.bridge.tidy_due = 1100.0, 1050.0
+        self.at(1050)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.bridge.request_tidy()
+        self.at(1056)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.at(1100)
+        self.assertEqual(self.spawned('prune'), [])
+        self.assertTrue(self.bridge.prune_due)
+        self.assertEqual(self.bridge.next_prune, 1100 + b.PRUNE_INTERVAL)
+        self.spawned('tidy')[0].finish(self.summary())
+        self.at(1101)
+        self.assertEqual(len(self.spawned('prune')), 1)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.assertFalse(self.bridge.prune_due)
+        self.spawned('prune')[0].finish('done')
+        self.at(1102)
+        self.assertEqual(len(self.spawned('tidy')), 2)
+        self.assertEqual(self.bridge.next_prune, 1100 + b.PRUNE_INTERVAL)
+        self.assertEqual(self.spawned('tidy')[1].args[-1], 'tidy')
+
+    def test_prune_defers_to_a_cli_tidy(self):
+        self.prune_helper()
+        self.bridge.next_prune = 1000.0
+        with open(str(self.path) + '.tidy.lock', 'a') as handle:
+            b.fcntl.flock(handle, b.fcntl.LOCK_EX)
+            self.at(1000)
+            self.assertEqual(self.children, [])
+            self.assertTrue(self.bridge.prune_due)
+            self.assertEqual(self.bridge.next_prune, 1000 + b.PRUNE_INTERVAL)
+        self.at(1030)
+        self.assertEqual(len(self.spawned('prune')), 1)
+        self.assertFalse(self.bridge.prune_due)
+
+    def test_cli_tidy_is_busy_while_a_prune_runs(self):
+        self.prune_helper()
+        self.topics(old=11)
+        self.bridge.next_prune = 1000.0
+        self.at(1000)
+        prune = self.spawned('prune')[0]
+        code, result, _ = self.cli()
+        self.assertEqual((code, result['error']), (0, 'busy'))
+        self.assertEqual(self.deleted(), [])
+        prune.finish()
+        self.assertEqual(self.cli()[1]['deleted'], ['old'])
+
+    def test_serve_terminates_a_prune_after_30_minutes(self):
+        self.prune_helper()
+        self.bridge.next_prune = 1000.0
+        self.at(1000)
+        prune = self.spawned('prune')[0]
+        self.at(1000 + b.PRUNE_LIMIT - 1)
+        self.assertFalse(prune.terminated)
+        self.at(1000 + b.PRUNE_LIMIT)
+        self.assertTrue(prune.terminated)
+        self.assertIsNone(self.bridge._prune)
+
+    def test_serve_poll_timeout_follows_the_tidy(self):
+        self.bridge.tidy_due = 1100.0
+        self.assertEqual(self.bridge.poll_timeout(), b.POLL_TIMEOUT)
+        self.bridge.tidy_due = 1007.0
+        self.assertEqual(self.bridge.poll_timeout(), 7)
+        self.bridge.tidy_due = 1000.2
+        self.assertEqual(self.bridge.poll_timeout(), 1)
+        self.bridge.tidy_retry_until = 1050.0
+        self.assertEqual(self.bridge.poll_timeout(), b.POLL_TIMEOUT)
+        self.bridge.tidy_retry_until = 0.0
+        self.bridge._prune = FakeChild(['py', 'helper'])
+        self.assertEqual(self.bridge.poll_timeout(), b.POLL_TIMEOUT)
+        self.bridge._prune = None
+        self.at(1001)
+        self.assertEqual(self.bridge.poll_timeout(), b.BUSY_POLL)
+
+    def test_serve_starts_the_first_tidy_at_two_minutes_and_a_request_after_five_seconds(self):
+        seen = {}
+
+        def hook(poll, stop):
+            seen.update(prune=self.bridge.next_prune, tidy=self.bridge.tidy_due)
+            stop(b.signal.SIGTERM, None)
+        self.serve(hook)
+        self.assertEqual(seen, {'prune': 1060.0, 'tidy': 1120.0})
+        self.at(1100)
+        self.assertEqual(self.spawned('tidy'), [])
+        self.bridge.request_tidy()
+        self.assertEqual(self.bridge.tidy_due, 1105.0)
+        self.at(1104)
+        self.assertEqual(self.spawned('tidy'), [])
+        self.at(1105)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.assertEqual(self.bridge.tidy_due, 1105 + b.TIDY_INTERVAL)
+
+    def test_serve_terminates_a_tidy_after_10_minutes(self):
+        self.bridge.tidy_due = 1000.0
+        self.at(1000)
+        tidy = self.spawned('tidy')[0]
+        self.bridge.tidy_due = 9000.0
+        self.at(1000 + b.TIDY_LIMIT - 1)
+        self.assertFalse(tidy.terminated)
+        self.at(1000 + b.TIDY_LIMIT)
+        self.assertTrue(tidy.terminated)
+        self.assertIsNone(self.bridge._tidy)
+        self.assertEqual(self.bridge.tidy_failures, 1)
+
+    def test_reexec_and_sigterm_stop_a_running_tidy(self):
+        script = Path(self.tmp.name) / 'agent-bridge.py'
+        script.write_text('')
+
+        def reexec_hook(poll, stop):
+            self.bridge.tidy_due = self.now
+            self.bridge.schedule(self.now)
+            b.os.utime(script, (1, 1))
+        with patch.object(b, '__file__', str(script)), \
+                patch.object(b.os, 'execv', side_effect=RuntimeError('re-exec')) as execv:
+            with self.assertRaises(RuntimeError):
+                self.serve(reexec_hook)
+        execv.assert_called_once()
+        self.assertTrue(self.spawned('tidy')[0].terminated)
+        self.assertIsNone(self.bridge._tidy)
+
+        def stop_hook(poll, stop):
+            self.bridge.tidy_due = self.now
+            self.bridge.schedule(self.now)
+            stop(b.signal.SIGTERM, None)
+        self.assertEqual(self.serve(stop_hook)[0], 0)
+        self.assertTrue(self.spawned('tidy')[1].terminated)
+
+    def test_reexec_and_sigterm_stop_a_running_prune(self):
+        self.prune_helper()
+
+        def stop_hook(poll, stop):
+            self.bridge.next_prune = self.now
+            self.bridge.schedule(self.now)
+            stop(b.signal.SIGTERM, None)
+        self.assertEqual(self.serve(stop_hook)[0], 0)
+        prune = self.spawned('prune')[0]
+        self.assertTrue(prune.terminated)
+        self.assertEqual(prune.fds, [])
+        self.assertIsNone(self.bridge._prune)
+
+    def test_the_tidy_child_logs_to_the_daemon_stderr(self):
+        self.bridge.tidy_due = 1000.0
+        self.at(1000)
+        self.assertNotIn('stderr', self.spawned('tidy')[0].kwargs)
+
+    def test_tidy_is_off_with_the_switch_but_runs_by_hand(self):
         self.bridge.config = dataclasses.replace(self.config, tidy_enabled=False)
         self.config = self.bridge.config
+        self.serve(lambda poll, stop: stop(b.signal.SIGTERM, None))
+        self.assertIsNone(self.bridge.tidy_due)
+        self.bridge.request_tidy()
+        self.assertIsNone(self.bridge.tidy_due)
+        self.at(1000 + 10 * b.TIDY_INTERVAL)
+        self.assertEqual(self.spawned('tidy'), [])
         self.topics(old=11)
         code, result, _ = self.cli()
         self.assertEqual((code, result['deleted']), (0, ['old']))
+
+    def finish_tidy(self, now, **fields):
+        self.bridge.tidy_due = now
+        self.at(now)
+        self.spawned('tidy')[-1].finish(self.summary(**fields))
+        self.at(now + 1)
+
+    def test_reaped_tidy_posts_new_over_cap_lists_and_only_the_third_failure(self):
+        over = ['a', 'b', 'c', 'd', 'e', 'f']
+        self.finish_tidy(1000, over_cap=over, plan='6:abcdef12')
+        posts = self.control_posts()
+        self.assertEqual(len(posts), 1)
+        self.assertIn('a, b, c, d, e, f', posts[0])
+        self.assertIn('agent-bridge.py tidy --force 6:abcdef12', posts[0])
+        self.finish_tidy(1100, over_cap=over, plan='6:abcdef12')
+        self.assertEqual(len(self.control_posts()), 1)
+        self.finish_tidy(1200, over_cap=over[:5] + ['g'], plan='6:99999999')
+        self.assertEqual(len(self.control_posts()), 2)
+        self.finish_tidy(1300, deleted=['x'])
+        self.assertEqual(len(self.control_posts()), 2)
+        failure = {'name': 'x', 'action': 'delete', 'kind': 'rights', 'error': 'not enough rights to delete'}
+        self.finish_tidy(1400, failed=[failure])
+        self.finish_tidy(1500, failed=[failure])
+        self.assertEqual(len(self.control_posts()), 2)
+        self.finish_tidy(1600, failed=[failure])
+        self.assertIn('not enough rights to delete', self.control_posts()[-1])
+        self.finish_tidy(1700, failed=[failure])
+        self.assertEqual(len(self.control_posts()), 3)
+        self.bridge.tidy_due = 1800
+        self.at(1800)
+        self.spawned('tidy')[-1].finish('no summary here')
+        self.at(1801)
+        self.assertEqual(len(self.control_posts()), 4)
+        self.assertIn('without a summary', self.control_posts()[-1])
+        self.finish_tidy(1900, ok=False, error='listing: the launcher exited 2')
+        self.assertEqual(len(self.control_posts()), 5)
+        self.finish_tidy(2000)
+        self.assertEqual((self.bridge.tidy_failures, self.bridge.tidy_kinds_posted), (0, None))
+        self.finish_tidy(2100, failed=[failure])
+        self.assertEqual(len(self.control_posts()), 5)
+
+    def test_busy_run_neither_counts_nor_resets_failures(self):
+        failure = {'name': 'x', 'action': 'asleep', 'kind': 'edit', 'error': 'bad request'}
+        self.finish_tidy(1000, failed=[failure])
+        self.finish_tidy(1100, failed=[failure])
+        self.finish_tidy(1200, error='busy')
+        self.assertEqual((self.bridge.tidy_failures, self.control_posts()), (2, []))
+        self.finish_tidy(1300, failed=[failure])
+        self.assertEqual(len(self.control_posts()), 1)
+
+    def test_a_run_cut_short_by_a_429_neither_counts_nor_resets_failures(self):
+        failure = {'name': 'x', 'action': 'delete', 'kind': 'rights', 'error': 'not enough rights to delete'}
+        self.finish_tidy(1000, failed=[failure])
+        self.finish_tidy(1100, failed=[failure])
+        self.finish_tidy(1200, retry_after=5)
+        self.assertEqual((self.bridge.tidy_failures, self.control_posts()), (2, []))
+        self.finish_tidy(1300, failed=[failure])
+        self.assertIn('not enough rights to delete', self.control_posts()[-1])
+
+    def test_serve_waits_out_retry_after(self):
+        self.finish_tidy(1000, retry_after=30)
+        self.assertEqual((self.bridge.tidy_failures, self.control_posts()), (0, []))
+        self.bridge.request_tidy()
+        self.at(1010)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.at(1030)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.at(1031)
+        self.assertEqual(len(self.spawned('tidy')), 2)
+
+    def test_typing_into_a_sleeping_session_queues_a_tidy(self):
+        self.topics(vault=14)
+        self.tmux.type_text.return_value = None
+        self.bridge.act('vault', 'say', 'hi')
+        self.assertEqual(self.bridge.tidy_due, 1005.0)
+        self.bridge.tidy_due = None
+        self.awake('vault')
+        self.bridge.act('vault', 'say', 'hi')
+        self.assertIsNone(self.bridge.tidy_due)
+        self.state.set_icon('vault', 'asleep')
+        self.state.save()
+        self.bridge.act('vault', 'say', 'hi')
+        self.assertEqual(self.bridge.tidy_due, 1005.0)
+
+    def test_a_successful_launch_queues_a_tidy(self):
+        self.topics(vault=14)
+        self.ls.side_effect = lambda *a, **k: Mock(returncode=1, stdout='', stderr='locked')
+        self.bridge.launch('vault', None)
+        self.assertIsNone(self.bridge.tidy_due)
+        self.ls.side_effect = lambda *a, **k: Mock(returncode=0, stdout='started vault\n', stderr='')
+        self.assertEqual(self.bridge.launch('vault', None), 'started vault')
+        self.assertEqual(self.bridge.tidy_due, 1005.0)
 
 
 class NotifyScriptTests(unittest.TestCase):

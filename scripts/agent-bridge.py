@@ -52,6 +52,7 @@ import html
 import http.client
 import json
 import logging
+import math
 import os
 import signal
 import shutil
@@ -137,6 +138,8 @@ TIDY_FIRST = 120
 TIDY_INTERVAL = 600
 TIDY_REQUEST_DELAY = 5
 TIDY_LIMIT = 10 * 60
+# Long enough for a stopped tidy to post the removals it already made.
+TIDY_GRACE = 5
 TIDY_CAP = 5
 TIDY_LIST_TIMEOUT = 60
 DELETE_TIMEOUT = 5
@@ -1076,6 +1079,18 @@ def quoted(heading: str, text: str) -> str:
     return f"{heading}\n“{shorten(text, MAX_MESSAGE - len(heading) - 3)}”"
 
 
+def stop_child(child: subprocess.Popen[str], grace: float = 1) -> None:
+    """Terminate a child, give it grace seconds, then kill it, and reap it either way."""
+    try:
+        child.terminate()
+        child.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+    except OSError:
+        pass
+
+
 def last_json_line(output: str) -> Any:
     """The JSON on the last non-empty line, as every voice CLI verb prints. Raises ValueError without one."""
     lines = [line for line in output.splitlines() if line.strip()]
@@ -1362,6 +1377,18 @@ class Bridge:
         self.tmux = tmux
         self.limits = UsageLimits(config)
         self._prune: subprocess.Popen[str] | None = None
+        self._prune_started = 0.0
+        # serve() sets both clocks. Left None, nothing is scheduled.
+        self.next_prune: float | None = None
+        self.prune_due = False
+        self._tidy: subprocess.Popen[str] | None = None
+        self._tidy_started = 0.0
+        self.tidy_due: float | None = None
+        # What the daemon remembers of past tidies, lost on a restart by design.
+        self.tidy_retry_until = 0.0
+        self.tidy_failures = 0
+        self.tidy_kinds_posted: frozenset[str] | None = None
+        self.tidy_over_cap_posted: list[str] | None = None
         self.control_path = state.path.with_name("control-panel.json")
         try:
             self.control_state = json.loads(self.control_path.read_text())
@@ -1552,6 +1579,8 @@ class Bridge:
         elif action == "kill-confirm":
             error = self.close_session(session)
             self.control_panel("home", notice=f"could not close {session}: {error}" if error else f"Stopped {session}.")
+            # Never inside close_session, so change-run's close and relaunch does not race a tidy.
+            self.request_tidy()
         elif action == "send":
             self.control_panel("session", session, "Reply to the Send prompt below. Back cancels.")
             sent = self.tg.send(self.config.chat_id, f"✉️ Send to {session}: reply to this message with the text to type and submit.",
@@ -1691,13 +1720,33 @@ class Bridge:
         if not result.get("ok"):
             self.tg.send(self.config.chat_id, f"Could not clear: {result.get('error')}", thread_id=thread or None)
 
-    def start_prune(self) -> None:
-        """Delete messages older than PRUNE_DAYS from every topic, without blocking the loop."""
+    def start_prune(self) -> bool:
+        """Delete messages older than PRUNE_DAYS from every topic, without blocking the loop.
+
+        False when a tidy holds the tidy lock, so the caller tries again. The
+        child inherits the lock, because telegram-user.py fails on a thread
+        deleted under it, and so a tidy waits until the prune has exited.
+        """
         if self._prune is not None and self._prune.poll() is None:
-            return
+            return True
         command = find_user_command()
         if command is None:
-            return
+            return True
+        self.state.path.parent.mkdir(parents=True, exist_ok=True)
+        lock = os.open(str(self.state.path) + ".tidy.lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(lock)
+            return False
+        try:
+            self._spawn_prune(command, lock)
+        finally:
+            # The child keeps its copy, so the lock lasts exactly as long as the prune.
+            os.close(lock)
+        return True
+
+    def _spawn_prune(self, command: list[str], lock: int) -> None:
         self.state.reload()
         args = command + ["clear", str(self.config.chat_id), "--general", "--older-than-days", str(PRUNE_DAYS)]
         for thread in sorted(set(self.state.topics.values())):
@@ -1709,12 +1758,20 @@ class Bridge:
         if self.limits_panel_state.get("message_id"):
             args += ["--keep", str(self.limits_panel_state["message_id"])]
         try:
-            self._prune = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            self._prune = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                           pass_fds=(lock,))
+            self._prune_started = time.time()
         except OSError as exc:
             LOG.warning("could not start the prune: %s", exc)
 
-    def reap_prune(self) -> None:
-        if self._prune is None or self._prune.poll() is None:
+    def reap_prune(self, now: float | None = None) -> None:
+        if self._prune is None:
+            return
+        if self._prune.poll() is None:
+            if (now or time.time()) - self._prune_started >= PRUNE_LIMIT:
+                LOG.warning("prune still running after %s minutes, stopping it", PRUNE_LIMIT // 60)
+                stop_child(self._prune)
+                self._prune = None
             return
         output = (self._prune.stdout.read() if self._prune.stdout else "").strip()
         self._prune = None
@@ -1817,10 +1874,10 @@ class Bridge:
             except BlockingIOError:
                 result["error"] = "busy"
                 return result
-            self._tidy(result, dry_run, force)
+            self._tidy_pass(result, dry_run, force)
         return result
 
-    def _tidy(self, result: dict[str, Any], dry_run: bool, force: str | None) -> None:
+    def _tidy_pass(self, result: dict[str, Any], dry_run: bool, force: str | None) -> None:
         self.state.reload()
         if not any(not name.startswith("@") for name in self.state.topics):
             return
@@ -1933,15 +1990,122 @@ class Bridge:
         result["slept" if state == "asleep" else "woke"].append(name)
         return True
 
+    def request_tidy(self) -> None:
+        """Run a tidy soon, after a close, a launch or a message to a sleeping session."""
+        if self.config.tidy_enabled:
+            soon = time.time() + TIDY_REQUEST_DELAY
+            self.tidy_due = soon if self.tidy_due is None else min(self.tidy_due, soon)
+
+    def child_running(self, child: subprocess.Popen[str] | None) -> bool:
+        return child is not None and child.poll() is None
+
+    def start_tidy(self) -> None:
+        try:
+            self._tidy = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "tidy"],
+                                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+            self._tidy_started = time.time()
+        except OSError as exc:
+            LOG.warning("could not start the tidy: %s", exc)
+
+    def stop_children(self) -> None:
+        """Stop a running tidy or prune at re-exec and shutdown, so neither outlives its owner."""
+        if self.child_running(self._tidy):
+            stop_child(self._tidy, TIDY_GRACE)
+        self._tidy = None
+        if self.child_running(self._prune):
+            stop_child(self._prune)
+        self._prune = None
+
+    def reap_tidy(self, now: float) -> None:
+        if self._tidy is None:
+            return
+        if self._tidy.poll() is None:
+            if now - self._tidy_started >= TIDY_LIMIT:
+                LOG.warning("tidy still running after %s minutes, stopping it", TIDY_LIMIT // 60)
+                stop_child(self._tidy, TIDY_GRACE)
+                self._tidy = None
+                self.tidy_failed({"timeout"}, f"the tidy ran past {TIDY_LIMIT // 60} minutes and was stopped")
+            return
+        output = self._tidy.stdout.read() if self._tidy.stdout else ""
+        self._tidy = None
+        try:
+            result = last_json_line(output or "")
+        except ValueError:
+            result = None
+        if not isinstance(result, dict):
+            self.tidy_failed({"no_json"}, "the tidy exited without a summary")
+            return
+        self.tidy_result(result, now)
+
+    def tidy_result(self, result: dict[str, Any], now: float) -> None:
+        """Post what a finished tidy leaves for the owner. Its removals it posted itself."""
+        error = result.get("error")
+        LOG.info("tidy: %s", json.dumps(result, ensure_ascii=False))
+        if error == "busy":
+            return
+        retry = result.get("retry_after")
+        if isinstance(retry, (int, float)) and not isinstance(retry, bool):
+            self.tidy_retry_until = now + retry
+        over = result.get("over_cap")
+        if isinstance(over, list) and over and over != self.tidy_over_cap_posted:
+            self.tidy_over_cap_posted = list(over)
+            self.post_control(
+                f"The tidy would delete {len(over)} topics, over its cap of {TIDY_CAP}, so it deleted none: "
+                f"{', '.join(map(str, over))}. To confirm this list, run as black:\n"
+                + TIDY_COMMAND.format(plan=result.get("plan")))
+        failed = [f for f in result.get("failed") or [] if isinstance(f, dict)]
+        kinds = {str(f.get("kind")) for f in failed}
+        first = str(failed[0].get("error")) if failed else ""
+        if error or not result.get("ok", False):
+            kinds.add(str(error or "listing").split(":", 1)[0])
+            first = str(error or "the listing failed")
+        if kinds:
+            self.tidy_failed(kinds, first)
+            return
+        if retry is not None:
+            # Cut short, so not the clean run that resets the count.
+            return
+        self.tidy_failures = 0
+        self.tidy_kinds_posted = None
+        if not over:
+            self.tidy_over_cap_posted = None
+
+    def tidy_failed(self, kinds: set[str], first: str) -> None:
+        """Count a failed run. The third in a row posts, and later ones only when what fails changes."""
+        self.tidy_failures += 1
+        if self.tidy_failures < 3 or frozenset(kinds) == self.tidy_kinds_posted:
+            return
+        self.tidy_kinds_posted = frozenset(kinds)
+        self.post_control(f"The tidy has failed {self.tidy_failures} runs in a row. This run: {first}")
+
+    def post_control(self, text: str) -> None:
+        try:
+            self.post(CONTROL, text)
+        except TELEGRAM_ERRORS as exc:
+            LOG.warning("could not post in Control: %s", exc)
+
+    def schedule(self, now: float) -> None:
+        """Reap and start the prune and tidy children. Never both at once."""
+        self.reap_prune(now)
+        self.reap_tidy(now)
+        if self.next_prune is not None and now >= self.next_prune:
+            # A day out even when a tidy holds the lock, so a held lock never shifts the schedule.
+            self.next_prune = now + PRUNE_INTERVAL
+            self.prune_due = True
+        if self.prune_due and not self.child_running(self._tidy) and self.start_prune():
+            self.prune_due = False
+        if (self.config.tidy_enabled and self.tidy_due is not None and now >= self.tidy_due
+                and now >= self.tidy_retry_until and not self.child_running(self._tidy)
+                and not self.child_running(self._prune)):
+            self.tidy_due = now + TIDY_INTERVAL
+            self.start_tidy()
+
     def tidy_notice(self, names: list[str], refused_only: bool) -> None:
         """Say in Control which topics the tidy removed."""
         text = f"Tidied {len(names)} topic{'s' if len(names) != 1 else ''}: {', '.join(names)}."
         if not refused_only:
             text += " /open NAME brings one back."
-        try:
-            self.post(CONTROL, text)
-        except TELEGRAM_ERRORS as exc:
-            LOG.warning("could not post the tidy notice: %s", exc)
+        self.post_control(text)
 
     def session_for(self, thread_id: int | None) -> str | None:
         if thread_id is None:
@@ -2160,6 +2324,8 @@ class Bridge:
             return f"{session} did not start. Is the encrypted home unlocked?"
 
         self.topic_for(session)
+        # A stopped session's topic wakes.
+        self.request_tidy()
         # The launcher's first line says where it started and which conversation.
         summary = (done.stdout or "").strip().splitlines()
         if summary:
@@ -2271,6 +2437,8 @@ class Bridge:
             if error:
                 return error
             self.mark_seen(session)
+            if self.state.icon_state(session) != "awake":
+                self.request_tidy()
             return f"typed into {session}"
         return f"unknown action {action}"
 
@@ -2488,6 +2656,7 @@ class Bridge:
             if forget:
                 self.post(target, f"Closed {target} and forgot its record. "
                                   f"/open {target} starts it again by name.")
+                self.request_tidy()
                 return
             # Posted into the session's own topic, which stays behind as the
             # record. /open with the same name returns to this topic later.
@@ -2498,6 +2667,7 @@ class Bridge:
                 f"up the conversation. /open {target} fresh comes back to it and "
                 "starts a blank one.",
             )
+            self.request_tidy()
             return
 
         if command == "clear":
@@ -2805,8 +2975,18 @@ class Bridge:
                 pass
 
     def poll_timeout(self) -> int:
-        """Short polls while a voice job waits, so a finished child is collected promptly."""
-        return BUSY_POLL if self.voice is not None and self.voice.busy() else POLL_TIMEOUT
+        """Short polls while a voice job or a tidy runs, so a finished child is collected promptly.
+
+        A tidy due within the long poll shortens it, unless a prune or a
+        retry_after blocks the tidy, which would only make the loop spin.
+        """
+        if (self.voice is not None and self.voice.busy()) or self.child_running(self._tidy):
+            return BUSY_POLL
+        now = time.time()
+        if (self.config.tidy_enabled and self.tidy_due is not None and not self.child_running(self._prune)
+                and now >= self.tidy_retry_until and self.tidy_due - now < POLL_TIMEOUT):
+            return max(1, math.ceil(self.tidy_due - now))
+        return POLL_TIMEOUT
 
     # ── the loop ────────────────────────────────────────────────────────────
 
@@ -2980,14 +3160,18 @@ class Bridge:
         backoff = 1
         next_limits = 0.0
         # A minute in, then daily. A prune only deletes what is already a week old,
-        # so running again after a redeploy costs nothing.
-        next_prune = time.time() + 60
+        # so running again after a redeploy costs nothing. The first tidy follows it.
+        self.next_prune = time.time() + 60
+        if self.config.tidy_enabled:
+            self.tidy_due = time.time() + TIDY_FIRST
         while running:
             if loaded_mtime is not None and script.stat().st_mtime != loaded_mtime:
                 LOG.info("bridge file changed, reloading")
                 self.state.save()
                 if self.voice is not None:
                     self.voice.stop_child()
+                # A re-exec keeps the PID, so a child left running would be nobody's child.
+                self.stop_children()
                 os.execv(sys.executable, [sys.executable, str(script), "serve"])
             if self.config.limits_enabled and time.time() >= next_limits:
                 next_limits = time.time() + LIMITS_INTERVAL
@@ -2995,15 +3179,15 @@ class Bridge:
                     self.limits.check(lambda text: self.post(LIMITS, text))
                 except Exception as exc:  # noqa: BLE001 - limits must never stop the loop
                     LOG.exception("limits check failed: %s", exc)
-            self.reap_prune()
             if self.voice is not None:
                 try:
                     self.voice.tick()
                 except Exception as exc:  # noqa: BLE001 - voice must never stop the loop
                     LOG.error("voice tick failed: %s", type(exc).__name__)
-            if time.time() >= next_prune:
-                next_prune = time.time() + PRUNE_INTERVAL
-                self.start_prune()
+            try:
+                self.schedule(time.time())
+            except Exception as exc:  # noqa: BLE001 - housekeeping must never stop the loop
+                LOG.exception("prune or tidy scheduling failed: %s", exc)
             try:
                 result = self.tg.call(
                     "getUpdates",
@@ -3044,6 +3228,8 @@ class Bridge:
 
         if self.voice is not None:
             self.voice.stop_child()
+        # The unit's KillMode=process would leave them running past the restart.
+        self.stop_children()
         return 0
 
 
