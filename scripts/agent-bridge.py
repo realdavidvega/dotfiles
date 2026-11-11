@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import fnmatch
+import hashlib
 import html
 import http.client
 import json
@@ -129,6 +130,19 @@ CLEAR_TIMEOUT = 300
 # The agents' own transcripts hold everything, so the chat keeps a week.
 PRUNE_DAYS = 7
 PRUNE_INTERVAL = 24 * 3600
+PRUNE_LIMIT = 30 * 60
+
+# The tidy deletes the topics of sessions that ended and marks idle ones asleep.
+TIDY_FIRST = 120
+TIDY_INTERVAL = 600
+TIDY_REQUEST_DELAY = 5
+TIDY_LIMIT = 10 * 60
+TIDY_CAP = 5
+TIDY_LIST_TIMEOUT = 60
+DELETE_TIMEOUT = 5
+SLEEP_EMOJI = ("\U0001F4A4", "\U0001F634", "\U0001F319")  # 💤 😴 🌙
+TIDY_COMMAND = ("AGENT_BRIDGE_ENV=/srv/services/agents/bridge.env "
+                "python3 /srv/services/agents/bin/agent-bridge.py tidy --force {plan}")
 
 
 def find_user_command() -> list[str] | None:
@@ -1706,6 +1720,229 @@ class Bridge:
         self._prune = None
         LOG.info("prune: %s", output.splitlines()[-1] if output else "finished with no output")
 
+    def tidy_listing(self) -> tuple[list[dict[str, Any]] | None, str]:
+        """The launcher's strict listing, or None and the reason. Never falls back to tmux."""
+        launcher = find_launcher()
+        if not launcher:
+            return None, NO_LAUNCHER
+        try:
+            done = subprocess.run([launcher, "ls", "--all", "--json", "--strict"], capture_output=True,
+                                  text=True, timeout=TIDY_LIST_TIMEOUT)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, str(exc)
+        if done.returncode:
+            detail = (done.stderr or done.stdout or "").strip().splitlines()
+            return None, detail[-1] if detail else f"the launcher exited {done.returncode}"
+        try:
+            rows = json.loads(done.stdout)
+        except ValueError:
+            return None, "the launcher printed no JSON"
+        if not isinstance(rows, list):
+            return None, "the launcher printed no list"
+        return [r for r in rows if isinstance(r, dict) and isinstance(r.get("name"), str)], ""
+
+    def sleep_icon(self) -> tuple[str, str]:
+        """The first sleep emoji Telegram offers as a topic icon, and its id, or ("none", "")."""
+        stickers = self.tg.call("getForumTopicIconStickers").get("result") or []
+        offered = {str(s.get("emoji", "")).replace("\ufe0f", ""): str(s.get("custom_emoji_id"))
+                   for s in stickers if isinstance(s, dict) and s.get("custom_emoji_id")}
+        for emoji in SLEEP_EMOJI:
+            if emoji in offered:
+                return emoji, offered[emoji]
+        return "none", ""
+
+    def bot_rights(self) -> dict[str, Any]:
+        """The bot's two topic rights in the group, from getChatMember."""
+        try:
+            member = self.tg.call("getChatMember", chat_id=self.config.chat_id,
+                                  user_id=self.bot_id).get("result") or {}
+        except TELEGRAM_ERRORS as exc:
+            return {"error": str(exc)}
+        owner = member.get("status") == "creator"
+        return {right: bool(owner or member.get(right)) for right in ("can_delete_messages", "can_manage_topics")}
+
+    def tidy_plan(self, rows: list[dict[str, Any]]) -> tuple[list[str], dict[str, str], list[str]]:
+        """Which mapped topics go, which icon each kept one wants, and which are kept as they are."""
+        listed = {r["name"]: r for r in rows}
+        doomed: list[str] = []
+        wanted: dict[str, str] = {}
+        kept: list[str] = []
+        for name in sorted(n for n in self.state.topics if not n.startswith("@")):
+            row = listed.get(name)
+            state = row.get("state") if row else None
+            idle = row.get("idle_days") if row else None
+            if not self.config.session_allowed(name):
+                doomed.append(name)
+                continue
+            if row is None or state in ("closed", "expired"):
+                # A grouped client or a session the listing missed keeps its topic and icon.
+                if self.tmux.alive(name) is False:
+                    doomed.append(name)
+                else:
+                    kept.append(name)
+                continue
+            kept.append(name)
+            if state == "stopped":
+                wanted[name] = "asleep"
+            elif state == "running":
+                days = idle if isinstance(idle, int) and not isinstance(idle, bool) else None
+                wanted[name] = "asleep" if days is not None and days >= self.config.sleep_days else "awake"
+        return doomed, wanted, kept
+
+    @staticmethod
+    def tidy_plan_id(names: list[str]) -> str:
+        digest = hashlib.sha256("\n".join(sorted(names)).encode()).hexdigest()
+        return f"{len(names)}:{digest[:8]}"
+
+    @staticmethod
+    def failure_kind(exc: Exception, kind: str) -> str:
+        detail = str(exc).lower()
+        return "rights" if "not enough rights" in detail or "admin_required" in detail else kind
+
+    def tidy(self, dry_run: bool = False, force: str | None = None) -> dict[str, Any]:
+        """Make the session topics agree with the launcher's listing. Returns the JSON summary.
+
+        Deletes the topics of refused and ended sessions, at most TIDY_CAP a
+        run unless the plan is confirmed with force, and sets each kept topic's
+        icon asleep or awake. Doubt about a session always keeps its topic.
+        """
+        result: dict[str, Any] = {"ok": True, "deleted": [], "slept": [], "woke": [], "failed": [],
+                                  "over_cap": None, "plan": None, "icon": None, "retry_after": None,
+                                  "error": None}
+        self.state.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(self.state.path) + ".tidy.lock", "a", encoding="utf-8") as lock:
+            os.chmod(lock.name, 0o600)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                result["error"] = "busy"
+                return result
+            self._tidy(result, dry_run, force)
+        return result
+
+    def _tidy(self, result: dict[str, Any], dry_run: bool, force: str | None) -> None:
+        self.state.reload()
+        if not any(not name.startswith("@") for name in self.state.topics):
+            return
+        rows, reason = self.tidy_listing()
+        if rows is None:
+            result["ok"] = False
+            result["error"] = f"listing: {reason}"
+            return
+        doomed, wanted, kept = self.tidy_plan(rows)
+        refused = {n for n in doomed if not self.config.session_allowed(n)}
+        threads = dict(self.state.topics)
+        if doomed:
+            result["plan"] = self.tidy_plan_id(doomed)
+        if force is not None and force != result["plan"]:
+            result["error"] = f"the plan is now {result['plan']}, not {force}"
+            return
+        changes = {n: w for n, w in wanted.items() if self.state.icon_state(n) != w}
+        icon_id = None
+        if dry_run or "asleep" in changes.values():
+            try:
+                result["icon"], icon_id = self.sleep_icon()
+            except TelegramError as exc:
+                if exc.retry_after is not None:
+                    result["retry_after"] = exc.retry_after
+                    return
+                result["error"] = f"sticker: {exc}"
+            except (OSError, ValueError) as exc:
+                result["error"] = f"sticker: {exc}"
+        if dry_run:
+            result.update(dry_run=True, would_delete=doomed,
+                          would_sleep=sorted(n for n, w in changes.items() if w == "asleep"),
+                          would_wake=sorted(n for n, w in changes.items() if w == "awake"),
+                          kept=[{"name": n, "thread": threads[n], "link": self.topic_link(threads[n])}
+                                for n in kept],
+                          rights=self.bot_rights(), scope="mapped topics only")
+            return
+        if len(doomed) > TIDY_CAP and force is None:
+            result["over_cap"] = doomed
+            doomed = []
+        try:
+            for name in doomed:
+                if not self._tidy_delete(result, name, threads[name], name in refused):
+                    break
+            if result["error"] or result["retry_after"] is not None:
+                changes = {}
+            for name, state in sorted(changes.items()):
+                emoji = icon_id if state == "asleep" else SESSION_ICON
+                if not self._tidy_icon(result, name, threads[name], state, emoji):
+                    break
+        finally:
+            # Announced even after a 429 or a stop, so a removal already made is never silent.
+            if result["deleted"]:
+                self.tidy_notice(result["deleted"], all(n in refused for n in result["deleted"]))
+
+    def _tidy_delete(self, result: dict[str, Any], name: str, thread: int, refused: bool) -> bool:
+        """Delete one topic and forget it under a single topics lock hold. False stops the run."""
+        with self.state.locked(".topics.lock"):
+            self.state.reload()
+            if self.state.topics.get(name) != thread:
+                return True
+            if not refused and self.tmux.alive(name) is not False:
+                return True
+            try:
+                self.tg.call("deleteForumTopic", http_timeout=DELETE_TIMEOUT,
+                             chat_id=self.config.chat_id, message_thread_id=thread)
+            except TelegramError as exc:
+                if exc.retry_after is not None:
+                    result["retry_after"] = exc.retry_after
+                    return False
+                if exc.topic_gone:
+                    self.state.forget_topic(name)
+                    return True
+                result["failed"].append({"name": name, "action": "delete",
+                                         "kind": self.failure_kind(exc, "delete"), "error": str(exc)})
+                return True
+            except (OSError, ValueError) as exc:
+                result["failed"].append({"name": name, "action": "delete", "kind": "delete", "error": str(exc)})
+                return True
+            self.state.forget_topic(name)
+            result["deleted"].append(name)
+            return True
+
+    def _tidy_icon(self, result: dict[str, Any], name: str, thread: int, state: str, emoji: str) -> bool:
+        """Set one topic's icon and record it. False stops the run."""
+        try:
+            self.tg.call("editForumTopic", chat_id=self.config.chat_id, message_thread_id=thread,
+                         icon_custom_emoji_id=emoji)
+        except TelegramError as exc:
+            if exc.retry_after is not None:
+                result["retry_after"] = exc.retry_after
+                return False
+            if exc.topic_gone:
+                with self.state.locked(".topics.lock"):
+                    self.state.reload()
+                    if self.state.topics.get(name) == thread:
+                        self.state.forget_topic(name)
+                return True
+            if not exc.not_modified:
+                result["failed"].append({"name": name, "action": state,
+                                         "kind": self.failure_kind(exc, "edit"), "error": str(exc)})
+                return True
+        except (OSError, ValueError) as exc:
+            result["failed"].append({"name": name, "action": state, "kind": "edit", "error": str(exc)})
+            return True
+        with self.state.locked(".topics.lock"):
+            self.state.reload()
+            if self.state.topics.get(name) == thread:
+                self.state.set_icon(name, state)
+                self.state.save()
+        result["slept" if state == "asleep" else "woke"].append(name)
+        return True
+
+    def tidy_notice(self, names: list[str], refused_only: bool) -> None:
+        """Say in Control which topics the tidy removed."""
+        text = f"Tidied {len(names)} topic{'s' if len(names) != 1 else ''}: {', '.join(names)}."
+        if not refused_only:
+            text += " /open NAME brings one back."
+        try:
+            self.post(CONTROL, text)
+        except TELEGRAM_ERRORS as exc:
+            LOG.warning("could not post the tidy notice: %s", exc)
+
     def session_for(self, thread_id: int | None) -> str | None:
         if thread_id is None:
             return None
@@ -2845,6 +3082,30 @@ def cmd_topic(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tidy(args: argparse.Namespace) -> int:
+    """Run one tidy and print its JSON line, after a readable report for a dry run."""
+    bridge = build(Config.from_env())
+    # A stop unwinds the pass rather than killing it, so its removals are still announced.
+    signal.signal(signal.SIGTERM, lambda _signum, _frame: sys.exit(143))
+    result = bridge.tidy(dry_run=args.dry_run, force=args.force)
+    if result.get("dry_run"):
+        icon = result["icon"] or "unknown, the sticker list failed"
+        print("Covers mapped topics only. A topic missing from bridge-state.json is out of reach.")
+        print(f"Would delete: {', '.join(result['would_delete']) or 'nothing'}")
+        if result["plan"]:
+            print(f"Plan {result['plan']}, confirmed with: {TIDY_COMMAND.format(plan=result['plan'])}")
+        print(f"Would sleep: {', '.join(result['would_sleep']) or 'nothing'}")
+        print(f"Would wake: {', '.join(result['would_wake']) or 'nothing'}")
+        print(f"Sleep icon: {'no icon' if icon == 'none' else icon}")
+        for topic in result["kept"]:
+            print(f"Keeps {topic['name']}: thread {topic['thread']} {topic['link'] or ''}".rstrip())
+        print("Rights: " + ", ".join(f"{k}={v}" for k, v in result["rights"].items()))
+    elif str(result.get("error") or "").startswith("the plan is now"):
+        print(f"Nothing changed. The plan is now {result['plan']}.")
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if result["ok"] and result["error"] in (None, "busy") else 1
+
+
 def cmd_limits(args: argparse.Namespace) -> int:
     bridge = build(Config.from_env())
     if args.check:
@@ -3061,6 +3322,11 @@ def main(argv: list[str] | None = None) -> int:
     topic.add_argument("--control", action="store_true",
                        help="post the text in Control instead, only if the session has a topic")
     topic.set_defaults(func=cmd_topic)
+
+    tidy = sub.add_parser("tidy", help="delete the topics of ended sessions and mark idle ones asleep")
+    tidy.add_argument("--dry-run", action="store_true", help="print the plan, rights and icon, change nothing")
+    tidy.add_argument("--force", metavar="PLAN", help="confirm a plan over the cap, as the dry run printed it")
+    tidy.set_defaults(func=cmd_tidy)
 
     limits = sub.add_parser("limits", help="print Claude and Codex usage windows")
     limits.add_argument("--check", action="store_true", help="post any due limit messages")
