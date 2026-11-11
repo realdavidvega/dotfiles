@@ -753,10 +753,30 @@ class State:
 
 
 class TelegramError(RuntimeError):
+    def __init__(self, message: str, body: Any = None) -> None:
+        super().__init__(message)
+        # The response body Telegram sent with the error, when there was one.
+        self.body = body if isinstance(body, dict) else {}
+
     @property
     def missing_topic(self) -> bool:
         detail = str(self).lower()
         return "message thread not found" in detail or "topic_deleted" in detail
+
+    @property
+    def topic_gone(self) -> bool:
+        return self.missing_topic or "topic_id_invalid" in str(self).lower()
+
+    @property
+    def not_modified(self) -> bool:
+        return "topic_not_modified" in str(self).lower()
+
+    @property
+    def retry_after(self) -> int | None:
+        """The seconds a 429 asks to wait, from the body's parameters."""
+        parameters = self.body.get("parameters")
+        value = parameters.get("retry_after") if isinstance(parameters, dict) else None
+        return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 # URLError is an OSError, and a malformed response raises ValueError.
@@ -804,16 +824,18 @@ class Telegram:
             with urllib.request.urlopen(request, timeout=http_timeout) as response:
                 result = json.loads(response.read().decode())
                 if not result.get("ok"):
-                    raise TelegramError(f"{method}: {result.get('description', 'request refused')}")
+                    raise TelegramError(f"{method}: {result.get('description', 'request refused')}", result)
                 return result
         except urllib.error.HTTPError as exc:
             # Telegram puts the real reason in the body. A bare "400 Bad
-            # Request" is unactionable, so surface the description instead.
+            # Request" is unactionable, so surface the description instead,
+            # and keep the body for the retry_after a 429 carries.
             try:
-                detail = json.loads(exc.read().decode()).get("description", "")
+                body = json.loads(exc.read().decode())
+                detail = body.get("description", "")
             except Exception:  # noqa: BLE001 - we are already handling an error
-                detail = ""
-            raise TelegramError(f"{method}: {exc.code} {detail or exc.reason}") from exc
+                body, detail = None, ""
+            raise TelegramError(f"{method}: {exc.code} {detail or exc.reason}", body) from exc
 
     def download(self, file_id: str, dest: Path, cap: int) -> None:
         """Save a file the chat sent, refusing one over `cap` bytes.
@@ -951,6 +973,26 @@ class Tmux:
 
     def exists(self, session: str) -> bool:
         return self._run("has-session", "-t", f"={session}")[0] == 0
+
+    def alive(self, session: str) -> bool | None:
+        """True when the session runs, False only when tmux says plainly it does not, None for doubt.
+
+        A bare "error connecting" is doubt, because tmux prints it for any
+        connect error, permission denied included, while the server is up.
+        """
+        try:
+            done = subprocess.run(self._base + ["has-session", "-t", f"={session}"],
+                                  capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if done.returncode == 0:
+            return True
+        error = done.stderr or ""
+        if "can't find session" in error or "no server running" in error:
+            return False
+        if "error connecting" in error and "(No such file or directory)" in error:
+            return False
+        return None
 
     def capture(self, session: str, lines: int = PEEK_LINES, ansi: bool = False) -> str:
         code, out = self._run("capture-pane", "-p", *(["-e"] if ansi else []), "-t", self._pane(session), "-S", f"-{lines}")

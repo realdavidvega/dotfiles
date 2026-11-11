@@ -733,6 +733,42 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(saved.topic_icons, {})
 
 
+    def test_tmux_alive_classifies_has_session_results(self):
+        tmux = b.Tmux()
+        cases = [
+            (Mock(return_value=Mock(returncode=0, stdout='', stderr='')), True),
+            (Mock(return_value=Mock(returncode=1, stdout='', stderr="can't find session: =api\n")), False),
+            (Mock(return_value=Mock(returncode=1, stdout='', stderr='no server running on /tmp/tmux-1/default\n')), False),
+            (Mock(return_value=Mock(returncode=1, stdout='',
+                                    stderr='error connecting to /tmp/tmux-1/default (No such file or directory)\n')), False),
+            (Mock(return_value=Mock(returncode=1, stdout='',
+                                    stderr='error connecting to /tmp/tmux-1/default (Permission denied)\n')), None),
+            (Mock(side_effect=b.subprocess.TimeoutExpired('tmux', 10)), None),
+            (Mock(side_effect=FileNotFoundError('tmux')), None),
+            (Mock(return_value=Mock(returncode=1, stdout='', stderr='server exited unexpectedly\n')), None),
+        ]
+        for run, expected in cases:
+            with patch.object(b.subprocess, 'run', run):
+                self.assertIs(tmux.alive('api'), expected)
+        self.assertEqual(run.call_args.args[0], ['tmux', 'has-session', '-t', '=api'])
+
+    def test_telegram_errors_keep_their_body(self):
+        body = {'ok': False, 'error_code': 429, 'description': 'Too Many Requests: retry after 7',
+                'parameters': {'retry_after': 7}}
+        error = b.HTTPError if hasattr(b, 'HTTPError') else b.urllib.error.HTTPError
+        reply = error('u', 429, 'Too Many Requests', {}, None)
+        reply.read = Mock(return_value=json.dumps(body).encode())
+        with patch.object(b.urllib.request, 'urlopen', side_effect=reply):
+            with self.assertRaises(b.TelegramError) as caught:
+                b.Telegram('t').call('editForumTopic')
+        self.assertEqual(caught.exception.retry_after, 7)
+        self.assertIsNone(b.TelegramError('editForumTopic: 400 Bad Request: TOPIC_NOT_MODIFIED').retry_after)
+        self.assertTrue(b.TelegramError('editForumTopic: 400 Bad Request: TOPIC_NOT_MODIFIED').not_modified)
+        self.assertTrue(b.TelegramError('deleteForumTopic: 400 Bad Request: TOPIC_ID_INVALID').topic_gone)
+        self.assertTrue(b.TelegramError('sendMessage: 400 Bad Request: message thread not found').topic_gone)
+        self.assertFalse(b.TelegramError('deleteForumTopic: 400 Bad Request: not enough rights').topic_gone)
+
+
     ENV = {'AGENT_BRIDGE_BOT_TOKEN': 't', 'AGENT_BRIDGE_CHAT_ID': '-1', 'AGENT_BRIDGE_ALLOWED_USER_IDS': '2',
            'AGENT_BRIDGE_SESSIONS': '* !pp-*'}
 
