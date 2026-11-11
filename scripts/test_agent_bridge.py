@@ -1364,5 +1364,34 @@ class VoiceTests(unittest.TestCase):
             self.assertIsNone(b.Config.from_env().voice_root)
 
 
+
+class NotifyScriptTests(unittest.TestCase):
+    def notify(self, session, *flags):
+        """Run agent-notify.sh inside a fake tmux session, and say whether it reached the bridge."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'bin').mkdir()
+            tmux = root / 'bin' / 'tmux'
+            tmux.write_text('#!/bin/sh\ncase "$1" in display-message) echo %s ;; esac\nexit 0\n' % session)
+            tmux.chmod(0o755)
+            marker = root / 'reached'
+            bridge = root / 'bridge.py'
+            bridge.write_text(f'open({str(marker)!r}, "w").close()\n')
+            env_file = root / 'bridge.env'
+            env_file.write_text('')
+            env = {k: v for k, v in b.os.environ.items() if k not in ('TELEGRAM_BOT_ID', 'TELEGRAM_CHAT_ID')}
+            env.update(PATH=f"{root / 'bin'}:{env.get('PATH', '/usr/bin:/bin')}", TMUX='/tmp/fake,1,0',
+                       TMUX_PANE='%1', HOME=tmp, DOTFILES_PATH=tmp, AGENT_BRIDGE_ENV=str(env_file),
+                       AGENT_BRIDGE_BIN=str(bridge))
+            b.subprocess.run(['bash', str(Path(__file__).with_name('agent-notify.sh')), *flags, '{}'],
+                             env=env, cwd=tmp, stdin=b.subprocess.DEVNULL, capture_output=True, timeout=30)
+            return marker.exists()
+
+    def test_notify_script_ignores_pp_sessions(self):
+        self.assertFalse(self.notify('pp-rec'))
+        self.assertFalse(self.notify('pp-rec', '--force'))
+        self.assertTrue(self.notify('vault'))
+
+
 if __name__ == '__main__':
     unittest.main()

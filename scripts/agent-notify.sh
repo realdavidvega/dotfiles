@@ -65,6 +65,9 @@ if [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
   session="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null || true)"
 fi
 
+# A paneport test session never reaches Telegram, not even with --force.
+case "$session" in pp-*) exit 0 ;; esac
+
 # Send only for a tmux session with nobody attached. Outside tmux there is no
 # attach state to read, and the agent is either being watched in a terminal or
 # running as a background job. Neither wants a ping, so silence is the default
@@ -252,9 +255,11 @@ fi
 # Prefer the bridge when it is configured: it posts into the session's own
 # Telegram topic with buttons, so the reply goes straight back to this pane.
 # Without it, fall back to a plain message, which is all a machine running no
-# bridge can offer.
+# bridge can offer. AGENT_BRIDGE_BIN overrides the staged copy, as it does for
+# the launcher.
 bridge=""
 for candidate in \
+  "${AGENT_BRIDGE_BIN:-}" \
   /srv/services/agents/bin/agent-bridge.py \
   "${DOTFILES_PATH:-$HOME/.dotfiles}/scripts/agent-bridge.py"; do
   if [[ -r "$candidate" ]]; then
