@@ -908,19 +908,45 @@ class ControlTests(unittest.TestCase):
         cb['message'].update(message_id=50, message_thread_id=40)
         self.bridge.handle_callback(cb)
 
-    def test_home_labels_stopped_and_closed_records_with_their_agent(self):
+    def test_control_home_drops_closed_keeps_topics_and_marks_sleep(self):
         self.bridge.config.session_patterns = ['*']
+        self.state.topics['old'] = 8
+        self.state.save()
         self.bridge.sessions = Mock(return_value=[
-            {'name': 'api', 'state': 'stopped', 'agent': 'codex', 'recorded': True, 'idle_days': 3},
-            {'name': 'old', 'state': 'closed', 'agent': 'claude', 'recorded': True, 'idle_days': 20},
-            {'name': 'gone', 'state': 'expired', 'agent': 'opencode', 'recorded': True, 'idle_days': 15},
+            {'name': 'api', 'state': 'stopped', 'agent': 'codex', 'recorded': True, 'idle_days': 0},
+            {'name': 'old', 'state': 'closed', 'agent': 'claude', 'recorded': True, 'idle_days': None},
+            {'name': 'gone', 'state': 'expired', 'agent': 'opencode', 'recorded': True, 'idle_days': None},
             {'name': 'live', 'state': 'running', 'agent': None, 'recorded': False, 'idle_days': None},
+            {'name': 'busy', 'state': 'running', 'agent': 'claude', 'recorded': True, 'idle_days': 2},
+            {'name': 'idle', 'state': 'running', 'agent': 'claude', 'recorded': True, 'idle_days': 3},
         ])
         self.bridge.control_panel()
-        labels = self.labels()
-        for label in ('⚪ api · Stopped, codex, 3d idle', '⚪ old · Closed, claude',
-                      '⚪ gone · Expired, opencode', '🟢 live · claude', '⚪ vault · Stopped'):
-            self.assertIn(label, labels)
+        sessions = [label for label in self.labels() if ' · ' in label]
+        self.assertEqual(sessions, ['💤 api · Stopped, codex, 0d idle', '🟢 busy · claude', '💤 idle · claude',
+                                    '🟢 live · claude', '⚪ vault · Stopped'])
+
+    def test_close_replies_in_control_and_queues_a_tidy(self):
+        run = BridgeTests.launcher(self)
+        self.bridge.handle_command('close', 'vault', 'vault', 6)
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 40)
+        text = self.tg.send.call_args.args[1]
+        self.assertTrue(text.startswith('closed vault.'))
+        self.assertNotIn('This topic stays', text)
+        self.assertNotIn('comes back to it', text)
+        self.assertIsNotNone(self.bridge.tidy_due)
+        self.bridge.tidy_due = None
+        self.bridge.handle_command('close', 'forget', 'vault', 6)
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 40)
+        self.assertIsNotNone(self.bridge.tidy_due)
+        self.bridge.tidy_due = None
+        self.tmux.exists.return_value = True
+        self.click('session', 'vault')
+        self.click('manage', 'vault')
+        self.click('kill', 'vault')
+        self.assertIsNone(self.bridge.tidy_due)
+        self.click('kill-confirm', 'vault')
+        self.assertIn(['/fake/agent-session', 'close', 'vault'], [c.args[0] for c in run.call_args_list])
+        self.assertIsNotNone(self.bridge.tidy_due)
 
     def test_recorded_stopped_page_resumes_with_its_agent(self):
         self.record()

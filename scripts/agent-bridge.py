@@ -1451,14 +1451,20 @@ class Bridge:
         if page == "home":
             self.state.reload()
             listed = {r["name"]: r for r in self.sessions()}
+            # Closed and expired sessions stay reachable by /open NAME and /ls.
             names = sorted(n for n in set(listed) | set(self.state.topics)
-                           if self.config.session_allowed(n) and not n.endswith("-m"))
+                           if self.config.session_allowed(n) and not n.endswith("-m")
+                           and (listed.get(n) or {}).get("state") not in ("closed", "expired"))
             body = "Choose a session or create a new one." if names else "Create your first session."
             for name in names:
                 row = listed.get(name)
-                label = ("🟢 " + name + " · " + self.tmux.running(name)
-                         if row and row.get("state") == "running"
-                         else "⚪ " + name + " · " + self.stopped_label(row))
+                if row and row.get("state") == "running":
+                    idle = row.get("idle_days")
+                    asleep = (isinstance(idle, int) and not isinstance(idle, bool)
+                              and idle >= self.config.sleep_days)
+                    label = ("💤 " if asleep else "🟢 ") + name + " · " + self.tmux.running(name)
+                else:
+                    label = ("💤 " if row else "⚪ ") + name + " · " + self.stopped_label(row)
                 rows.append([b(label, "session", name)])
             rows += [[b("➕ New session", "new"), b("❓ Help", "help")],
                      [b("🔄 Refresh", "home"), b("🧹 Clear", "clear-control")]]
@@ -1504,7 +1510,7 @@ class Bridge:
                 rows.append([b("⚙️ Manage", "manage", session)])
         elif page == "kill":
             title += " · " + session
-            body = "Close this session and its agent? The topic and saved conversation remain."
+            body = "Close this session and its agent? Its topic is deleted, and /open brings back the saved conversation."
             rows = [[b("⏹ Yes, close " + session, "kill-confirm", session), b("Cancel", "session", session)]]
         else:
             body = ("Choose a session on the main panel to open its controls. Manage holds bind, close and clear."
@@ -2405,7 +2411,7 @@ class Bridge:
             return (
                 f"no session named {session} is running.\n"
                 f"/open {session} resumes its own conversation, "
-                f"/open {session} fresh starts a blank one. Either returns to this topic."
+                f"/open {session} fresh starts a blank one."
             )
         return None
 
@@ -2653,20 +2659,14 @@ class Bridge:
             if error:
                 self.post(None, f"could not close {target}: {error}")
                 return
+            # Posted in Control, because the session's topic goes at the next tidy.
             if forget:
-                self.post(target, f"Closed {target} and forgot its record. "
-                                  f"/open {target} starts it again by name.")
-                self.request_tidy()
-                return
-            # Posted into the session's own topic, which stays behind as the
-            # record. /open with the same name returns to this topic later.
-            self.post(
-                target,
-                f"closed {target}.\n\n"
-                f"This topic stays. /open {target} comes back to it and picks "
-                f"up the conversation. /open {target} fresh comes back to it and "
-                "starts a blank one.",
-            )
+                self.post(CONTROL, f"Closed {target} and forgot its record. "
+                                   f"/open {target} starts it again by name.")
+            else:
+                self.post(CONTROL, f"closed {target}.\n\n"
+                                   f"/open {target} picks up the conversation in a new topic. "
+                                   f"/open {target} fresh starts a blank one.")
             self.request_tidy()
             return
 
