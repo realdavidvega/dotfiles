@@ -2750,6 +2750,12 @@ def cmd_topic(args: argparse.Namespace) -> int:
     if session not in TOPIC_TITLES and not bridge.config.session_allowed(session):
         print(f"session {session} is not in the allowlist")
         return 1
+    if args.control:
+        # The session's topic is about to go, so the notice lands in Control,
+        # and only for a session Telegram has seen.
+        if args.text and bridge.topic_for(session, create=False) is not None:
+            bridge.post(CONTROL, args.text)
+        return 0
     if args.no_create and bridge.topic_for(session, create=False) is None:
         return 0
     if not args.text:
@@ -2792,6 +2798,9 @@ def cmd_notify(args: argparse.Namespace) -> int:
     buttons = notify_buttons(args.event, bridge.config, session)
     if args.dry_run:
         print(f"[{session}] buttons={buttons}\n{args.text}")
+        return 0
+    # Success, so agent-notify.sh sends no plain fallback for a refused session either.
+    if not bridge.config.session_allowed(session):
         return 0
     bridge.post(session, args.text, buttons=buttons)
     return 0
@@ -2970,6 +2979,8 @@ def main(argv: list[str] | None = None) -> int:
     topic.add_argument("--text", help="post this into the topic")
     topic.add_argument("--no-create", action="store_true", help="only post if a topic exists")
     topic.add_argument("--no-buttons", action="store_true", help="post without the Peek and Esc buttons")
+    topic.add_argument("--control", action="store_true",
+                       help="post the text in Control instead, only if the session has a topic")
     topic.set_defaults(func=cmd_topic)
 
     limits = sub.add_parser("limits", help="print Claude and Codex usage windows")

@@ -513,7 +513,8 @@ class BridgeTests(unittest.TestCase):
         popen.assert_not_called()
 
     def test_topic_no_buttons_posts_without_a_keyboard(self):
-        args = b.argparse.Namespace(session='vault', text='closed vault', no_create=True, no_buttons=False)
+        args = b.argparse.Namespace(session='vault', text='closed vault', no_create=True, no_buttons=False,
+                                    control=False)
         with patch.object(b, 'build', return_value=self.bridge), patch.object(b.Config, 'from_env'):
             self.assertEqual(b.cmd_topic(args), 0)
             self.assertEqual(self.tg.send.call_args.kwargs['buttons'], ['peek', 'esc'])
@@ -660,6 +661,33 @@ class BridgeTests(unittest.TestCase):
         (day / 'rollout.jsonl').write_text('\n'.join(json.dumps(line) for line in lines) + '\n')
         self.assertEqual([(w.window, w.used, w.resets_at) for w in b.codex_windows(base / 'sessions')],
                          [('5h', 100.0, 300), ('7d', 31.0, 400)])
+
+
+    def test_notify_for_a_refused_session_creates_no_topic(self):
+        self.bridge.config.session_patterns = ['*', '!pp-*']
+        args = b.argparse.Namespace(session='pp-rec', text='done', event='stop', dry_run=False)
+        with patch.object(b, 'build', return_value=self.bridge), patch.object(b.Config, 'from_env'):
+            self.assertEqual(b.cmd_notify(args), 0)
+        self.tg.call.assert_not_called()
+        self.tg.send.assert_not_called()
+        self.assertNotIn('pp-rec', b.State.load(self.path).topics)
+
+    def test_topic_control_posts_in_control_only_when_the_session_had_a_topic(self):
+        self.bridge.config.session_patterns = ['*']
+        self.state.topics[b.CONTROL] = 40
+        self.state.save()
+        args = b.argparse.Namespace(session='api', text='closed api at a terminal.', no_create=True,
+                                    no_buttons=True, control=True)
+        with patch.object(b, 'build', return_value=self.bridge), patch.object(b.Config, 'from_env'):
+            self.assertEqual(b.cmd_topic(args), 0)
+            self.tg.send.assert_not_called()
+            args.session, args.text = 'vault', 'closed vault at a terminal.'
+            self.assertEqual(b.cmd_topic(args), 0)
+        self.tg.call.assert_not_called()
+        self.assertEqual(self.tg.send.call_count, 1)
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 40)
+        self.assertEqual(self.tg.send.call_args.args[1], 'closed vault at a terminal.')
+        self.assertNotIn('api', b.State.load(self.path).topics)
 
 
     ENV = {'AGENT_BRIDGE_BOT_TOKEN': 't', 'AGENT_BRIDGE_CHAT_ID': '-1', 'AGENT_BRIDGE_ALLOWED_USER_IDS': '2',
