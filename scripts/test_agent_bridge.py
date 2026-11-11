@@ -228,7 +228,7 @@ class BridgeTests(unittest.TestCase):
         self.bridge.publish_guide(pin=True)
         sent = next(c.kwargs for c in self.tg.call.call_args_list if c.args[0] == 'sendMessage')
         self.assertEqual(sent['text'], self.bridge.render_guide())
-        self.assertLess(len(b.GUIDE.format(sessions='vault skp skills dotfiles black-system api')), 4096)
+        self.assertLess(len(b.GUIDE.format(sessions='vault skp skills dotfiles black-system api not pp-*', sleep_days=30)), 4096)
 
     def test_deleted_guide_id_is_cleared(self):
         self.state.guide_message_id = 20
@@ -660,6 +660,37 @@ class BridgeTests(unittest.TestCase):
         (day / 'rollout.jsonl').write_text('\n'.join(json.dumps(line) for line in lines) + '\n')
         self.assertEqual([(w.window, w.used, w.resets_at) for w in b.codex_windows(base / 'sessions')],
                          [('5h', 100.0, 300), ('7d', 31.0, 400)])
+
+
+    ENV = {'AGENT_BRIDGE_BOT_TOKEN': 't', 'AGENT_BRIDGE_CHAT_ID': '-1', 'AGENT_BRIDGE_ALLOWED_USER_IDS': '2',
+           'AGENT_BRIDGE_SESSIONS': '* !pp-*'}
+
+    def test_exclusion_beats_a_matching_pattern(self):
+        with patch.dict(b.os.environ, self.ENV, clear=True):
+            config = b.Config.from_env()
+        self.assertTrue(config.session_allowed('vault'))
+        self.assertFalse(config.session_allowed('pp-rec'))
+        self.assertFalse(config.session_allowed('@control'))
+        self.assertEqual((config.sleep_days, config.tidy_enabled), (3, True))
+        self.bridge.config = config
+        self.assertIn('Sessions I may touch: * not pp-*', self.bridge.render_guide())
+        self.assertIn('idle 3 days', self.bridge.render_guide())
+        for off in ('off', '0', 'false', 'No'):
+            with patch.dict(b.os.environ, dict(self.ENV, AGENT_BRIDGE_TIDY=off), clear=True):
+                self.assertFalse(b.Config.from_env().tidy_enabled)
+
+    def test_only_exclusions_is_a_config_error(self):
+        with patch.dict(b.os.environ, dict(self.ENV, AGENT_BRIDGE_SESSIONS='!pp-* !tmp'), clear=True):
+            with self.assertRaises(b.ConfigError):
+                b.Config.from_env()
+
+    def test_bad_sleep_days_is_a_config_error(self):
+        for bad in ('0', '-2', 'three', '1.5'):
+            with patch.dict(b.os.environ, dict(self.ENV, AGENT_BRIDGE_SLEEP_DAYS=bad), clear=True):
+                with self.assertRaises(b.ConfigError):
+                    b.Config.from_env()
+        with patch.dict(b.os.environ, dict(self.ENV, AGENT_BRIDGE_SLEEP_DAYS='5'), clear=True):
+            self.assertEqual(b.Config.from_env().sleep_days, 5)
 
 
 class ControlTests(unittest.TestCase):

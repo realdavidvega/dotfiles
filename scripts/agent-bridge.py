@@ -211,11 +211,11 @@ Any other new name starts in the vault. /open takes an agent after the name:
 claude, codex, opencode, shell. Naming another agent for a closed session
 replaces its agent and starts it blank.
 
-\u2500\u2500 TOPICS OUTLIVE SESSIONS \u2500\u2500
-Closing a session, or rebooting the hub, leaves this topic alone. A session is
-a process. Its record remembers which conversation is its own. /open NAME
-brings the same topic back resuming that conversation, and /open NAME fresh
-starts blank in it.
+\u2500\u2500 TOPICS FOLLOW SESSIONS \u2500\u2500
+A topic stays while its session runs or is stopped, and \U0001F4A4 marks one
+stopped or idle {sleep_days} days. Closing a session deletes its topic. Its record
+remembers which conversation is its own, so /open NAME brings it back in a new
+topic resuming that conversation, and /open NAME fresh starts it blank.
 
 Deleting a topic creates one replacement on the next delivery.
 Network errors never replace a topic. /bind NAME inside a topic reuses it.
@@ -303,6 +303,10 @@ class Config:
     limits_state_path: Path | None = None
     # The voice CLI's root. None turns voice off, which is the default.
     voice_root: Path | None = None
+    # A running session idle this many days, or a stopped one, gets the sleep icon.
+    sleep_days: int = 3
+    # The tidy that deletes dead topics and marks sleeping ones, run by serve.
+    tidy_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -334,6 +338,8 @@ class Config:
         ]
         if not patterns:
             raise ConfigError("AGENT_BRIDGE_SESSIONS is empty, which would allow no session")
+        if all(part.startswith("!") for part in patterns):
+            raise ConfigError("AGENT_BRIDGE_SESSIONS holds only exclusions, which would allow no session")
 
         state = Path(
             os.environ.get("AGENT_BRIDGE_STATE", "/srv/services/agents/bridge-state.json")
@@ -362,17 +368,32 @@ class Config:
             os.environ.get("AGENT_BRIDGE_LIMITS_STATE") or state.with_name("limits-state.json")
         )
         voice = os.environ.get("AGENT_BRIDGE_VOICE_ROOT", "").strip()
+        raw_sleep = os.environ.get("AGENT_BRIDGE_SLEEP_DAYS", "").strip() or "3"
+        try:
+            sleep_days = int(raw_sleep)
+        except ValueError:
+            sleep_days = 0
+        if sleep_days < 1:
+            raise ConfigError(f"AGENT_BRIDGE_SLEEP_DAYS is not a whole number of days, 1 or more: {raw_sleep}")
+        tidy = os.environ.get("AGENT_BRIDGE_TIDY", "on").strip().lower() not in ("off", "0", "false", "no")
         return cls(token, chat_id, users, patterns, state, socket, roots,
-                   warn, limits, limits_state, Path(voice) if voice else None)
+                   warn, limits, limits_state, Path(voice) if voice else None, sleep_days, tidy)
 
     def voice_ready(self) -> bool:
         root = self.voice_root
         return root is not None and (root / "bin/voice.py").is_file() and (root / "venv/bin/python").exists()
 
     def session_allowed(self, name: str) -> bool:
+        """A plain pattern matches and no `!` exclusion does."""
         if name.startswith("@"):
             return False
-        return any(fnmatch.fnmatch(name, pattern) for pattern in self.session_patterns)
+        if any(fnmatch.fnmatch(name, pattern[1:]) for pattern in self.session_patterns if pattern.startswith("!")):
+            return False
+        return any(fnmatch.fnmatch(name, pattern) for pattern in self.session_patterns if not pattern.startswith("!"))
+
+    def describe_sessions(self) -> str:
+        return " ".join("not " + pattern[1:] if pattern.startswith("!") else pattern
+                        for pattern in self.session_patterns)
 
     def content_allowed(self, directory: str) -> bool:
         """Whether a pane rooted here may be shown. Fails closed."""
@@ -2505,7 +2526,7 @@ class Bridge:
             LOG.warning("could not publish the command menu: %s", exc)
 
     def render_guide(self) -> str:
-        return GUIDE.format(sessions=" ".join(self.config.session_patterns))
+        return GUIDE.format(sessions=self.config.describe_sessions(), sleep_days=self.config.sleep_days)
 
     def publish_guide(self, pin: bool = False) -> str:
         """Post and pin the guide, or edit the one already pinned.
@@ -2888,7 +2909,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     print(f"chat_id:  {config.chat_id}")
     print(f"users:    {sorted(config.allowed_users)}")
-    print(f"sessions: {' '.join(config.session_patterns)}")
+    print(f"sessions: {config.describe_sessions()}")
     print(f"state:    {config.state_path}")
 
     tmux = Tmux(config.tmux_socket)
