@@ -1553,9 +1553,9 @@ prune_hint_boots() {
 # in this boot has named it, and for 10 seconds after, so every tab a reboot
 # reopens together shows it. Reads no transcript and writes no record.
 restore_hint() {
-  local id boot lock since name names=$'\n' path each days reference=0 when
+  local id boot lock since name names=$'\n' lefts path each days reference=0 when
   local count=0 fresh=false newest=0 now
-  local -a counted=() files=()
+  local -a counted=() files=() left=()
 
   UNAME_S="$(uname -s)"
   id="$(boot_id)"
@@ -1626,6 +1626,7 @@ restore_hint() {
     # A record with neither file is kept.
     for ((i = 0; i < ${#counted[@]}; i++)); do
       if ((activity[i] > 0 && (reference - activity[i]) / 86400 >= days)); then
+        left+=("${counted[i]}")
         continue
       fi
       kept+=("${counted[i]}")
@@ -1635,19 +1636,32 @@ restore_hint() {
   count="${#counted[@]}"
 
   path="$STATE_DIR/hint/$id"
-  if ((count > 0)); then
+  if ((count > 0 || ${#left[@]} > 0)); then
     [[ -d "$path" ]] || mkdir -p "$path" 2>/dev/null || true
-    for name in "${counted[@]}"; do
-      if [[ ! -d "$path/$name" ]] && mkdir "$path/$name" 2>/dev/null; then fresh=true; fi
-    done
   fi
+  for name in ${counted[@]+"${counted[@]}"}; do
+    [[ ! -f "$path/$name" ]] || rm -f "$path/$name" 2>/dev/null || true
+    if [[ ! -d "$path/$name" ]] && mkdir "$path/$name" 2>/dev/null; then fresh=true; fi
+  done
   # A running, closed or left-out session loses its entry, so its next stop
-  # is new again.
+  # is new again. A left-out session gets a file instead, which tells ags.zsh
+  # this boot has judged it without starting the launcher at every new tab.
   names=$'\n'
   for name in ${counted[@]+"${counted[@]}"}; do names+="$name"$'\n'; done
+  lefts=$'\n'
+  for name in ${left[@]+"${left[@]}"}; do lefts+="$name"$'\n'; done
   for each in "$path"/*; do
-    [[ -d "$each" && "$names" != *$'\n'"${each##*/}"$'\n'* ]] || continue
+    if [[ -d "$each" ]]; then
+      [[ "$names" != *$'\n'"${each##*/}"$'\n'* ]] || continue
+    elif [[ -f "$each" ]]; then
+      [[ "$lefts" != *$'\n'"${each##*/}"$'\n'* ]] || continue
+    else
+      continue
+    fi
     rm -rf "$each" 2>/dev/null || true
+  done
+  for name in ${left[@]+"${left[@]}"}; do
+    [[ -e "$path/$name" ]] || : 2>/dev/null > "$path/$name" || true
   done
   if ((count > 0)) && [[ "$fresh" == false ]]; then
     files=()
@@ -1681,6 +1695,7 @@ hint_restore_failures() {
     stamp="$(date -d "@$when" +%Y%m%d%H%M.%S 2>/dev/null || date -r "$when" +%Y%m%d%H%M.%S 2>/dev/null || true)"
     mkdir -p "$path" 2>/dev/null || true
     for name in "$@"; do
+      [[ ! -f "$path/$name" ]] || rm -f "$path/$name" 2>/dev/null || true
       mkdir "$path/$name" 2>/dev/null || true
       [[ -z "$stamp" ]] || touch -t "$stamp" "$path/$name" 2>/dev/null || true
     done

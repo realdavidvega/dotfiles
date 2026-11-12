@@ -1071,7 +1071,11 @@ class HintTests(unittest.TestCase):
 
     def entries(self, boot='boot-a'):
         path = self.box.state / 'hint' / boot
-        return sorted(item.name for item in path.iterdir()) if path.exists() else []
+        return sorted(item.name for item in path.iterdir() if item.is_dir()) if path.exists() else []
+
+    def marks(self, boot='boot-a'):
+        path = self.box.state / 'hint' / boot
+        return sorted(item.name for item in path.iterdir() if item.is_file()) if path.exists() else []
 
     def age(self, seconds, boot='boot-a'):
         for name in self.entries(boot):
@@ -1126,8 +1130,36 @@ class HintTests(unittest.TestCase):
         (bare / 'seen').unlink()
         self.assertEqual(self.hint(), PLURAL.format(3))
         self.assertEqual(self.entries(), ['bare', 'recent', 'talked'])
+        self.assertEqual(self.marks(), ['stale'])
         self.assertEqual(self.hint(AGENT_SESSION_EXPIRE_DAYS='0', AGENT_SESSION_BOOT_ID='boot-b'),
                          PLURAL.format(4))
+        self.assertEqual(self.marks('boot-b'), [])
+
+    def test_a_left_out_session_is_marked_until_it_counts_or_closes(self):
+        box = self.box
+        reference = self.epoch - 3600
+        box.make_record('recent', box.repo, agent='shell', seen=reference)
+        box.make_record('stale', box.repo, agent='shell', seen=reference - 20 * 86400)
+        self.assertEqual(self.hint(), SINGULAR)
+        self.assertEqual((self.entries(), self.marks()), (['recent'], ['stale']))
+        self.age(11)
+        self.assertEqual(self.hint(), '')
+        self.assertEqual(self.hint(AGENT_SESSION_EXPIRE_DAYS='0'), PLURAL.format(2))
+        self.assertEqual((self.entries(), self.marks()), (['recent', 'stale'], []))
+        self.assertEqual(self.hint(), '')
+        self.assertEqual((self.entries(), self.marks()), (['recent'], ['stale']))
+        box.make_record('stale', box.repo, agent='shell', seen=self.epoch)
+        self.assertEqual(self.hint(), PLURAL.format(2))
+        self.assertEqual((self.entries(), self.marks()), (['recent', 'stale'], []))
+        box.make_record('stale', box.repo, agent='shell', closed='closed')
+        self.hint()
+        self.assertEqual(self.marks(), [])
+        box.make_record('gone', box.repo, agent='shell', seen=reference - 20 * 86400)
+        self.hint()
+        self.assertEqual(self.marks(), ['gone'])
+        shutil.rmtree(box.state / 'sessions/gone')
+        self.hint()
+        self.assertEqual(self.marks(), [])
 
     def test_one_session_and_none(self):
         box = self.box

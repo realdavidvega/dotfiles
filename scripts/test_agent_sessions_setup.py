@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -284,9 +285,37 @@ class AgsZshTests(unittest.TestCase):
         self.count = root / 'count'
         write_exec(self.fake / 'scripts/agent-session.sh', FAKE_LAUNCHER.format(count=self.count))
         self.rc(f'source {AGS_ZSH}\n')
-        self.env = {'HOME': str(self.home), 'ZDOTDIR': str(self.zdot), 'PATH': os.environ['PATH'],
-                    'TERM': 'dumb', 'DOTFILES_PATH': str(self.fake), 'TERM_PROGRAM': 'iTerm.app',
-                    '__CFBundleIdentifier': 'com.googlecode.iterm2'}
+        self.state, self.bin, self.running = root / 'state', root / 'bin', root / 'running'
+        self.bin.mkdir()
+        self.calls = root / 'calls'
+        write_exec(self.bin / 'tmux', f'echo tmux >> "{self.calls}"\ncat "{self.running}" 2>/dev/null\n')
+        self.env = {'HOME': str(self.home), 'ZDOTDIR': str(self.zdot),
+                    'PATH': f'{self.bin}:{os.environ["PATH"]}', 'TERM': 'dumb',
+                    'DOTFILES_PATH': str(self.fake), 'TERM_PROGRAM': 'iTerm.app',
+                    '__CFBundleIdentifier': 'com.googlecode.iterm2',
+                    'AGENT_SESSION_STATE': str(self.state), 'AGENT_SESSION_BOOT_ID': 'boot-a'}
+
+    def record(self, name, closed=False, seen=None):
+        path = self.state / 'sessions' / name
+        path.mkdir(parents=True, exist_ok=True)
+        (path / 'agent').write_text('shell\n')
+        (path / 'dir').write_text(str(self.root) + '\n')
+        if closed:
+            (path / 'closed').write_text('closed\n')
+        if seen is not None:
+            (path / 'seen').write_text('')
+            when = time.time() - seen
+            os.utime(path / 'seen', (when, when))
+
+    def entry(self, name, age=60, mark=False):
+        path = self.state / 'hint/boot-a' / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if mark:
+            path.write_text('')
+        else:
+            path.mkdir()
+        when = time.time() - age
+        os.utime(path, (when, when))
 
     def rc(self, text):
         (self.zdot / '.zshrc').write_text(text)
@@ -294,8 +323,22 @@ class AgsZshTests(unittest.TestCase):
     def zsh(self, *args, stdin='', **extra):
         env = dict(self.env, **extra)
         env = {key: value for key, value in env.items() if value is not None}
-        return subprocess.run([ZSH, '-o', 'NO_GLOBAL_RCS', *args], env=env, input=stdin,
-                              capture_output=True, text=True, timeout=30, cwd=str(self.root))
+        start = time.monotonic()
+        result = subprocess.run([ZSH, '-o', 'NO_GLOBAL_RCS', *args], env=env, input=stdin,
+                                capture_output=True, text=True, timeout=30, cwd=str(self.root))
+        self.elapsed = time.monotonic() - start
+        return result
+
+    def hinted(self, prepare=lambda: None, **extra):
+        # The listing's deadline is one second, so a shell done inside one second
+        # never timed out and its answer is the logic's. A loaded host retries.
+        for _ in range(5):
+            self.count.unlink(missing_ok=True)
+            prepare()
+            self.zsh('-i', stdin='true\n', **extra)
+            if self.elapsed < 1:
+                return self.runs() == ['restore --hint']
+        self.fail('every shell took a second or more, too loaded to judge')
 
     def runs(self):
         return self.count.read_text().splitlines() if self.count.exists() else []
@@ -313,18 +356,100 @@ class AgsZshTests(unittest.TestCase):
         self.assertFalse((state / 'hint').exists())
 
     def test_the_first_prompt_runs_the_hint_once(self):
+        # Without tmux the listing has no deadline to miss on a loaded host.
+        empty = self.root / 'empty'
+        empty.mkdir()
+        self.record('one')
         self.rc(f'source {AGS_ZSH}\nsource {AGS_ZSH}\n')
-        result = self.zsh('-i', stdin='true\ntrue\ntrue\n')
+        result = self.zsh('-i', stdin='true\ntrue\ntrue\n', PATH=str(empty))
         self.assertEqual(self.runs(), ['restore --hint'])
         self.assertEqual(result.stdout.count('ags: hint line'), 1, result.stdout)
 
     def test_other_terminals_never_run_it(self):
+        self.record('one')
         for extra in ({'TMUX': '/tmp/tmux-1/default,1,0'}, {'TERM_PROGRAM': 'vscode'},
                       {'TERMINAL_EMULATOR': 'JetBrains-JediTerm'},
                       {'__CFBundleIdentifier': 'com.microsoft.VSCode'}):
             with self.subTest(**extra):
                 self.zsh('-i', stdin='true\ntrue\n', **extra)
                 self.assertEqual(self.runs(), [])
+
+    def test_the_launcher_runs_only_when_it_has_something_to_do(self):
+        def runs(running=(), records=(), closed=(), entries=(), fresh=(), marks=(), seen=None):
+            def prepare():
+                shutil.rmtree(self.state, ignore_errors=True)
+                self.state.mkdir()
+                self.running.write_text(''.join(f'{name}\n' for name in running))
+                for name in records:
+                    self.record(name, seen=seen)
+                for name in closed:
+                    self.record(name, closed=True)
+                for name in entries:
+                    self.entry(name)
+                for name in fresh:
+                    self.entry(name, age=2)
+                for name in marks:
+                    self.entry(name, mark=True)
+            return self.hinted(prepare)
+
+        self.assertFalse(runs())
+        self.assertFalse(runs(running=['a', 'b'], records=['a', 'b'], closed=['c']))
+        self.assertTrue(runs(running=['a'], records=['a', 'b']))
+        self.assertFalse(runs(running=['a'], records=['a', 'b'], entries=['b']))
+        self.assertTrue(runs(records=['a', 'b'], entries=['b'], fresh=['a']))
+        self.assertFalse(runs(records=['a'], marks=['a']))
+        self.assertTrue(runs(running=['a'], records=['a'], entries=['a']))
+        self.assertTrue(runs(running=['a'], records=['a'], marks=['a']))
+        self.assertTrue(runs(closed=['a'], entries=['a']))
+        self.assertTrue(runs(entries=['gone']))
+        self.assertTrue(runs(closed=['a'], marks=['a']))
+        self.assertTrue(runs(marks=['gone']))
+        self.assertFalse(runs(records=['a'], marks=['a'], seen=3600))
+        self.assertTrue(runs(records=['a'], marks=['a'], seen=10))
+
+    def test_an_entry_made_during_the_listing_is_fresh(self):
+        entry = self.state / 'hint/boot-a/one'
+        write_exec(self.bin / 'tmux', f'mkdir -p "{entry}"\n')
+        self.record('one')
+        self.assertTrue(self.hinted(lambda: shutil.rmtree(entry, ignore_errors=True)))
+
+    def test_a_wedged_server_is_given_a_second(self):
+        pid = self.root / 'pid'
+        write_exec(self.bin / 'tmux', f'echo $$ > "{pid}"\nexec sleep 30\n')
+        self.record('a')
+        self.zsh('-i', stdin='true\n')
+        self.assertLess(self.elapsed, 4)
+        self.assertEqual(self.runs(), [])
+        # On a loaded host the deadline can pass before the fake starts, and the
+        # kill then lands before it writes its pid.
+        if not pid.exists():
+            time.sleep(1.5)
+            self.assertFalse(pid.exists())
+            return
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(pid.read_text()), 0)
+
+    def test_without_tmux_every_open_record_is_stopped(self):
+        self.record('a')
+        empty = self.root / 'empty'
+        empty.mkdir()
+        self.zsh('-i', stdin='true\n', PATH=str(empty))
+        self.assertEqual(self.runs(), ['restore --hint'])
+
+    def test_no_state_runs_nothing(self):
+        self.zsh('-i', stdin='true\n')
+        self.assertEqual(self.runs(), [])
+        self.assertFalse(self.calls.exists())
+
+    def test_no_boot_runs_nothing(self):
+        # zsh sets OSTYPE itself, so the sysctl branch runs only on a Mac.
+        if sys.platform != 'darwin':
+            self.skipTest('the boot id comes from sysctl only on darwin')
+        self.record('a')
+        write_exec(self.bin / 'sysctl', 'exit 1\n')
+        self.zsh('-i', stdin='true\n', AGENT_SESSION_BOOT_ID=None)
+        self.assertEqual(self.runs(), [])
+        self.assertFalse(self.calls.exists())
 
     def test_the_alias_finds_the_launcher_without_dotfiles_path(self):
         tree = self.home / '.dotfiles'
