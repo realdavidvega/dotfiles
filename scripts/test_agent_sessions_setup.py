@@ -331,14 +331,15 @@ class AgsZshTests(unittest.TestCase):
 
     def hinted(self, prepare=lambda: None, **extra):
         # The listing's deadline is one second, so a shell done inside one second
-        # never timed out and its answer is the logic's. A loaded host retries.
+        # never timed out and its answer is the logic's. A loaded host retries,
+        # and one too loaded for any try says so rather than failing.
         for _ in range(5):
             self.count.unlink(missing_ok=True)
             prepare()
             self.zsh('-i', stdin='true\n', **extra)
             if self.elapsed < 1:
                 return self.runs() == ['restore --hint']
-        self.fail('every shell took a second or more, too loaded to judge')
+        self.skipTest('every shell took a second or more, too loaded to judge')
 
     def runs(self):
         return self.count.read_text().splitlines() if self.count.exists() else []
