@@ -390,10 +390,12 @@ first prompt runs `ags restore --hint` once and prints its line, if any, after
 the prompt is drawn. A pre-check in zsh runs first and starts the launcher
 only when an open record is stopped with no entry, an entry is under 10
 seconds old, an entry names a session that runs, is closed or has no
-record, or a left-out session was used since its file. It starts two
-processes, `sysctl` for the boot id and `tmux list-sessions`, where the
-launcher starts many, which matters at every new tab on a loaded Mac. A tmux
-that does not answer within a second skips the hint.
+record, or a left-out session was used since its file. It also starts it
+when the `idle-sweep` stamp is missing or a day old, before asking tmux
+anything. It starts two processes, `sysctl` for the boot id and
+`tmux list-sessions`, where the launcher starts many, which matters at every
+new tab on a loaded Mac. A tmux that does not answer within a second skips
+the hint.
 
 ```text
 ags: 3 recorded sessions are not running. ags restore resumes those not expired.
@@ -909,7 +911,7 @@ On a Mac, after setup, each on a tmux server started after it:
 | M3 | `tmux show -s copy-command` and `tmux show-hooks -g` show the script and `--buffer-hook`. With `tmux set -s set-clipboard off`, a non-ASCII copy-mode selection reaches `pbpaste`. `printf named \| tmux load-buffer -b paneport-x -` and `tmux paste-buffer -b paneport-x -d -t probe` leave `pbpaste` unchanged |
 | M4a | With one of two sessions killed and this boot's `hint/` directory removed, log out and back in. Every terminal tab reopened within 10 seconds of the first prints the hint, a tab opened a minute later prints nothing, and an IDE terminal prints nothing |
 | M4 | The same at the next reboot, and `ags restore` brings `probe` back in its own conversation |
-| M5 | With 60 synthetic records in a scratch `AGENT_SESSION_STATE`, `_ags_hint_due` timed at its first call in each of 21 fresh `zsh -f` processes and over 21 calls in one shell, the cold median under 150 ms with the load average noted, and answering no in two cases: six running sessions and no entries, and six stopped with entries aged past the window. The launcher's `restore --hint` timed in one shell for the record. Also `time (ags restore --dry-run >/dev/null)` once |
+| M5 | With 60 synthetic records in a scratch `AGENT_SESSION_STATE`, `_ags_hint_due` timed at its first call in each of 21 fresh `zsh -f` processes and over 21 calls in one shell, the cold median under 150 ms with the load average noted, and answering no in two cases: six running sessions and no entries, and six stopped with entries aged past the window, both with a fresh `idle-sweep` stamp. The launcher's `restore --hint` timed in one shell for the record, and again with the stamp removed before each run so the sweep runs every time. Also `time (ags restore --dry-run >/dev/null)` once |
 | M6 | Before setup adds the pin hook, the new launcher's `open probe0`, attached, shows the short warning whole in the status line, and the full one after a detach. Then `ags close probe0` |
 | M7 | `ags open probe7`, attached in one tab, and `ags open probe8 --detached`. `AGENT_SESSION_NOW=$(( $(date +%s) + 22*86400 )) ags close --idle` closes `probe8` only and names it. `ags open probe8` resumes its conversation. Then `ags close probe7` and `ags close probe8` |
 
