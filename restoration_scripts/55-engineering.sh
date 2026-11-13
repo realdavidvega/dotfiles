@@ -155,11 +155,20 @@ if ! flock "$ROOT/apply.lock" bash -c '
 fi
 echo "staged: $ROOT from skills-registry $(git -C "$REGISTRY" rev-parse --short "$STAGED_SHA") ($STAGE_REF)"
 
+SPACE="07 - Engineering/01 - Personal"
 if ! grep -Eq '^[[:space:]]*(export[[:space:]]+)?ENGINEERING_VAULTS=' "$SYSTEM_ENV"; then
   VAULT="$(sed -n 's/^[[:space:]]*\(export[[:space:]]*\)\{0,1\}BLACK_VAULT=//p' "$SYSTEM_ENV" | tail -1)"
-  printf '\n# The vaults whose engineering task queue engineering-apply.timer applies.\nENGINEERING_VAULTS=%s\n' \
-    "${VAULT:-/srv/sync/blackvault}" >>"$SYSTEM_ENV"
+  printf '\n# The engineering space whose task queue engineering-apply.timer applies.\nENGINEERING_VAULTS=%s\n' \
+    "${VAULT:-/srv/sync/blackvault}/$SPACE" >>"$SYSTEM_ENV"
   echo "added: ENGINEERING_VAULTS to $SYSTEM_ENV"
+else
+  # A value naming the vault root predates the spaces, and engineering.py
+  # refuses it, so it moves to the personal space.
+  CURRENT="$(sed -n 's/^[[:space:]]*\(export[[:space:]]*\)\{0,1\}ENGINEERING_VAULTS=//p' "$SYSTEM_ENV" | tail -1)"
+  if [ -d "$CURRENT/07 - Engineering" ] && [ ! -f "$CURRENT/00 - Engineering.md" ]; then
+    sed -i "s|^\([[:space:]]*\(export[[:space:]]*\)\{0,1\}ENGINEERING_VAULTS=\).*|\1$CURRENT/$SPACE|" "$SYSTEM_ENV"
+    echo "moved: ENGINEERING_VAULTS in $SYSTEM_ENV to $CURRENT/$SPACE"
+  fi
 fi
 
 if ! systemd-analyze verify "$UNIT_SOURCE_DIR/engineering-apply.service" "$UNIT_SOURCE_DIR/engineering-apply.timer"; then
