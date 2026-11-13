@@ -84,7 +84,7 @@ fi
 # SessionStart entry (the launcher's pin hook) is added here. An entry counts
 # as present when any live hook runs the same command as any of its hooks.
 # User entries are kept and a present entry is never rewritten. This is the one
-# exception to "live wins" in .wiki/architecture/install-safety.md.
+# exception to "live wins" on the wiki's install safety page.
 ensure_session_start_hooks() {
   local live="$HOME/.claude/settings.json"
   local baseline="$DOTFILES_PATH/config/claude/settings.json"

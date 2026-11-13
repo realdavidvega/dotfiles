@@ -2,24 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project wiki (.wiki/)
+## Engineering documents and tasks
 
-This repo maintains a living wiki in `.wiki/` covering **the skills system** —
-resolution, scoping, the restore path, and the `skp` tooling. Everything else in
-this repo is documented in this file.
-
-- **Read `.wiki/index.md` (and `.wiki/CLAUDE.md`) at the start of skills work.**
-- **The skills system has moved out of this repo.** `skp` lives in its own
-  public repo, the skills in the private skills-registry, and the config in
-  `~/.skp/`. Most of this wiki therefore documents an arrangement that no
-  longer exists and is pending a rewrite. Treat it as historical until then.
-- **Keep it in sync as you code.** When a change alters something the wiki
-  still documents accurately, update the affected page in the SAME change and
-  bump its `updated:` date. Record non-obvious decisions as an ADR in
-  `.wiki/decisions/`. This is part of "done", not a follow-up.
-- **`.wiki/` is git-crypt encrypted.** On a locked checkout every page, including
-  `lint.py`, is binary. That is not corruption — run `git-crypt unlock` first.
-- Run `python3 .wiki/lint.py .` for a health check (dead links, orphans, stale pages).
+<!-- engineering-vault -->
+Design docs, the project wiki and the task tracker for this repository live outside it. Agents with the `engineering-vault` skill find them with `engineering.py resolve`. Without it, do not create `design/` or `.wiki/` here.
 
 ## What this repo is
 
