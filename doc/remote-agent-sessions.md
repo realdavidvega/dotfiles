@@ -62,6 +62,9 @@ Most of it exists because an agent TUI is not an ordinary program.
 | `window-size latest` | A phone attaching does not shrink the session for the desk. Sizing follows the active client rather than the smallest one |
 | `status-position top` | The iOS keyboard covers the bottom of the screen, which is where the session name and window list would otherwise sit |
 | `automatic-rename off` | Reattaching from a phone means picking a window from a list. A name that tracks the running process is useless for that |
+| `set-titles-string` | The terminal title is `NAME · TITLE` when the session has a title, so an iTerm tab says what the session is doing, and `NAME · WINDOW` without one |
+| `status-left`, `status-left-length 70` | The session's title follows its name, dimmed and cut to 40 cells, wide characters counting two. It is hidden under 100 columns so the phone keeps its window list. It reads `@ags-title-status`, a copy with `#` doubled, because the status line treats `#[...]` in an option as a style |
+| `ags-title-edit`, `MouseDown1StatusLeft`, prefix `T` | A click on the session name, or prefix `T`, opens a popup that edits the title. The popup is written once, as a command alias both keys are bound to. It expands no format in its command, so it finds the launcher through the global `@ags-launcher`, which `ags` sets. prefix `T` set the pane title by default, which nothing here uses |
 
 The prefix stays `C-b`. `C-a` is beginning-of-line in every shell here, which
 the Linux keyd configuration deliberately preserves, and moving the prefix onto
@@ -112,7 +115,9 @@ paneport can ask before it creates the session itself.
 and the Control panel buttons, and Telegram still answers `/new`, `/resume` and
 `/kill`. `ags mobile NAME` explicitly adds another terminal client,
 `ags remote COMMAND ...` runs the command on the hub (adding `--repo` to
-`open`), and `ags unlock` unlocks its encrypted home and then runs `restore`.
+`open`), `ags unlock` unlocks its encrypted home and then runs `restore`, and
+`ags title NAME [TEXT|--clear|-]` shows or sets the session's title (see
+[Session titles](#session-titles)).
 Telegram's `/bind NAME` associates a topic with a running session.
 
 `ags adopt [NAME [AGENT]]` writes records for running sessions that predate
@@ -145,9 +150,12 @@ window. `ATTACHMENT` counts terminal clients, not Telegram users. `detached`
 means no terminal is attached to that session, and does not mean it is stopped.
 `RUNNING` reports the foreground program, not an inferred busy or idle state.
 Stopped records follow the running sessions as `stopped Nd`, N being the days
-since they were last used. `--all` adds closed and expired records, and
-`--json` prints one array with `name`, `state`, `agent`, `dir`, `recorded`,
-`attached`, `windows` and `idle_days` for each, which is what the bridge reads.
+since they were last used. `TITLE` sits before `DIRECTORY`, cut to 40
+cells, or `-` when there is none. `--all` adds closed and expired records,
+and `--json` prints one array with `name`, `state`, `agent`, `dir`, `recorded`,
+`attached`, `windows`, `idle_days` and `title` for each, which is what the
+bridge reads. Both read the title from the record only, so a suggestion kept
+off the disk shows in the session's tab and as `-` or `null` here.
 
 Where a session starts, first match wins. `--dir` always wins. Then the
 session's record, so a recorded name always returns to its directory. Then, with
@@ -215,7 +223,10 @@ that matches decides:
    interactive session rather than a `claude -p` run (its first `entrypoint` is
    not `sdk-cli`).
 4. Otherwise a new conversation, `claude --session-id ID --name NAME`, with the
-   id generated and pinned before Claude starts.
+   id generated and pinned before Claude starts. `--name` puts the session name
+   in Claude's `/resume` picker, and `terminalTitleFromRename: false` in
+   `config/claude/settings.json` keeps it out of the terminal title, so Claude
+   still writes a title from the conversation's subject.
 
 Codex keeps `codex resume --last` and OpenCode `opencode --continue`, each
 continuing by directory as before, when the agent has a conversation there.
@@ -251,19 +262,77 @@ Each new session also sets `DISABLE_AUTO_UPDATE=true` in its own environment
 pane's shell while the launcher types the agent command, and the prompt eats
 the command's first character.
 
+### Session titles
+
+Each session can carry a title, a line saying what it is doing, shown in the
+terminal title, the status line, `ags ls` and paneport.
+
+**Suggested by the agent.** Claude, Codex and OpenCode write a terminal title,
+and a `pane-title-changed` hook on the session's `agent` window turns it into
+the session's suggestion through the hidden `agent-session.sh suggest NAME
+PANE`. The hook compares the title without its leading glyph word against the
+last one seen, so Claude's status glyph changing starts no process. It passes
+only the name and pane id, never the title, and `suggest` reads the title
+itself. A suggestion is stored only from the record's own pane, in that
+session or its group, and only while the record's agent is in the pane's
+foreground, judged from its arguments, because a shell in front writes each
+typed command line as its title. The status glyph, OpenCode's `OC | `,
+placeholders such as `Claude Code`, the host or the session name, and a shell's
+own titles are dropped. So is any title naming an agent or setting a variable,
+which is how a typed launch line reads, unless it leads with a status glyph or
+`OC | `, which a typed line never does. A title that arrives while the record's
+pane id is stale or the agent is briefly out of the foreground is not judged.
+The first such miss forgets that the title was seen, so the next write is
+judged afresh, and opens a 5 second window. A miss inside the window queues one
+rerun at its end, and a miss at that rerun opens a new window without queuing,
+so a pane whose agent has gone is not polled. Another pane of the session, such
+as a split, is never retried while the record's pane is alive. Opening a
+running session reads its title once in the background, after showing the
+title in force. Titles are capped at 80 characters.
+
+**Edited by the user.** `ags title NAME TEXT` sets the user's title, which wins
+over every later suggestion. `ags title NAME --clear`, or a lone `-`, drops it,
+and the title follows the agent again. `ags title NAME` prints the title in force with
+`(yours)` or `(suggested)`. A click on the status line's left side, or prefix
+`T`, opens a popup editing the title of the session the click came from, the
+same on the phone. A lone `-` there follows the agent again, and an empty line
+or Ctrl-C changes nothing. Under bash 3.2, the Mac's, Up recalls the current
+title, since there is no prefilled `read`.
+
+**Kept and dropped.** A title survives `close` then `open`, `resume`, `restore`
+and every restart that continues the record's conversation, and every Codex,
+OpenCode and shell restart. It is dropped by `--fresh`, `new`, a closed record
+reopened with another agent or directory, and any Claude start on a
+conversation other than the record's: one `--conversation` names, a new one
+because its own is gone or was never prompted, or the newest unpinned one that
+`resume` continues in its place. A record that never learned its conversation
+drops the title only for a new conversation. So a title set before the first
+prompt lasts only until the next start, and so does one kept across a `/clear`
+that no prompt followed.
+
+**Where it is written.** The user's title is written to the record always. A
+suggestion is written only when the record's directory is under the content
+roots of [What may leave the machine](#what-may-leave-the-machine), and is
+otherwise kept in tmux memory, shown in the tab while the session runs and
+gone after a restart. The hub's state directory is plaintext outside the
+encrypted home, which is why the line is drawn there. The bridge ignores the
+title, and `history.log` never gets one.
+
 ## Records
 
 Each recorded session is a directory under `sessions/` in the state directory,
 one small file per field: `dir`, `agent`, `pane`, `conversation` (the Claude
-pin), `seen` (its modification time is the last use) and `closed` (absent while
-open, else `close` or `expired`). The state directory is `AGENT_SESSION_STATE`,
+pin), `seen` (its modification time is the last use), `closed` (absent while
+open, else `close` or `expired`), and the optional `title` and `suggested` of
+[Session titles](#session-titles). The state directory is `AGENT_SESSION_STATE`,
 else `/srv/services/agents/state` on the hub, created 0700 by
 `51-agent-sessions.sh` so a restore can read it before the home is unlocked,
 else `${XDG_STATE_HOME:-~/.local/state}/ags`. Records are plaintext and hold
-paths and ids, never conversation text. `history.log` beside them gets one
-line per pin, close, expiry, restore and `notfound`, and `ags history` reads it,
-marking each conversation `current`, `kept` or `gone` by whether its transcript
-still exists.
+paths and ids, plus one line of conversation text: the user's own title
+anywhere, and the agent's suggestion only under the content roots.
+`history.log` beside them gets one line per pin, close, expiry, restore and
+`notfound`, and `ags history` reads it, marking each conversation `current`,
+`kept` or `gone` by whether its transcript still exists.
 
 A record is written when `open` creates a session and kept when it stops.
 `close` marks it closed, so `restore` leaves it alone and a later `open`
@@ -478,6 +547,11 @@ Override with `AGENT_NOTIFY_BODY_ROOTS`, colon separated.
 The idle close's announcement carries the session's name and its idle days,
 and nothing from the session itself, so it is sent for every session whatever
 its directory.
+
+The launcher reads the same list, a copy a test keeps identical, to decide
+whether an agent's suggested title may be written to its record (see
+[Session titles](#session-titles)). `suggest` runs from a tmux hook, so the
+override it sees is the one in the tmux server's environment.
 
 Credentials come from `secrets/secrets.sh`, which a hook does not inherit, so
 the script sources it itself. It never fails an agent turn: every failure path

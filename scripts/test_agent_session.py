@@ -1,13 +1,18 @@
 """Exercise the launcher on a private tmux socket with fake agents."""
 import datetime
+import fcntl
 import json
 import os
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import tempfile
+import termios
+import threading
 import time
+import unicodedata
 import unittest
 import uuid
 from pathlib import Path
@@ -16,16 +21,17 @@ SCRIPT = Path(__file__).with_name('agent-session.sh').resolve()
 # A Mac runs the launcher with its stock bash 3.2, the one a fresh account has,
 # so the suite proves the portability the launcher promises.
 BASH = '/bin/bash' if os.uname().sysname == 'Darwin' else 'bash'
+REPO = SCRIPT.parent.parent
 UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 D3_VARS = ('CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID',
            'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_PROJECT_DIR',
            'CLAUDE_ENV_FILE', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_MESSAGING_SOCKET',
            'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_EFFORT', 'COREPACK_ENABLE_AUTO_PIN', 'GIT_EDITOR')
 REMOVED = ('TMUX', 'TMUX_PANE', 'TMUX_TMPDIR', 'SSH_CONNECTION', 'CLAUDE_CONFIG_DIR') + D3_VARS
-TMUX_CONF = ('set -g default-shell /bin/bash\n'
-             'set -g default-command "bash --noprofile --norc"\n'
-             'set -g default-size 200x50\n'
-             'set -g automatic-rename off\n')
+SANDBOX_SHELL = ('set -g default-shell /bin/bash\n'
+                 'set -g default-command "bash --noprofile --norc"\n')
+TMUX_CONF = SANDBOX_SHELL + ('set -g default-size 200x50\n'
+                             'set -g automatic-rename off\n')
 # The fake agents record where they ran, what they were given and which pins
 # were on disk when they started, then wait like an agent does.
 FAKE_AGENT = ('#!/usr/bin/env bash\n'
@@ -33,6 +39,24 @@ FAKE_AGENT = ('#!/usr/bin/env bash\n'
               'printf "%s|%s|%s\\n" "$PWD" "$*" "$pins" >> "$AGENT_TEST_RECORD"\n'
               'printf "%s\\n" "$$" > "$AGENT_TEST_RECORD.pid"\n'
               'cat\n')
+# A fake Claude for the title tests, a python3 script so the launcher's
+# foreground test sees python3 .../claude. It records itself like FAKE_AGENT,
+# then writes each line read from its FIFO as a terminal title.
+FAKE_TITLER = ('#!/usr/bin/env python3\n'
+               'import glob, os, signal, sys\n'
+               'signal.signal(signal.SIGINT, lambda *_: os._exit(0))\n'
+               'state = os.environ["AGENT_SESSION_STATE"]\n'
+               'pins = " ".join(open(p).read().strip() for p in glob.glob(state + "/sessions/*/conversation"))\n'
+               'with open(os.environ["AGENT_TEST_RECORD"], "a") as out:\n'
+               '    out.write("%s|%s|%s\\n" % (os.getcwd(), " ".join(sys.argv[1:]), pins))\n'
+               'fifo = os.path.join(os.environ["AGENT_TEST_TITLES"], os.environ["TMUX_PANE"].lstrip("%"))\n'
+               'if not os.path.exists(fifo):\n'
+               '    os.mkfifo(fifo)\n'
+               'while True:\n'
+               '    with open(fifo, "rb") as titles:\n'
+               '        for line in titles:\n'
+               '            sys.stdout.buffer.write(b"\\033]2;" + line.rstrip(b"\\n") + b"\\033\\\\")\n'
+               '            sys.stdout.flush()\n')
 # A fake bridge, so no test ever reaches the real Telegram group.
 FAKE_BRIDGE = ('import sys\nwith open(%r, "a") as handle:\n'
                '    handle.write(" ".join(sys.argv[1:]) + "\\n")\n')
@@ -53,11 +77,17 @@ def dead_pid():
     return child.pid
 
 
+def cells(text):
+    """The terminal cells TEXT takes, wide characters counting two."""
+    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in 'WF' else 1
+               for c in text)
+
+
 class Sandbox:
     """One case's world: home/, a git repository repo/, a state directory, the
     fake agents on PATH, and when real is set, a private tmux server."""
 
-    def __init__(self, case, real=True, bridge=False):
+    def __init__(self, case, real=True, bridge=False, repo_conf=False):
         self.case = case
         self.real = real
         self.temp = tempfile.TemporaryDirectory(prefix='ags-')
@@ -68,7 +98,12 @@ class Sandbox:
         for path in (self.bin, self.repo, self.repos, self.vault):
             path.mkdir(parents=True)
         subprocess.run(['git', 'init', '-q', str(self.repo)], check=True)
-        (self.home / '.tmux.conf').write_text(TMUX_CONF)
+        if repo_conf:
+            # The repository's own configuration, with the sandbox's shell.
+            conf = (REPO / 'config/tmux/tmux.conf').read_text()
+            (self.home / '.tmux.conf').write_text(conf + '\n' + SANDBOX_SHELL)
+        else:
+            (self.home / '.tmux.conf').write_text(TMUX_CONF)
         self.record = root / 'invocations'
         self.announced = root / 'announced'
         env = {key: value for key, value in os.environ.items()
@@ -94,15 +129,24 @@ class Sandbox:
     def close(self):
         if self.real:
             subprocess.run(['tmux', 'kill-server'], env=self.env, capture_output=True)
+        # A suggest started by run-shell -b can outlive the server by a moment
+        # and write into the directory while it is being removed.
+        for _ in range(19):
+            try:
+                self.temp.cleanup()
+                return
+            except OSError:
+                time.sleep(.1)
         self.temp.cleanup()
 
-    def cli(self, *args, check=True, cwd=None, **extra):
+    def cli(self, *args, check=True, cwd=None, input=None, script=SCRIPT, **extra):
         env = dict(self.env, **extra)
         # A run on the hub must never reach the live state, server or bridge.
         assert env.get('AGENT_SESSION_STATE', '').startswith(str(self.root))
         assert not self.real or env.get('TMUX_TMPDIR', '').startswith(str(self.root))
-        result = subprocess.run([BASH, str(SCRIPT), *args], env=env, cwd=str(cwd or self.repo),
-                                capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        stdin = {} if input is not None else {'stdin': subprocess.DEVNULL}
+        result = subprocess.run([BASH, str(script), *args], env=env, cwd=str(cwd or self.repo),
+                                capture_output=True, text=True, timeout=60, input=input, **stdin)
         if check and result.returncode != 0:
             self.case.fail(f'{args} exited {result.returncode}: {result.stdout}{result.stderr}')
         return result
@@ -115,6 +159,19 @@ class Sandbox:
         if check and result.returncode != 0:
             self.case.fail(f'tmux {args}: {result.stderr}')
         return result.stdout.strip()
+
+    def inside(self):
+        """The TMUX value of a client inside this sandbox's server."""
+        socket = self.root / f'tmux-{os.getuid()}' / 'default'
+        return f'{socket},{self.tmux("display", "-p", "#{pid}")},0'
+
+    def control_client(self, name):
+        # A control-mode client attaches without a terminal, and closing its
+        # stdin detaches it, which is enough to fire both hooks.
+        client = subprocess.Popen(['tmux', '-C', 'attach', '-t', name], env=self.env,
+                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.case.addCleanup(client.kill)
+        return client
 
     def running(self, name):
         return subprocess.run(['tmux', 'has-session', '-t', '=' + name], env=self.env,
@@ -621,14 +678,6 @@ class HookTests(unittest.TestCase):
 
 @real_tmux
 class SeenAndCloseTests(unittest.TestCase):
-    def control_client(self, box, name):
-        # A control-mode client attaches without a terminal, and closing its
-        # stdin detaches it, which is enough to fire both hooks.
-        client = subprocess.Popen(['tmux', '-C', 'attach', '-t', name], env=box.env,
-                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(client.kill)
-        return client
-
     def test_seen_updates_only_an_open_record(self):
         box = Sandbox(self)
         box.started('s')
@@ -647,7 +696,7 @@ class SeenAndCloseTests(unittest.TestCase):
                 box.cli('mobile', 's', check=False)
                 self.assertTrue(box.running('s-m'))
             os.utime(seen, (old, old))
-            client = self.control_client(box, name)
+            client = box.control_client(name)
             box.wait_for(lambda: box.seen_time('s') > old + 3600, f'seen on attaching {name}')
             time.sleep(.3)
             os.utime(seen, (old, old))
@@ -754,13 +803,14 @@ class ListAndAdoptTests(unittest.TestCase):
         rows = {row['name']: row for row in json.loads(box.out('ls', '--all', '--json'))}
         self.assertEqual(set(rows), {'quoted', 'shut', 'q"x'})
         for row in rows.values():
-            self.assertEqual(set(row), {'name', 'state', 'agent', 'dir', 'recorded', 'attached',
-                                        'windows', 'idle_days'})
+            self.assertEqual(list(row), ['name', 'state', 'agent', 'dir', 'recorded', 'attached',
+                                         'windows', 'idle_days', 'title'])
         self.assertEqual(rows['q"x'], {'name': 'q"x', 'state': 'running', 'agent': None, 'dir': None,
-                                       'recorded': False, 'attached': False, 'windows': 1, 'idle_days': None})
+                                       'recorded': False, 'attached': False, 'windows': 1, 'idle_days': None,
+                                       'title': None})
         self.assertEqual(rows['quoted'], {'name': 'quoted', 'state': 'stopped', 'agent': 'claude',
                                           'dir': str(odd), 'recorded': True, 'attached': None,
-                                          'windows': None, 'idle_days': 1})
+                                          'windows': None, 'idle_days': 1, 'title': None})
         self.assertEqual(rows['shut']['state'], 'closed')
         self.assertIn('q"x-m', box.out('ls'))
         self.assertEqual(json.loads(Sandbox(self).out('ls', '--json')), [])
@@ -1627,7 +1677,7 @@ class ExtensionTests(unittest.TestCase):
         dispatch = source[source.rindex('case "$command" in'):]
         dispatch = dispatch[:dispatch.index('\nesac')]
         labels = {verb for line in re.findall(r'^  ([a-z|-]+)\)', dispatch, re.M) for verb in line.split('|')}
-        self.assertEqual(listed, labels - {'-h', '--help'} | {'pin', 'seen'})
+        self.assertEqual(listed, labels - {'-h', '--help'} | {'pin', 'seen', 'suggest'})
 
     def test_a_verb_with_a_slash_is_refused(self):
         box = self.box
@@ -1650,6 +1700,639 @@ class ExtensionTests(unittest.TestCase):
 def setUpModule():
     version = subprocess.run([BASH, '-c', 'echo "$BASH_VERSION"'], capture_output=True, text=True).stdout
     print(f'launcher bash: {BASH} {version.strip()}')
+
+
+@real_tmux
+class TitleTests(unittest.TestCase):
+    """Session titles: the agent's terminal title as a suggestion, the user's
+    own title, and where each is shown and stored."""
+
+    def box(self, **kwargs):
+        box = Sandbox(self, **kwargs)
+        (box.root / 'titles').mkdir()
+        (box.bin / 'claude').write_text(FAKE_TITLER)
+        (box.bin / 'claude').chmod(0o755)
+        box.env['AGENT_TEST_TITLES'] = str(box.root / 'titles')
+        box.suggest_log = box.root / 'suggest.log'
+        # suggest inherits the server's environment, so these go only to the
+        # launcher call that starts the server.
+        box.server_env = {'AGENT_NOTIFY_BODY_ROOTS': str(box.repo),
+                          'AGENT_SESSION_SUGGEST_LOG': str(box.suggest_log)}
+        return box
+
+    def start(self, box, name, *args, **extra):
+        box.started(name, *args, **dict(box.server_env, **extra))
+        box.wait_for(lambda: self.fifo(box, box.field(name, 'pane')).exists(), f'the FIFO of {name}')
+
+    def fifo(self, box, pane):
+        return box.root / 'titles' / pane.lstrip('%')
+
+    def write_title(self, box, pane, text):
+        """Hand a line to the fake agent in PANE, which writes it as its title."""
+        data = text if isinstance(text, bytes) else text.encode()
+        handle = []
+
+        def opened():
+            try:
+                handle.append(os.open(self.fifo(box, pane), os.O_WRONLY | os.O_NONBLOCK))
+            except OSError:
+                return False
+            return True
+        box.wait_for(opened, f'the fake agent in {pane}')
+        os.write(handle[0], data + b'\n')
+        os.close(handle[0])
+
+    def suggests(self, box):
+        return len(box.suggest_log.read_text().splitlines()) if box.suggest_log.exists() else 0
+
+    def option(self, box, name, option):
+        return box.tmux('show-options', '-qv', '-t', f'={name}:', option, check=False)
+
+    def suggest(self, box, name, text):
+        """Write a title, wait for the suggest it starts to finish, and return
+        the session's suggestion."""
+        count = self.suggests(box)
+        self.write_title(box, box.field(name, 'pane'), text)
+        box.wait_for(lambda: self.suggests(box) > count, f'suggest after {text!r}')
+        return self.option(box, name, '@ags-suggested')
+
+    def hooks(self, box, name):
+        return box.tmux('show-hooks', '-w', '-t', f'={name}:agent', check=False)
+
+    def test_agent_title_becomes_suggestion(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', '✳ Fix the ags titles'), 'Fix the ags titles')
+        self.assertIn('"title":"Fix the ags titles"', box.out('ls', '--json'))
+        self.assertEqual(self.option(box, 'vault', '@ags-title'), 'Fix the ags titles')
+        self.assertEqual(box.field('vault', 'suggested'), 'Fix the ags titles')
+        self.assertEqual(box.out('title', 'vault'), 'Fix the ags titles (suggested)\n')
+
+    def test_glyph_change_spawns_no_suggest(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', '✳ Plan the garden'), 'Plan the garden')
+        count = self.suggests(box)
+        pane = box.field('vault', 'pane')
+        for glyph in ('◑', '⠋'):
+            self.write_title(box, pane, f'{glyph} Plan the garden')
+            box.wait_for(lambda: box.tmux('display', '-p', '-t', pane, '#{pane_title}')
+                         == f'{glyph} Plan the garden', 'the glyph change')
+        time.sleep(.5)
+        self.assertEqual(self.suggests(box), count)
+        self.assertEqual(self.suggest(box, 'vault', '✳ Plan the balcony'), 'Plan the balcony')
+        self.assertEqual(self.suggests(box), count + 1)
+
+    def test_placeholders_ignored(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', 'Real work'), 'Real work')
+        host = box.tmux('display', '-p', '#{host}')
+        # Codex titles its pane with its directory's base name.
+        folder = os.path.basename(box.field('vault', 'dir'))
+        for title in ('Claude Code', '✳ claude code', 'Chat', 'CODEX', host, 'vault', 'vault-purrfect-pie',
+                      '✳ VAULT-Purrfect-Pie', '✳', folder):
+            self.assertEqual(self.suggest(box, 'vault', title), 'Real work', title)
+        self.assertEqual(box.field('vault', 'suggested'), 'Real work')
+
+    def test_shell_titles_ignored(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', 'Real work'), 'Real work')
+        for title in ('claude --session-id X', 'user@host:~/dir', 'opencode', 'TOKEN=sk-secret claude',
+                      'cd ~/x && claude --resume y', '/usr/local/bin/claude --fresh', 'API_KEY=x make'):
+            self.assertEqual(self.suggest(box, 'vault', title), 'Real work', title)
+        count = self.suggests(box)
+        box.type_in('vault:agent', r"printf '\033]2;%s\033\\' 'typed at the prompt'")
+        box.wait_for(lambda: self.suggests(box) > count, 'suggest from the shell')
+        count = self.suggests(box)
+        box.tmux('send-keys', '-t', 'vault:agent', '-l',
+                 r"printf '\033]2;%s\033\\' 'sleep 5 && echo tok=secret'; sleep 5")
+        box.tmux('send-keys', '-t', 'vault:agent', 'Enter')
+        box.wait_for(lambda: self.suggests(box) > count, 'suggest while sleep runs')
+        self.assertEqual(self.option(box, 'vault', '@ags-suggested'), 'Real work')
+        self.assertEqual(box.field('vault', 'suggested'), 'Real work')
+        box.out('open', 'sh', 'shell', '--detached')
+        self.assertNotIn('pane-title-changed', self.hooks(box, 'sh'))
+        self.assertIn('pane-title-changed', self.hooks(box, 'vault'))
+
+    def test_marked_titles_may_name_an_agent(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', '✳ Update claude settings'), 'Update claude settings')
+        self.assertEqual(self.suggest(box, 'vault', 'OC | Set FOO=1 default'), 'Set FOO=1 default')
+        self.assertEqual(self.suggest(box, 'vault', 'Fix codex resume flag'), 'Set FOO=1 default')
+
+    def test_unjudged_title_is_retried(self):
+        box = self.box()
+        self.start(box, 'vault')
+        pane = box.field('vault', 'pane')
+        record = box.state / 'sessions/vault/pane'
+        record.write_text('%999\n')
+        for glyph in ('✳', '◑'):
+            count = self.suggests(box)
+            self.write_title(box, pane, f'{glyph} Restored work')
+            box.wait_for(lambda: self.suggests(box) > count, f'suggest after {glyph}')
+        self.assertEqual(self.option(box, 'vault', '@ags-suggested'), '')
+        # The second miss came inside 5 seconds, so it left the mark in place
+        # and queued one retry for the end of the window.
+        count = self.suggests(box)
+        self.write_title(box, pane, '⠋ Restored work')
+        box.wait_for(lambda: box.tmux('display', '-p', '-t', pane, '#{pane_title}') == '⠋ Restored work',
+                     'the glyph change')
+        time.sleep(.5)
+        self.assertEqual(self.suggests(box), count)
+        record.write_text(pane + '\n')
+        box.wait_for(lambda: self.option(box, 'vault', '@ags-suggested') == 'Restored work', 'the queued retry')
+
+    def test_split_pane_is_not_retried(self):
+        box = self.box()
+        self.start(box, 'vault')
+        split = box.tmux('split-window', '-d', '-P', '-F', '#{pane_id}', '-t', '=vault:agent')
+        time.sleep(.5)
+        count = self.suggests(box)
+        for glyph in ('✳', '◑'):
+            title = f'{glyph} Split work'
+            box.tmux('send-keys', '-t', split, '-l', f"printf '\\033]2;%s\\033\\\\' '{title}'")
+            box.tmux('send-keys', '-t', split, 'Enter')
+            box.wait_for(lambda: box.tmux('display', '-p', '-t', split, '#{pane_title}') == title, title)
+            box.wait_for(lambda: self.suggests(box) > count, 'the first suggest', timeout=15)
+        # The record's pane is alive in this session, so the miss kept the mark
+        # and the glyph change started nothing.
+        time.sleep(1.5)
+        self.assertEqual(self.suggests(box), count + 1)
+        self.assertEqual(self.option(box, 'vault', '@ags-suggested'), '')
+
+    def test_program_named_like_the_agent_is_not_the_agent(self):
+        box = self.box()
+        self.start(box, 'vault')
+        pane = box.field('vault', 'pane')
+        self.assertEqual(self.suggest(box, 'vault', 'Real work'), 'Real work')
+        started = box.root / 'started'
+        (box.repo / 'claude.py').write_text(f'open({str(started)!r}, "w").close()\nimport time\ntime.sleep(5)\n')
+        box.tmux('send-keys', '-t', 'vault:agent', 'C-c')
+        time.sleep(.3)
+        box.tmux('send-keys', '-t', 'vault:agent', '-l',
+                 r"printf '\033]2;%s\033\\' 'python3 claude.py --token=secret'; python3 claude.py")
+        box.tmux('send-keys', '-t', 'vault:agent', 'Enter')
+        box.wait_for(started.exists, 'python3 claude.py')
+        box.cli('suggest', 'vault', pane)
+        self.assertEqual(self.option(box, 'vault', '@ags-suggested'), 'Real work')
+        self.assertEqual(box.field('vault', 'suggested'), 'Real work')
+
+    def test_non_latin_titles_keep_their_first_word(self):
+        box = self.box()
+        self.start(box, 'vault')
+        for title in ('修复登录问题', 'Исправить вход', '修复 登录'):
+            self.assertEqual(self.suggest(box, 'vault', title), title)
+        self.assertEqual(self.suggest(box, 'vault', '⠋ Plan the move'), 'Plan the move')
+        self.assertEqual(self.suggest(box, 'vault', '✳️ Plan the garden'), 'Plan the garden')
+
+    def test_titles_survive_a_locale_without_utf8(self):
+        box = self.box()
+        self.start(box, 'vault', LC_ALL='C', LANG='C')
+        self.assertEqual(self.suggest(box, 'vault', '✳ Café plan'), 'Café plan')
+        self.assertEqual(box.field('vault', 'suggested'), 'Café plan')
+        box.out('open', 'vault', '--detached', LC_ALL='C', LANG='C')
+        self.assertEqual(box.tmux('-u', 'show-options', '-qv', '-t', '=vault:', '@ags-title'), 'Café plan')
+        self.assertEqual(box.out('title', 'vault', LC_ALL='C', LANG='C'), 'Café plan (suggested)\n')
+
+    def test_opencode_and_escapes(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', 'OC | Fix the thing'), 'Fix the thing')
+        for title in ('New session - 2026-11-10T10:00', ''):
+            self.assertEqual(self.suggest(box, 'vault', title), 'Fix the thing', title)
+        self.assertEqual(self.suggest(box, 'vault', r'a\b'), r'a\b')
+        self.assertEqual(box.field('vault', 'suggested'), r'a\b')
+        box.cli('title', 'vault', 'ok\udcffgo')
+        self.assertEqual(box.field('vault', 'title'), 'okgo')
+        self.assertEqual(self.suggest(box, 'vault', 'Fix \u009b31m red'), 'Fix 31m red')
+        box.cli('title', 'vault', 'a\u0085b\u009bc')
+        self.assertEqual(box.field('vault', 'title'), 'abc')
+        (box.state / 'sessions/vault/title').write_text('hand\u009bedit\n')
+        self.assertEqual(json.loads(box.out('ls', '--json'))[0]['title'], 'handedit')
+
+    def test_hook_failure_silent(self):
+        box = self.box()
+        copy = box.root / 'launcher.sh'
+        shutil.copy(SCRIPT, copy)
+        copy.chmod(0o755)
+        box.started('vault', script=copy, **box.server_env)
+        pane = box.field('vault', 'pane')
+        box.wait_for(lambda: self.fifo(box, pane).exists(), 'the FIFO')
+        self.assertEqual(self.suggest(box, 'vault', 'First'), 'First')
+        copy.chmod(0o644)
+        self.write_title(box, pane, 'Second')
+        box.wait_for(lambda: box.tmux('display', '-p', '-t', pane, '#{pane_title}') == 'Second', 'the title')
+        time.sleep(.5)
+        self.assertEqual(box.tmux('display', '-p', '-t', pane, '#{pane_in_mode}'), '0')
+        self.assertEqual(self.option(box, 'vault', '@ags-suggested'), 'First')
+
+    def test_suggest_wrong_pane_ignored(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', 'Real work'), 'Real work')
+        shell = box.tmux('display', '-p', '-t', 'vault:shell', '#{pane_id}')
+        count = len(box.invocations())
+        box.tmux('send-keys', '-t', 'vault:shell', 'claude', 'Enter')
+        box.wait_for(lambda: len(box.invocations()) > count and self.fifo(box, shell).exists(), 'the second agent')
+        self.write_title(box, shell, 'Other work')
+        box.wait_for(lambda: box.tmux('display', '-p', '-t', shell, '#{pane_title}') == 'Other work', 'the title')
+        box.cli('suggest', 'vault', shell)
+        self.assertEqual(self.option(box, 'vault', '@ags-suggested'), 'Real work')
+        self.assertEqual(box.field('vault', 'suggested'), 'Real work')
+
+    def test_suggest_stale_pane_of_another_session_ignored(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.start(box, 'other')
+        pane = box.field('other', 'pane')
+        (box.state / 'sessions/vault/pane').write_text(pane + '\n')
+        self.assertEqual(self.suggest(box, 'other', 'Other work'), 'Other work')
+        box.cli('suggest', 'vault', pane)
+        self.assertEqual(self.option(box, 'vault', '@ags-suggested'), '')
+        self.assertIsNone(box.field('vault', 'suggested'))
+
+    def test_user_title_wins_until_cleared(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.suggest(box, 'vault', 'Agent idea')
+        self.assertEqual(box.out('title', 'vault', 'My', 'words'), 'Title of vault: My words\n')
+        self.assertEqual(self.option(box, 'vault', '@ags-title'), 'My words')
+        self.assertEqual(self.suggest(box, 'vault', 'Later idea'), 'Later idea')
+        self.assertEqual(self.option(box, 'vault', '@ags-title'), 'My words')
+        self.assertEqual(box.out('title', 'vault'), 'My words (yours)\n')
+        self.assertEqual(box.out('title', 'vault', '--clear'), 'vault follows the agent: Later idea\n')
+        self.assertEqual(self.option(box, 'vault', '@ags-title'), 'Later idea')
+        self.assertEqual(box.out('title', 'vault'), 'Later idea (suggested)\n')
+        self.assertIsNone(box.field('vault', 'title'))
+        refused = box.cli('title', 'vault', '--clear', 'extra', check=False)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('Usage', refused.stderr)
+        self.assertNotEqual(box.cli('title', 'vault', '--bogus', check=False).returncode, 0)
+        self.assertNotEqual(box.cli('title', 'vault', '--edit', check=False).returncode, 0)
+        self.assertEqual(box.out('title', 'vault', '--', '--clear'), 'Title of vault: --clear\n')
+        self.assertEqual(box.out('title', 'vault', '-'), 'vault follows the agent: Later idea\n')
+        self.assertIsNone(box.field('vault', 'title'))
+        self.assertEqual(box.out('title', 'vault', '--', '-'), 'Title of vault: -\n')
+        box.make_record('quiet', box.vault)
+        self.assertEqual(box.out('title', 'quiet', '--clear'),
+                         'quiet follows the agent, which has suggested nothing yet.\n')
+        self.assertEqual(box.out('title', 'quiet'), 'No title.\n')
+        self.assertEqual(box.cli('title', check=False).returncode, 1)
+
+    def test_fresh_clears_resume_keeps(self):
+        box = self.box()
+
+        def give(name):
+            box.cli('title', name, 'Mine')
+            (box.state / 'sessions' / name / 'suggested').write_text('Theirs\n')
+
+        def kept(name):
+            return box.field(name, 'title'), box.field(name, 'suggested')
+        self.start(box, 'vault')
+        box.transcript(box.repo, box.field('vault', 'conversation'))
+        box.out('open', 'sh', 'shell', '--detached', cwd=box.vault)
+        for name in ('vault', 'sh'):
+            give(name)
+            box.cli('close', name)
+            box.out('open', name, '--detached')
+            self.assertEqual(kept(name), ('Mine', 'Theirs'), name)
+            self.assertEqual(self.option(box, name, '@ags-title'), 'Mine', name)
+        for reopen in (('open', 'vault', '--fresh', '--detached'), ('new', 'vault'),
+                       ('open', 'vault', 'codex', '--detached')):
+            give('vault')
+            box.cli('close', 'vault')
+            box.out(*reopen)
+            self.assertEqual(kept('vault'), (None, None), reopen)
+        box.cli('close', 'vault')
+        box.out('open', 'vault', 'claude', '--detached')
+        pin = box.field('vault', 'conversation')
+        box.transcript(box.repo, pin)
+        other = box.transcript(box.repo)
+        give('vault')
+        box.cli('close', 'vault')
+        box.out('open', 'vault', '--conversation', pin, '--detached')
+        self.assertEqual(kept('vault'), ('Mine', 'Theirs'))
+        box.cli('close', 'vault')
+        box.out('open', 'vault', '--conversation', other, '--detached')
+        self.assertEqual(kept('vault'), (None, None))
+        # A Claude start that finds its conversation gone opens a new one.
+        give('vault')
+        box.cli('close', 'vault')
+        (box.project(box.repo) / f'{other}.jsonl').unlink()
+        self.assertIn('not found', box.out('open', 'vault', '--detached'))
+        self.assertEqual(kept('vault'), (None, None))
+        # So does a resume that continues another conversation in its place.
+        give('vault')
+        box.cli('close', 'vault')
+        box.transcript(box.repo)
+        self.assertIn('continuing its last conversation', box.out('resume', 'vault'))
+        self.assertEqual(kept('vault'), (None, None))
+        # A record that never learned its conversation keeps them, because the
+        # one a resume finds is likely the one it held.
+        give('vault')
+        box.cli('close', 'vault')
+        (box.state / 'sessions/vault/conversation').unlink()
+        self.assertIn('continuing its last conversation', box.out('resume', 'vault'))
+        self.assertEqual(kept('vault'), ('Mine', 'Theirs'))
+
+    def test_withheld_root_kept_off_disk(self):
+        box = self.box()
+        box.server_env['AGENT_NOTIFY_BODY_ROOTS'] = str(box.vault)
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', 'Private work'), 'Private work')
+        self.assertEqual(self.option(box, 'vault', '@ags-title'), 'Private work')
+        self.assertIsNone(box.field('vault', 'suggested'))
+        self.assertIsNone(json.loads(box.out('ls', '--json'))[0]['title'])
+        self.assertRegex(box.out('ls').splitlines()[1], r'\s-\s+' + re.escape(str(box.repo)))
+        box.cli('title', 'vault', 'Mine')
+        self.assertEqual(box.field('vault', 'title'), 'Mine')
+        self.assertEqual(json.loads(box.out('ls', '--json'))[0]['title'], 'Mine')
+
+    def test_content_root_expands_tilde(self):
+        box = self.box()
+        box.server_env['AGENT_NOTIFY_BODY_ROOTS'] = '~/../repo'
+        self.start(box, 'vault')
+        self.assertEqual(self.suggest(box, 'vault', 'Home work'), 'Home work')
+        self.assertEqual(box.field('vault', 'suggested'), 'Home work')
+
+    def hostile_titles(self):
+        """One title per form that would run or restyle, with a marker path
+        short enough that the three that would run fit the 80 cut together."""
+        marker = Path(tempfile.mkdtemp(prefix='t', dir='/tmp')) / 'p'
+        self.addCleanup(shutil.rmtree, marker.parent, True)
+        return marker, [f'#(touch {marker})', f'$(touch {marker})', f'`touch {marker}`',
+                        '#[fg=red]x %% #{session_name} "q" \'s\'']
+
+    def test_hostile_title_round_trip(self):
+        box = self.box()
+        self.start(box, 'vault')
+        marker, forms = self.hostile_titles()
+
+        def suggested(title):
+            # tmux 3.8 itself stores #( in a pane title as _(, and 3.4 may not.
+            got = self.suggest(box, 'vault', title)
+            self.assertIn(got, (title, title.replace('#(', '_(')))
+            self.assertEqual(box.field('vault', 'suggested'), got)
+            self.assertEqual(self.option(box, 'vault', '@ags-title'), got)
+            return got
+        runs = ' '.join(forms[:3])
+        self.assertLess(len(runs), 80)
+        got = suggested(runs)
+        self.assertEqual(self.option(box, 'vault', '@ags-title-status'), (got[:39] + '…').replace('#', '##'))
+        hostile = (forms[3] + ' ' + runs)[:79] + '…'
+        got = suggested(hostile)
+        self.assertEqual(self.option(box, 'vault', '@ags-title-status'), (got[:39] + '…').replace('#', '##'))
+        for title in ('stop here;', ';'):
+            self.assertEqual(self.suggest(box, 'vault', title), title)
+            self.assertEqual(box.field('vault', 'suggested'), title)
+        for title in (hostile, 'x ;;', r'a\;', ';'):
+            box.cli('title', 'vault', title)
+            self.assertEqual(box.field('vault', 'title'), title)
+            self.assertEqual(self.option(box, 'vault', '@ags-title'), title)
+            self.assertEqual(box.out('title', 'vault'), f'{title} (yours)\n')
+        time.sleep(.3)
+        self.assertFalse(marker.exists())
+
+    def test_title_capped(self):
+        box = self.box()
+        box.make_record('vault', box.repo)
+        box.cli('title', 'vault', 'é' * 200, LC_ALL='C')
+        stored = (box.state / 'sessions/vault/title').read_bytes().decode('utf-8').rstrip('\n')
+        self.assertEqual(stored, 'é' * 79 + '…')
+
+    def test_status_cut_by_cells(self):
+        box = self.box()
+        self.start(box, 'vault')
+        for title, short in (('修复登录问题' * 5, '修复登录问题' * 3 + '修' + '…'),
+                             ('é' * 50, 'é' * 39 + '…'), ('😀 ' * 20, '😀 ' * 13 + '…')):
+            box.cli('title', 'vault', title)
+            self.assertEqual(self.option(box, 'vault', '@ags-title-status'), short, title)
+            self.assertLessEqual(cells(short), 40)
+
+    def test_edit_semantics(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.suggest(box, 'vault', 'Agent idea')
+        inside = {'TMUX': box.inside()}
+
+        def edit(text):
+            return box.cli('title', '--edit', input=text, **inside)
+        box.control_client('vault')
+        box.wait_for(lambda: box.tmux('list-clients'), 'the client')
+        for text in ('Agent idea\n', '\n', '', '   \n'):
+            edit(text)
+            self.assertIsNone(box.field('vault', 'title'), repr(text))
+        edit('New words\n')
+        self.assertEqual(box.field('vault', 'title'), 'New words')
+        self.assertEqual(self.option(box, 'vault', '@ags-title'), 'New words')
+        edit('New words\n')
+        self.assertEqual(box.field('vault', 'title'), 'New words')
+        edit('-\n')
+        self.assertIsNone(box.field('vault', 'title'))
+        self.assertEqual(self.option(box, 'vault', '@ags-title'), 'Agent idea')
+        edit('No newline at the end')
+        self.assertEqual(box.field('vault', 'title'), 'No newline at the end')
+        box.tmux('new-session', '-d', '-t', 'vault', '-s', 'vault-m')
+        box.control_client('vault-m')
+        box.wait_for(lambda: 'vault-m' in box.tmux('list-clients', '-F', '#{client_session}'), 'the second client')
+        edit('From the phone\n')
+        self.assertEqual(box.field('vault', 'title'), 'From the phone')
+        self.assertFalse((box.state / 'sessions/vault-m').exists())
+        self.assertEqual(self.option(box, 'vault-m', '@ags-title'), 'From the phone')
+        refused = box.cli('title', '--edit', check=False)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('--edit runs inside tmux. Click the title or press prefix T.', refused.stderr)
+
+    def test_edit_reads_utf8_without_a_locale(self):
+        box = self.box()
+        self.start(box, 'vault')
+        box.cli('title', 'vault', 'Café')
+        env = dict(box.env, TMUX=box.inside(), LC_ALL='C', TERM='xterm')
+        for key in ('LANG', 'LC_CTYPE'):
+            env.pop(key, None)
+        bash = int(subprocess.run([BASH, '-c', 'echo ${BASH_VERSINFO[0]}'], capture_output=True,
+                                  text=True).stdout)
+        main, other = os.openpty()
+        proc = subprocess.Popen([BASH, str(SCRIPT), 'title', '--edit'], env=env, cwd=str(box.repo),
+                                stdin=other, stdout=other, stderr=other, start_new_session=True)
+        os.close(other)
+        seen = b''
+        while b'Title' not in seen:
+            seen += os.read(main, 1024)
+        # Two Backspaces take the whole é only when readline reads UTF-8.
+        os.write(main, (b'\x1b[A' if bash < 4 else b'') + b'\x7f\x7fx\r')
+        proc.wait(timeout=30)
+        os.close(main)
+        self.assertEqual(box.field('vault', 'title'), 'Cax')
+
+    def test_open_hooks_running_session(self):
+        box = self.box()
+        self.start(box, 'vault')
+        box.tmux('set-hook', '-uw', '-t', '=vault:agent', 'pane-title-changed')
+        self.assertNotIn('pane-title-changed', self.hooks(box, 'vault'))
+        pane = box.field('vault', 'pane')
+        self.write_title(box, pane, 'Before the hook')
+        box.wait_for(lambda: box.tmux('display', '-p', '-t', pane, '#{pane_title}') == 'Before the hook', 'the title')
+        self.assertNotIn('AGENT_NOTIFY_BODY_ROOTS', box.env)
+        count = self.suggests(box)
+        box.out('open', 'vault', '--detached')
+        self.assertIn('pane-title-changed', self.hooks(box, 'vault'))
+        box.wait_for(lambda: self.suggests(box) > count, 'the seed read', timeout=15)
+        self.assertEqual(box.field('vault', 'suggested'), 'Before the hook')
+        self.assertEqual(self.option(box, 'vault', '@ags-title'), 'Before the hook')
+
+    def test_adopt_reads_the_title(self):
+        box = self.box()
+        self.start(box, 'vault')
+        box.tmux('set-hook', '-uw', '-t', '=vault:agent', 'pane-title-changed')
+        pane = box.field('vault', 'pane')
+        shutil.rmtree(box.state / 'sessions/vault')
+        self.write_title(box, pane, 'Before the adoption')
+        box.wait_for(lambda: box.tmux('display', '-p', '-t', pane, '#{pane_title}') == 'Before the adoption', 'the title')
+        count = self.suggests(box)
+        box.out('adopt', 'vault', 'claude')
+        self.assertIn('pane-title-changed', self.hooks(box, 'vault'))
+        box.wait_for(lambda: self.suggests(box) > count, 'the seed read', timeout=15)
+        self.assertEqual(box.field('vault', 'suggested'), 'Before the adoption')
+
+    def test_new_session_skips_the_seed_read(self):
+        box = self.box()
+        self.start(box, 'vault')
+        self.assertEqual(self.suggests(box), 0)
+        box.out('open', 'vault', '--detached')
+        box.wait_for(lambda: self.suggests(box) == 1, 'the seed read', timeout=15)
+        time.sleep(.5)
+        self.assertEqual(self.suggests(box), 1)
+
+    def test_unrecorded_refused(self):
+        box = self.box()
+        refused = box.cli('title', 'ghost', 'Words', check=False)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('No record named ghost.', refused.stderr)
+        self.assertFalse((box.state / 'sessions/ghost').exists())
+        box.make_record('vault', box.repo)
+        for empty in ('', '   ', '\t'):
+            refused = box.cli('title', 'vault', empty, check=False)
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn('The title is empty.', refused.stderr)
+        self.assertNotEqual(box.cli('title', 'bad:name!', 'x', check=False).returncode, 0)
+        box.tmux('new-session', '-d', '-s', 'bare')
+        box.control_client('bare')
+        box.wait_for(lambda: box.tmux('list-clients'), 'the client')
+        refused = box.cli('title', '--edit', input='x\n', check=False, TMUX=box.inside())
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('No record for bare, so it has no title.', refused.stdout + refused.stderr)
+
+    def test_ls_title_column(self):
+        box = Sandbox(self)
+        long_title = 'A title long enough to be cut in the listing column'
+        for name, directory, title in (('ascii', box.repo, 'Plain title'), ('accent', box.vault, 'Café crème brûlée'),
+                                       ('long', box.repos, long_title), ('none', box.home, None),
+                                       ('wide', box.state, '修复登录问题' * 5)):
+            path = box.make_record(name, directory)
+            if title:
+                (path / 'title').write_text(title + '\n')
+        (box.state / 'sessions/none/suggested').write_text('Stored suggestion\n')
+        lines = box.out('ls').splitlines()
+        self.assertRegex(lines[0], r'WINDOWS\s+TITLE\s+DIRECTORY$')
+        rows = {line.split()[0]: line for line in lines[1:]}
+        column = lines[0].index('DIRECTORY')
+        for name, directory in (('ascii', box.repo), ('accent', box.vault), ('long', box.repos),
+                                ('none', box.home), ('wide', box.state)):
+            self.assertEqual(cells(rows[name][:rows[name].index(str(directory))]), column, name)
+            self.assertTrue(rows[name].endswith(str(directory)), name)
+        self.assertIn('Café crème brûlée', rows['accent'])
+        self.assertIn(long_title[:39] + '…', rows['long'])
+        self.assertIn('修复登录问题' * 3 + '修…', rows['wide'])
+        self.assertIn('Stored suggestion', rows['none'])
+        box.make_record('blank', box.root)
+        self.assertRegex(box.out('ls'), r'blank .*\s-\s+' + re.escape(str(box.root)) + '\n')
+
+    def test_repo_tmux_conf(self):
+        box = self.box(repo_conf=True)
+        self.start(box, 'vault')
+
+        def rendered():
+            return box.tmux('display', '-p', '-t', '=vault:', '#{T:set-titles-string}')
+        self.assertEqual(rendered(), 'vault · agent')
+        box.cli('title', 'vault', 'Fix the ags titles')
+        self.assertEqual(rendered(), 'vault · Fix the ags titles')
+        # The alias must reach tmux as the popup written out by hand would.
+        box.tmux('bind', '-T', 'probe', 'x', 'display-popup', '-E', '-w', '80%', '-h', '6',
+                 '-T', ' Session title ',
+                 'l="$(tmux show -gqv @ags-launcher)"; if [ -n "$l" ]; then exec "$l" title --edit; fi; '
+                 'echo "ags has not run on this tmux server yet."; read -r _')
+
+        def bound(table, key):
+            return box.tmux('list-keys', '-T', table, key).split(None, 4)[4]
+        self.assertTrue(bound('probe', 'x').startswith('display-popup'))
+        self.assertEqual(bound('root', 'MouseDown1StatusLeft'), bound('probe', 'x'))
+        self.assertEqual(bound('prefix', 'T'), bound('probe', 'x'))
+
+    def test_hostile_title_rendered(self):
+        # Every redraw expands the status line and the terminal title, so a
+        # title must reach a real client as text and never run.
+        box = self.box(repo_conf=True)
+        self.start(box, 'vault')
+        box.tmux('set', '-g', 'status-interval', '1')
+        marker, forms = self.hostile_titles()
+        main, child = os.openpty()
+        fcntl.ioctl(child, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 130, 0, 0))
+        client = subprocess.Popen(['tmux', 'attach', '-t', '=vault'], env=dict(box.env, TERM='xterm-256color'),
+                                  stdin=child, stdout=child, stderr=child, start_new_session=True)
+        os.close(child)
+        drawn = bytearray()
+
+        def drain():
+            while True:
+                try:
+                    chunk = os.read(main, 65536)
+                except OSError:
+                    return
+                if not chunk:
+                    return
+                drawn.extend(chunk)
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+
+        def stop():
+            client.kill()
+            client.wait()
+            reader.join(5)
+            os.close(main)
+        self.addCleanup(stop)
+
+        def titles():
+            return re.findall(rb'\x1b\]\d;(.*?)\x07', bytes(drawn))
+
+        def screen():
+            text = re.sub(rb'\x1b\][^\x07]*\x07', b'', bytes(drawn))
+            return re.sub(rb'\x1b[\[(][0-9;?]*[A-Za-z@]', b'', text).decode('utf-8', 'replace')
+        box.wait_for(lambda: box.tmux('list-clients', '-F', '#{client_width}') == '130', 'the client')
+        for title in forms:
+            box.cli('title', 'vault', title)
+            box.wait_for(lambda: f'vault · {title}'.encode() in titles(), f'the terminal title {title!r}')
+            box.wait_for(lambda: title in screen(), f'the status line {title!r}')
+        time.sleep(2.5)
+        self.assertFalse(marker.exists())
+
+    def test_content_roots_match_notify(self):
+        def roots(path):
+            return [line.strip() for line in path.read_text().splitlines()
+                    if 'default_roots=' in line or 'default_roots+=' in line]
+        notify = roots(SCRIPT.with_name('agent-notify.sh'))
+        self.assertEqual(len(notify), 5)
+        self.assertEqual(roots(SCRIPT), notify)
+
+    def test_baseline_claude_settings(self):
+        raw = (REPO / 'config/claude/settings.json').read_bytes()
+        if raw.startswith(b'\x00GITCRYPT'):
+            self.skipTest('config/claude is locked by git-crypt')
+        settings = json.loads(raw)
+        self.assertIs(settings['terminalTitleFromRename'], False)
 
 
 if __name__ == '__main__':
