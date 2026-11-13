@@ -1788,8 +1788,10 @@ class TitleTests(unittest.TestCase):
         self.start(box, 'vault')
         self.assertEqual(self.suggest(box, 'vault', 'Real work'), 'Real work')
         host = box.tmux('display', '-p', '#{host}')
+        # Codex titles its pane with its directory's base name.
+        folder = os.path.basename(box.field('vault', 'dir'))
         for title in ('Claude Code', '✳ claude code', 'Chat', 'CODEX', host, 'vault', 'vault-purrfect-pie',
-                      '✳ VAULT-Purrfect-Pie', '✳'):
+                      '✳ VAULT-Purrfect-Pie', '✳', folder):
             self.assertEqual(self.suggest(box, 'vault', title), 'Real work', title)
         self.assertEqual(box.field('vault', 'suggested'), 'Real work')
 

@@ -699,12 +699,13 @@ cut_cells() {
 
 # Prints the text cleaned. With AGENT and NAME it is the agent's suggestion,
 # which also loses its status glyph and OpenCode's prefix, and prints nothing
-# when what is left is a placeholder or a shell's own title. Without them it is
-# the user's text.
+# when what is left is a placeholder or a shell's own title. DIR, the session's
+# directory, makes its base name a placeholder too, since Codex titles its pane
+# with it. Without them it is the user's text.
 clean_title() {
   utf8_locale
   (
-    local text="$1" agent="${2:-}" name="${3:-}" bs='\' first host="" host_short="" cut marked=false
+    local text="$1" agent="${2:-}" name="${3:-}" dir="${4:-}" bs='\' first host="" host_short="" cut marked=false
     local suffixed="^${3:-}(-[A-Za-z]+)+\$" shell_title='^[^ @]+@[^ :]+:'
     local assignment='^[A-Za-z_][A-Za-z0-9_]*=' word
     local -a words=()
@@ -736,6 +737,7 @@ clean_title() {
         "Claude Code"|Claude|Codex|OpenCode|Chat|"New session - "*) exit 0 ;;
         "$agent"|"$name"|"$host"|"$host_short") exit 0 ;;
       esac
+      [[ -z "$dir" || "$text" != "${dir##*/}" ]] || exit 0
       [[ ! "$text" =~ $suffixed ]] || exit 0
       shopt -u nocasematch
       # A line typed at a shell names the agent it starts, or sets a variable,
@@ -2498,7 +2500,7 @@ cmd_suggest() {
     '#{?#{!=:#{session_group},},#{session_group},#{session_name}} #{pane_title}' 2>/dev/null)" || return 0
   [[ "${text%% *}" == "$name" ]] || return 0
   utf8_locale
-  text="$(clean_title "${text#* }" "$agent" "$name")"
+  text="$(clean_title "${text#* }" "$agent" "$name" "$(record_get "$name" dir)")"
   [[ -n "$text" ]] || return 0
   [[ "$text" != "$(tmux -u show-options -qv -t "=$name:" @ags-suggested 2>/dev/null || true)" ]] || return 0
   set_text_option "=$name:" @ags-suggested "$text" || return 0
