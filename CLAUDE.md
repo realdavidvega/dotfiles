@@ -213,6 +213,7 @@ ags open <name>         # attach, or start it from its record
 ags open <name> --repo  # start in the repository named after it
 ags close <name>        # stop it, keeping its record and conversation
 ags close <name> --forget  # stop it and forget its record
+ags close --idle        # close sessions idle 21 days, as restore does
 ags adopt               # record running sessions that predate records
 ags restore             # after a reboot, start every open record
 ags history [name]      # each name's conversations

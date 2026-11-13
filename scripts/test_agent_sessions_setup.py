@@ -293,7 +293,8 @@ class AgsZshTests(unittest.TestCase):
                     'PATH': f'{self.bin}:{os.environ["PATH"]}', 'TERM': 'dumb',
                     'DOTFILES_PATH': str(self.fake), 'TERM_PROGRAM': 'iTerm.app',
                     '__CFBundleIdentifier': 'com.googlecode.iterm2',
-                    'AGENT_SESSION_STATE': str(self.state), 'AGENT_SESSION_BOOT_ID': 'boot-a'}
+                    'AGENT_SESSION_STATE': str(self.state), 'AGENT_SESSION_BOOT_ID': 'boot-a',
+                    'AGENT_SESSION_IDLE_DAYS': '0'}
 
     def record(self, name, closed=False, seen=None):
         path = self.state / 'sessions' / name
@@ -413,6 +414,31 @@ class AgsZshTests(unittest.TestCase):
         write_exec(self.bin / 'tmux', f'mkdir -p "{entry}"\n')
         self.record('one')
         self.assertTrue(self.hinted(lambda: shutil.rmtree(entry, ignore_errors=True)))
+
+    def test_the_idle_sweep_runs_the_launcher_once_a_day(self):
+        self.record('a')
+        self.running.write_text('a\n')
+        stamp = self.state / 'idle-sweep'
+
+        def runs(age=None, days=None):
+            def prepare():
+                self.calls.unlink(missing_ok=True)
+                stamp.unlink(missing_ok=True)
+                if age is not None:
+                    stamp.write_text('')
+                    when = time.time() - age
+                    os.utime(stamp, (when, when))
+            return self.hinted(prepare, AGENT_SESSION_IDLE_DAYS=days)
+
+        self.assertTrue(runs())
+        self.assertFalse(self.calls.exists())
+        self.assertTrue(runs(age=86400 + 60))
+        self.assertTrue(runs(days='21'))
+        self.assertFalse(runs(age=3600))
+        self.assertTrue(self.calls.exists())
+        self.assertFalse(runs(days='0'))
+        shutil.rmtree(self.state / 'sessions')
+        self.assertFalse(runs())
 
     def test_a_wedged_server_is_given_a_second(self):
         pid = self.root / 'pid'

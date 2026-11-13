@@ -33,17 +33,18 @@ _ags_hint() {
 
 # Whether restore --hint has anything to do: a recorded session stopped with no
 # entry from this boot, an entry made in the last 10 s, so every tab a reboot
-# reopens together prints, or an entry the launcher would remove. Each process
-# costs a loaded Mac several ms at every tab's first prompt, so this reads the
-# state with zsh alone and starts two: sysctl for the boot and tmux for the
-# running names. The launcher owns the rules, including expiry, whose sessions
-# it marks with a file entry this treats as already judged until the record is
-# used again. The modules it loads stay loaded in the shell.
+# reopens together prints, an entry the launcher would remove, or an idle
+# sweep due. Each process costs a loaded Mac several ms at every tab's first
+# prompt, so this reads the state with zsh alone and starts two: sysctl for the
+# boot and tmux for the running names. The launcher owns the rules, including
+# expiry, whose sessions it marks with a file entry this treats as already
+# judged until the record is used again. The modules it loads stay loaded in
+# the shell.
 _ags_hint_due() {
   emulate -L zsh
-  local state hint id name entry pid line fd deadline ended=0
+  local state hint id name entry pid line fd deadline days ended=0
   integer left
-  local -a running fresh reply
+  local -a running fresh recent reply
   if [[ -n "${AGENT_SESSION_STATE:-}" ]]; then
     state=$AGENT_SESSION_STATE
   elif [[ -d /srv/services/agents ]]; then
@@ -63,6 +64,12 @@ _ags_hint_due() {
   hint=$state/hint/$id
   fresh=($hint/*(N/ms-10))
   (( $#fresh )) && return 0
+  # The idle sweep is due once a day, by the launcher's own stamp.
+  days=${AGENT_SESSION_IDLE_DAYS:-21}
+  if [[ $days == <1-> && -d $state/sessions ]]; then
+    recent=($state/idle-sweep(Nms-86400))
+    (( $#recent )) || return 0
+  fi
 
   # A wedged server gets one second in all, as the launcher's listing does.
   # Process substitution sets no $!, so the child names itself first.

@@ -15,6 +15,9 @@ Shared commands (the same verbs as Telegram):
   close <name> [--forget]  Stop a session and mark its record closed, so a
                           later open resumes its conversation. --forget
                           deletes the record instead
+  close --idle            Close every running session idle
+                          AGENT_SESSION_IDLE_DAYS, keeping its record and
+                          conversation. Also runs once a day on its own
   peek <name> [lines]      Read the agent pane, default 30 lines, maximum 60
   say <name> <text...>     Type text literally and press Enter
   esc <name>              Send Escape to the agent pane
@@ -29,7 +32,9 @@ Terminal commands:
   restore [--dry-run | --hint]
                           Start every open record that is not running, each
                           in its own conversation. A record idle for
-                          AGENT_SESSION_EXPIRE_DAYS is expired instead.
+                          AGENT_SESSION_EXPIRE_DAYS is expired instead, and
+                          running sessions idle AGENT_SESSION_IDLE_DAYS are
+                          closed first.
                           --hint prints one line when a stopped session is
                           new to this boot, for a shell's first prompt
   history [name]          List each name's conversations, newest first
@@ -88,6 +93,9 @@ Environment:
   AGENT_SESSION_LOCKED 1 or 0 overrides the encrypted-home check
   AGENT_SESSION_EXPIRE_DAYS  Idle days before restore expires a record
                        (default 14, 0 turns expiry off)
+  AGENT_SESSION_IDLE_DAYS  Days without activity before a running session is
+                       closed (default 21, 0 turns the idle close off)
+  AGENT_SESSION_NOW    Epoch seconds the idle close takes as now, for tests
   AGENT_SESSION_RESTORE_GAP  Seconds between restore's starts (default 5)
   PANEPORT_QUIET       Set by paneport, so a session it opens is not announced
   AGENT_BRIDGE_QUIET   Set by the Telegram bridge, for the same reason
@@ -683,15 +691,20 @@ adopt_session() {
 # bridge sets AGENT_BRIDGE_QUIET and paneport sets PANEPORT_QUIET when they
 # call this launcher, since each announces its own sessions. Under nohup it
 # outlives a close run inside the session it kills.
-announce_session() {
-  local bridge="${AGENT_BRIDGE_BIN:-/srv/services/agents/bin/agent-bridge.py}"
-  local env_file="${AGENT_BRIDGE_ENV:-/srv/services/agents/bridge.env}"
+BRIDGE_BIN="${AGENT_BRIDGE_BIN:-/srv/services/agents/bin/agent-bridge.py}"
+BRIDGE_ENV="${AGENT_BRIDGE_ENV:-/srv/services/agents/bridge.env}"
 
+# Whether a bridge is staged here, so an announcement can reach Telegram.
+bridge_ready() {
+  [[ -r "$BRIDGE_BIN" && -r "$BRIDGE_ENV" ]]
+}
+
+announce_session() {
   [[ -z "${AGENT_BRIDGE_QUIET:-}" && -z "${PANEPORT_QUIET:-}" ]] || return 0
-  [[ -r "$bridge" && -r "$env_file" ]] || return 0
+  bridge_ready || return 0
   command -v python3 >/dev/null 2>&1 || return 0
 
-  ( AGENT_BRIDGE_ENV="$env_file" nohup python3 "$bridge" topic "$@" >/dev/null 2>&1 & ) || true
+  ( AGENT_BRIDGE_ENV="$BRIDGE_ENV" nohup python3 "$BRIDGE_BIN" topic "$@" >/dev/null 2>&1 & ) || true
 }
 
 # The binary, for the on-PATH check. Kept apart from the command line below,
@@ -1391,6 +1404,18 @@ cmd_mobile() {
 }
 
 # How many clients are watching a session right now.
+# Kills a session and every grouped client of it, the clients first, so no
+# copy of the agent survives in a second client.
+kill_session_group() {
+  local name="$1" client group
+  while IFS=$'\t' read -r client group; do
+    if [[ "$group" == "$name" && "$client" != "$name" ]]; then
+      tmux kill-session -t "=$client" 2>/dev/null || true
+    fi
+  done < <(tmux list-sessions -F $'#{session_name}\t#{session_group}' 2>/dev/null || true)
+  tmux kill-session -t "=$name"
+}
+
 attached_clients() {
   tmux list-clients -t "=$1" 2>/dev/null | grep -c . || true
 }
@@ -1400,17 +1425,26 @@ attached_clients() {
 # happen comes before the last kill, because a close run inside its own
 # session dies with it.
 cmd_close() {
-  local name="" forget=false running=false group client text
+  local name="" forget=false idle=false running=false group text
 
   while (($# > 0)); do
     case "$1" in
       --forget) forget=true ;;
+      --idle) idle=true ;;
       *)
         if [[ -z "$name" ]]; then name="$1"; else printf 'Unexpected argument: %s\n' "$1" >&2; exit 1; fi
         ;;
     esac
     shift
   done
+  if [[ "$idle" == true ]]; then
+    if [[ -n "$name" || "$forget" == true ]]; then
+      printf 'Usage: ags close NAME [--forget] | ags close --idle\n' >&2
+      exit 1
+    fi
+    close_idle
+    return 0
+  fi
   [[ -n "$name" ]] || { printf 'A session name is required.\n' >&2; exit 1; }
   name="${name//[.:]/-}"
 
@@ -1464,15 +1498,7 @@ cmd_close() {
   fi
   announce_session "$name" --no-create --no-buttons --text "$text"
 
-  if [[ "$running" == true ]]; then
-    # No copy of the agent may survive in a second client.
-    while IFS=$'\t' read -r client group; do
-      if [[ "$group" == "$name" && "$client" != "$name" ]]; then
-        tmux kill-session -t "=$client" 2>/dev/null || true
-      fi
-    done < <(tmux list-sessions -F $'#{session_name}\t#{session_group}' 2>/dev/null || true)
-    tmux kill-session -t "=$name"
-  fi
+  [[ "$running" == false ]] || kill_session_group "$name"
 }
 
 cmd_adopt() {
@@ -1549,6 +1575,153 @@ prune_hint_boots() {
   done
 }
 
+IDLE_DAYS="${AGENT_SESSION_IDLE_DAYS:-21}"
+
+# The running sessions in PANES idle IDLE_DAYS or more, as "name days" lines in
+# the listing's order. A session's activity is the newest of its pinned
+# transcript's time, its seen file's time and its session group's tmux
+# activity, which typing and attaching move and output does not. A session is
+# kept when a client is attached anywhere in its group, when it has no open
+# record, when it is a grouped client, or when it runs a job: a command other
+# than a shell in its shell or git window, or in its agent window when its
+# agent is the shell. Bash 3.2 has no associative arrays, hence the lists,
+# indexed by group, which is a session's own name unless it is a grouped client.
+idle_sessions() {
+  local now name group attached group_attached activity window command key i found pin dir
+  local -a groups=() activities=() attaching=() agents=() jobs=() seen=() transcript=() files=()
+  now="${AGENT_SESSION_NOW:-$(date +%s)}"
+  while IFS='|' read -r name group attached group_attached activity window command; do
+    [[ -n "$name" ]] || continue
+    key="${group:-$name}"
+    found=-1
+    for ((i = 0; i < ${#groups[@]}; i++)); do
+      if [[ "${groups[i]}" == "$key" ]]; then found=$i; break; fi
+    done
+    if ((found < 0)); then
+      found=${#groups[@]}
+      groups[found]="$key" activities[found]=0 attaching[found]=0 agents[found]="" jobs[found]=-1
+    fi
+    if [[ "$activity" =~ ^[0-9]+$ ]] && ((activity > activities[found])); then
+      activities[found]="$activity"
+    fi
+    if ((${attached:-0} > 0 || ${group_attached:-0} > 0)); then attaching[found]=1; fi
+    [[ "$key" == "$name" ]] || continue
+    if ((jobs[found] < 0)); then
+      jobs[found]=0
+      IFS= read -r agents[found] 2>/dev/null < "$SESSIONS_DIR/$name/agent" || true
+    fi
+    case "$window" in
+      shell|git) ;;
+      agent) [[ "${agents[found]}" == shell ]] || continue ;;
+      *) continue ;;
+    esac
+    command="${command#-}"
+    case "$command" in
+      ''|bash|zsh|sh|fish|dash|ksh) ;;
+      *) jobs[found]=1 ;;
+    esac
+  done <<<"$PANES"
+
+  # jobs stays -1 for a group whose own session is not listed, which leaves
+  # only grouped clients.
+  for ((i = 0; i < ${#groups[@]}; i++)); do
+    seen[i]="" transcript[i]=""
+    name="${groups[i]}"
+    ((jobs[i] == 0 && attaching[i] == 0)) || continue
+    [[ -f "$SESSIONS_DIR/$name/dir" && ! -e "$SESSIONS_DIR/$name/closed" ]] || continue
+    seen[i]="$SESSIONS_DIR/$name/seen"
+    files+=("${seen[i]}")
+    if [[ "${agents[i]}" == claude ]]; then
+      pin="" dir=""
+      IFS= read -r pin 2>/dev/null < "$SESSIONS_DIR/$name/conversation" || true
+      IFS= read -r dir 2>/dev/null < "$SESSIONS_DIR/$name/dir" || true
+      [[ -z "$pin" ]] || transcript[i]="$(project_dir "$dir")/$pin.jsonl"
+      [[ -z "${transcript[i]}" ]] || files+=("${transcript[i]}")
+    fi
+  done
+  ((${#files[@]} > 0)) || return 0
+
+  while read -r activity key; do
+    [[ -n "$key" ]] || continue
+    for ((i = 0; i < ${#groups[@]}; i++)); do
+      if [[ "$key" == "${seen[i]}" || "$key" == "${transcript[i]}" ]] && ((activity > activities[i])); then
+        activities[i]="$activity"
+      fi
+    done
+  done <<<"$(file_mtimes "${files[@]}")"
+
+  for ((i = 0; i < ${#groups[@]}; i++)); do
+    [[ -n "${seen[i]}" ]] || continue
+    activity=$(( (now - activities[i]) / 86400 ))
+    ((activity < IDLE_DAYS)) || printf '%s %s\n' "${groups[i]}" "$activity"
+  done
+}
+
+# Closes one idle session as restore expires a stopped one, unless another
+# sweep closed it first. A lost race to kill it never fails the caller.
+idle_close() {
+  local name="$1" days="$2"
+  [[ -f "$SESSIONS_DIR/$name/dir" && ! -e "$SESSIONS_DIR/$name/closed" ]] || return 1
+  record_set "$name" closed expired 2>/dev/null || return 1
+  log_event expired "$name" "$days"
+  announce_session "$name" --no-create --no-buttons \
+    --text "closed $name after $days idle days. /open $name picks the conversation up again."
+  kill_session_group "$name" 2>/dev/null || true
+}
+
+# Closes every idle session in PANES into IDLE_CLOSED, in the listing's order.
+IDLE_CLOSED=()
+idle_sweep() {
+  local name days
+  IDLE_CLOSED=()
+  while read -r name days; do
+    [[ -n "$name" ]] || continue
+    if idle_close "$name" "$days"; then IDLE_CLOSED+=("$name"); fi
+  done <<<"$(idle_sessions)"
+}
+
+# The line naming what idle_sweep closed, or nothing when it closed nothing.
+idle_closed_line() {
+  local count=${#IDLE_CLOSED[@]} list
+  ((count > 0)) || return 0
+  if ((count == 1)); then
+    printf 'ags: closed 1 session idle %s+ days: %s. ags open %s resumes it.\n' \
+      "$IDLE_DAYS" "${IDLE_CLOSED[0]}" "${IDLE_CLOSED[0]}"
+  else
+    list="$(printf '%s, ' "${IDLE_CLOSED[@]}")"
+    printf 'ags: closed %s sessions idle %s+ days: %s. ags open NAME resumes.\n' \
+      "$count" "$IDLE_DAYS" "${list%, }"
+  fi
+}
+
+# The automatic sweeps run at most once a day by the real clock, and claim the
+# day before closing anything, so shells starting together rarely both sweep.
+idle_sweep_due() {
+  local stamp="$STATE_DIR/idle-sweep" when
+  ((IDLE_DAYS > 0)) && [[ -d "$SESSIONS_DIR" ]] || return 1
+  if [[ -e "$stamp" ]]; then
+    when="$(file_mtime "$stamp" || echo 0)"
+    (($(date +%s) - when >= 86400)) || return 1
+  fi
+  touch "$stamp" 2>/dev/null
+}
+
+close_idle() {
+  if ((IDLE_DAYS == 0)); then
+    printf 'ags: idle close is off.\n'
+    return 0
+  fi
+  if [[ -d "$SESSIONS_DIR" ]]; then
+    list_panes_watched || { printf 'ags: tmux did not answer, nothing closed.\n' >&2; exit 1; }
+    idle_sweep
+  fi
+  if ((${#IDLE_CLOSED[@]} > 0)); then
+    idle_closed_line
+  else
+    printf 'ags: no session idle %s+ days.\n' "$IDLE_DAYS"
+  fi
+}
+
 # restore --hint: one line when a recorded session is not running and no hint
 # in this boot has named it, and for 10 seconds after, so every tab a reboot
 # reopens together shows it. Reads no transcript and writes no record.
@@ -1575,6 +1748,10 @@ restore_hint() {
   fi
 
   list_panes_watched || return 0
+  if idle_sweep_due; then
+    idle_sweep
+    idle_closed_line
+  fi
   while IFS='|' read -r name _; do
     [[ -z "$name" ]] || names+="$name"$'\n'
   done <<<"$PANES"
@@ -1739,6 +1916,19 @@ cmd_restore() {
     trap "rm -rf $(printf '%q' "$lock")" EXIT
   fi
 
+  # Running sessions idle long enough are closed before anything starts. A
+  # server that does not answer skips this, and restore goes on.
+  if ((IDLE_DAYS > 0)) && list_panes_watched; then
+    if [[ "$dry" == true ]]; then
+      while read -r each idle; do
+        [[ -z "$each" ]] || printf 'would close %s (idle %s days)\n' "$each" "$idle"
+      done <<<"$(idle_sessions)"
+    else
+      idle_sweep
+      idle_closed_line
+    fi
+  fi
+
   days="${AGENT_SESSION_EXPIRE_DAYS:-14}"
   reference="$(host_last_activity)"
   while IFS= read -r each; do
@@ -1899,11 +2089,17 @@ cmd_pin() {
   set_pin "$session" "$id" hook "$dir"
 }
 
+# Where announcements reach Telegram, an attach or detach also runs the day's
+# idle sweep, after the touch, so the session that fired is never idle. Each
+# close is announced there, so the sweep itself prints nothing.
 cmd_seen() {
   local name="${1:-}"
   [[ -n "$name" ]] || return 0
-  record_open "$name" || return 0
-  record_seen "$name"
+  if record_open "$name"; then record_seen "$name"; fi
+  bridge_ready && ! home_locked || return 0
+  idle_sweep_due || return 0
+  list_panes_watched || return 0
+  idle_sweep
 }
 
 cmd_remote() {
