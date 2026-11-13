@@ -9,8 +9,11 @@ Usage: agent-session.sh <command> [args]
 Persistent tmux sessions for coding agents, local or over SSH.
 
 Shared commands (the same verbs as Telegram):
-  ls [--all] [--json]     List sessions, then stopped records. --all adds
-                          closed and expired ones, --json prints one array
+  ls [--all] [--json] [--strict]
+                          List sessions, then stopped records. --all adds
+                          closed and expired ones, --json prints one array.
+                          --strict exits 2 when the records or tmux cannot
+                          be read, rather than listing what it could
   open <name> [agent]      Attach, starting the session if it is not running
   close <name> [--forget]  Stop a session and mark its record closed, so a
                           later open resumes its conversation. --forget
@@ -1502,7 +1505,8 @@ cmd_open() {
 # Read the agent window even when the user is viewing shell or git.
 # The foreground program is observable. An agent's internal task state is not.
 cmd_ls() {
-  local all=false json=false sessions="" sid name windows attached group detail window running
+  local all=false json=false strict=false sessions="" sid name windows attached group detail window running
+  local panes_ok=false idle_ages_out="" days
   local directory program path attachment state agent recorded idle first=true now each row title
   local r_name r_state r_running r_attachment r_windows r_directory r_agent r_recorded r_extra r_rdir r_title rdir
   local US=$'\x1f'
@@ -1512,21 +1516,55 @@ cmd_ls() {
     case "$1" in
       --all) all=true ;;
       --json) json=true ;;
+      --strict) strict=true ;;
       *) printf 'Unexpected argument: %s\n\n' "$1" >&2; usage >&2; return 1 ;;
     esac
     shift
   done
 
+  # --strict is for a reader that acts on what is missing, so every case that
+  # would otherwise list less than there is exits 2 before printing. A host
+  # with no records yet has no sessions directory, and lists as empty.
+  if [[ "$strict" == true ]]; then
+    if [[ ! -d "$STATE_DIR" || ! -r "$STATE_DIR" || ! -x "$STATE_DIR" ]]; then
+      printf 'Cannot read the state directory %s.\n' "$STATE_DIR" >&2
+      return 2
+    fi
+    if [[ -e "$SESSIONS_DIR" ]] && [[ ! -d "$SESSIONS_DIR" || ! -r "$SESSIONS_DIR" || ! -x "$SESSIONS_DIR" ]]; then
+      printf 'Cannot read the records in %s.\n' "$SESSIONS_DIR" >&2
+      return 2
+    fi
+  fi
   if ! sessions="$(tmux list-sessions -F $'#{session_id}\t#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_group}' 2>&1)"; then
-    case "$sessions" in
-      *"no server running"*|*"No such file or directory"*|*"error connecting"*) sessions="" ;;
-      *) printf '%s\n' "$sessions" >&2; return 1 ;;
-    esac
+    if [[ "$strict" == true ]]; then
+      tmux_no_server "$sessions" || { printf '%s\n' "$sessions" >&2; return 2; }
+      sessions=""
+    else
+      case "$sessions" in
+        *"no server running"*|*"No such file or directory"*|*"error connecting"*) sessions="" ;;
+        *) printf '%s\n' "$sessions" >&2; return 1 ;;
+      esac
+    fi
   fi
   if [[ -d "$SESSIONS_DIR" && ! -r "$SESSIONS_DIR" ]]; then
     printf 'Warning: cannot read the records in %s.\n' "$SESSIONS_DIR" >&2
   fi
   now="$(date +%s)"
+
+  # Idle days for the running rows, from the same reads the idle close makes.
+  # With no records nothing running is recorded, so there is nothing to read.
+  # A pane listing that fails leaves every running row null.
+  if [[ "$json" == true && -n "$sessions" && -d "$SESSIONS_DIR" ]]; then
+    if [[ "$strict" == true ]]; then
+      list_panes_watched 10 && panes_ok=true || {
+        printf 'tmux did not list its panes.\n' >&2
+        return 2
+      }
+    elif list_panes_watched; then
+      panes_ok=true
+    fi
+    [[ "$panes_ok" == false ]] || idle_ages_out="$(idle_ages)"
+  fi
 
   # Each row: name, state, running, attachment, windows, directory, agent,
   # recorded, attached count or idle days, record dir and title. The title is
@@ -1535,7 +1573,6 @@ cmd_ls() {
   # empty field would shift the rest.
   if [[ -n "$sessions" ]]; then
     while IFS=$'\t' read -r sid name windows attached group; do
-      running_names+=("$name")
       running="" directory=""
       detail="$(tmux list-windows -t "$sid" -F $'#{window_name}\t#{pane_current_command}\t#{pane_current_path}' 2>/dev/null)" || continue
       while IFS=$'\t' read -r window program path; do
@@ -1548,6 +1585,9 @@ cmd_ls() {
         detail="$(tmux display-message -p -t "$sid" $'#{pane_current_command}\t#{pane_current_path}' 2>/dev/null)" || continue
         IFS=$'\t' read -r running directory <<< "$detail"
       fi
+      # Only once both reads succeed, so a session that dies mid-listing
+      # lists from its record as stopped rather than vanishing.
+      running_names+=("$name")
       case "$running" in
         bash|zsh|sh|fish|dash|ksh) running="shell ($running)" ;;
       esac
@@ -1573,13 +1613,13 @@ cmd_ls() {
     for each in ${running_names[@]+"${running_names[@]}"}; do
       [[ "$each" != "$name" ]] || continue 2
     done
-    idle="$(idle_days "$(last_activity "$name")" "$now")"
     if record_closed "$name"; then
       [[ "$all" == true ]] || continue
       state="$(record_get "$name" closed)"
       [[ "$state" == expired ]] || state=closed
-      running="$state"
+      running="$state" idle=null
     else
+      idle="$(idle_days "$(last_activity "$name")" "$now")"
       state=stopped running="stopped ${idle}d"
     fi
     rdir="$(record_get "$name" dir)"
@@ -1601,7 +1641,11 @@ cmd_ls() {
       fi
       if [[ "$r_state" == running ]]; then
         if [[ "$r_extra" -gt 0 ]]; then printf '"attached":true,'; else printf '"attached":false,'; fi
-        printf '"windows":%s,"idle_days":null,' "$r_windows"
+        days=null
+        while read -r name idle; do
+          [[ "$name" != "$r_name" ]] || { days="$idle"; break; }
+        done <<< "$idle_ages_out"
+        printf '"windows":%s,"idle_days":%s,' "$r_windows" "$days"
       else
         printf '"attached":null,"windows":null,"idle_days":%s,' "$r_extra"
       fi
@@ -1846,7 +1890,7 @@ cmd_close() {
   else
     text="closed $name at a terminal. /open $name picks the conversation up again."
   fi
-  announce_session "$name" --no-create --no-buttons --text "$text"
+  announce_session "$name" --no-create --no-buttons --control --text "$text"
 
   [[ "$running" == false ]] || kill_session_group "$name"
 }
@@ -1891,29 +1935,48 @@ file_mtimes() {
 # Every pane on the server, one line each, as name|group|attached|group
 # attached|activity|window|command. | keeps an empty field in place, which a
 # tab would not, being whitespace to read. A wedged server must not hang a
-# shell's first prompt, so the listing gets a second, and returns 1 when it is
-# cut short. The watchdog writes to /dev/null, because killing it leaves its
+# shell's first prompt, so the listing gets a second unless the caller names
+# another limit, and returns 1 when it is cut short. It returns 2 when
+# list-panes fails for any reason but there being no server, which lists as
+# empty. The watchdog writes to /dev/null, because killing it leaves its
 # sleep running, and a sleep holding stdout would hold a caller's capture.
 PANES=""
 list_panes_watched() {
-  local tmp lister watchdog status=0
+  local limit="${1:-1}" tmp lister watchdog status=0 failure=""
   PANES=""
   command -v tmux >/dev/null 2>&1 || return 0
   tmp="$STATE_DIR/.panes.$$"
   tmux list-panes -a -F '#{session_name}|#{session_group}|#{session_attached}|#{session_group_attached}|#{session_activity}|#{window_name}|#{pane_current_command}' \
-    > "$tmp" 2>/dev/null &
+    > "$tmp" 2> "$tmp.err" &
   lister=$!
-  ( sleep 1; kill "$lister" 2>/dev/null ) >/dev/null 2>&1 &
+  ( sleep "$limit"; kill "$lister" 2>/dev/null ) >/dev/null 2>&1 &
   watchdog=$!
   wait "$lister" 2>/dev/null || status=$?
   kill "$watchdog" 2>/dev/null || true
   wait "$watchdog" 2>/dev/null || true
   if ((status > 128)); then
-    rm -f "$tmp"
+    rm -f "$tmp" "$tmp.err"
     return 1
   fi
+  if ((status != 0)); then
+    failure="$(cat "$tmp.err" 2>/dev/null || true)"
+    rm -f "$tmp" "$tmp.err"
+    tmux_no_server "$failure" || return 2
+    return 0
+  fi
   IFS= read -r -d '' PANES < "$tmp" || true
-  rm -f "$tmp"
+  rm -f "$tmp" "$tmp.err"
+}
+
+# Whether tmux's error says no server is running. A bare "error connecting" is
+# not enough, since tmux prints it for any failed connect, permission denied
+# included, while the server is up.
+tmux_no_server() {
+  case "$1" in
+    *"no server running"*) return 0 ;;
+    *"error connecting"*"(No such file or directory)"*) return 0 ;;
+  esac
+  return 1
 }
 
 # Removes every boot's hint entries but this one's.
@@ -1927,8 +1990,8 @@ prune_hint_boots() {
 
 IDLE_DAYS="${AGENT_SESSION_IDLE_DAYS:-21}"
 
-# The running sessions in PANES idle IDLE_DAYS or more, as "name days" lines in
-# the listing's order. A session's activity is the newest of its pinned
+# Every running session in PANES that idleness can close, as "name days" lines
+# in the listing's order. A session's activity is the newest of its pinned
 # transcript's time, its seen file's time and its session group's tmux
 # activity, which typing and attaching move and output does not. A session is
 # kept when a client is attached anywhere in its group, when it has no open
@@ -1936,7 +1999,7 @@ IDLE_DAYS="${AGENT_SESSION_IDLE_DAYS:-21}"
 # than a shell in its shell or git window, or in its agent window when its
 # agent is the shell. Bash 3.2 has no associative arrays, hence the lists,
 # indexed by group, which is a session's own name unless it is a grouped client.
-idle_sessions() {
+idle_ages() {
   local now name group attached group_attached activity window command key i found pin dir
   local -a groups=() activities=() attaching=() agents=() jobs=() seen=() transcript=() files=()
   now="${AGENT_SESSION_NOW:-$(date +%s)}"
@@ -2003,8 +2066,18 @@ idle_sessions() {
   for ((i = 0; i < ${#groups[@]}; i++)); do
     [[ -n "${seen[i]}" ]] || continue
     activity=$(( (now - activities[i]) / 86400 ))
-    ((activity < IDLE_DAYS)) || printf '%s %s\n' "${groups[i]}" "$activity"
+    ((activity > 0)) || activity=0
+    printf '%s %s\n' "${groups[i]}" "$activity"
   done
+}
+
+# The sessions idle_ages finds idle IDLE_DAYS or more.
+idle_sessions() {
+  local name days
+  while read -r name days; do
+    [[ -n "$name" ]] || continue
+    ((days < IDLE_DAYS)) || printf '%s %s\n' "$name" "$days"
+  done <<<"$(idle_ages)"
 }
 
 # Closes one idle session as restore expires a stopped one, unless another
@@ -2014,7 +2087,7 @@ idle_close() {
   [[ -f "$SESSIONS_DIR/$name/dir" && ! -e "$SESSIONS_DIR/$name/closed" ]] || return 1
   record_set "$name" closed expired 2>/dev/null || return 1
   log_event expired "$name" "$days"
-  announce_session "$name" --no-create --no-buttons \
+  announce_session "$name" --no-create --no-buttons --control \
     --text "closed $name after $days idle days. /open $name picks the conversation up again."
   kill_session_group "$name" 2>/dev/null || true
 }

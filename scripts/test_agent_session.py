@@ -1601,6 +1601,66 @@ class IdleCloseTests(unittest.TestCase):
         self.assertTrue(box.running('second'))
         self.assertEqual(self.close_idle().stdout, IDLE_ONE.format('second'))
 
+    def test_ls_json_reports_idle_days_for_an_idle_running_session(self):
+        box = self.box
+        self.shell('idle')
+        box.make_record('stopped', box.repo, agent='shell')
+
+        def days(now=None):
+            extra = {'AGENT_SESSION_NOW': now} if now else {}
+            rows = json.loads(box.out('ls', '--json', **extra))
+            return {row['name']: row['idle_days'] for row in rows}
+        self.assertEqual(days()['idle'], 0)
+        self.assertEqual(days(str(int(time.time()) + 4 * DAY + 60))['idle'], 4)
+        self.assertEqual(days(self.ahead)['idle'], 22)
+        self.assertTrue(box.running('idle'))
+        self.assertEqual(json.loads(box.out('ls', '--json', '--strict'))[0]['idle_days'], 0)
+
+    def test_ls_json_running_idle_days_is_null_when_attached_or_busy(self):
+        box = self.box
+        for name in ('att', 'via', 'job'):
+            self.shell(name)
+        self.attach('att')
+        box.tmux('new-session', '-d', '-t', 'via', '-s', 'via-m')
+        self.attach('via-m')
+        self.run_in('job:shell', 'sleep 300')
+        box.tmux('new-session', '-d', '-s', 'norec', '-n', 'agent')
+        rows = json.loads(box.out('ls', '--json', AGENT_SESSION_NOW=self.ahead))
+        self.assertEqual({row['name']: row['idle_days'] for row in rows},
+                         {'att': None, 'via': None, 'job': None, 'norec': None})
+
+    def test_ls_json_closed_rows_report_null_idle_days(self):
+        box = self.box
+        old = time.time() - 9 * DAY
+        box.make_record('shut', box.repo, seen=old, closed='close')
+        box.make_record('aged', box.repo, seen=old, closed='expired')
+        box.make_record('rest', box.repo, seen=old)
+        rows = {row['name']: row for row in json.loads(box.out('ls', '--all', '--json'))}
+        self.assertEqual({name: (row['state'], row['idle_days']) for name, row in rows.items()},
+                         {'shut': ('closed', None), 'aged': ('expired', None), 'rest': ('stopped', 9)})
+
+    def test_close_notices_pass_control(self):
+        box = Sandbox(self, bridge=True)
+        self.box = box
+        box.make_record('kept', box.repo, agent='shell')
+        box.make_record('gone', box.repo, agent='shell')
+        self.shell('idle')
+        box.wait_for(lambda: box.announced.exists(), 'the open announcement')
+        box.cli('close', 'kept')
+        box.cli('close', 'gone', '--forget')
+        self.close_idle()
+
+        def closes():
+            return [line for line in box.announced.read_text().splitlines() if '--no-create' in line]
+        box.wait_for(lambda: len(closes()) == 3, 'the close announcements')
+        self.assertEqual(sorted(closes()), sorted([
+            'topic kept --no-create --no-buttons --control --text closed kept at a terminal. '
+            '/open kept picks the conversation up again.',
+            'topic gone --no-create --no-buttons --control --text closed gone at a terminal and forgot '
+            'its record. /open gone starts it again by name.',
+            'topic idle --no-create --no-buttons --control --text closed idle after 22 idle days. '
+            '/open idle picks the conversation up again.']))
+
     def test_seen_sweeps_where_a_bridge_announces(self):
         box = Sandbox(self, bridge=True)
         box.cli('open', 'idle', 'shell', '--detached')
@@ -1617,7 +1677,7 @@ class IdleCloseTests(unittest.TestCase):
         self.assertFalse(box.running('busy'))
         box.wait_for(lambda: sum('--no-create' in line for line in announced()[before:]) >= 2, 'the close announcements')
         closes = announced()[before:]
-        self.assertIn('topic idle --no-create --no-buttons --text closed idle after 22 idle days. '
+        self.assertIn('topic idle --no-create --no-buttons --control --text closed idle after 22 idle days. '
                       '/open idle picks the conversation up again.', closes)
 
 
@@ -1643,6 +1703,92 @@ class IdleCloseGuardTests(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout), (1, ''))
         self.assertEqual(result.stderr, 'ags: tmux did not answer, nothing closed.\n')
         self.assertIsNone(self.box.field('vault', 'closed'))
+
+
+# A tmux that answers ls from the environment: LS_SESSIONS is list-sessions'
+# output, or its error is LS_SESSIONS_ERR. LS_DIES fails the per-session reads,
+# as a session ending mid-listing does, and LS_PANES wedges or fails list-panes.
+FAKE_LS_TMUX = '''case "$1" in
+  list-sessions)
+    [[ -n "${LS_SESSIONS:-}" ]] || { echo "${LS_SESSIONS_ERR:-no server running on /tmp/fake}" >&2; exit 1; }
+    printf '%s\\n' "$LS_SESSIONS" ;;
+  list-windows) [[ -z "${LS_DIES:-}" ]] || exit 1; printf 'agent\\tbash\\t%s\\n' "$PWD" ;;
+  display-message) [[ -z "${LS_DIES:-}" ]] || exit 1; printf 'bash\\t%s\\n' "$PWD" ;;
+  list-panes)
+    case "${LS_PANES:-}" in
+      wedge) exec sleep 30 ;;
+      fail) echo "server exited unexpectedly" >&2; exit 1 ;;
+      gone) echo "no server running on /tmp/fake" >&2; exit 1 ;;
+    esac
+    printf 'vault||0|0|%s|agent|bash\\n' "$(date +%s)" ;;
+esac
+'''
+VAULT_RUNNING = '$1\tvault\t3\t0\t'
+PERMISSION = 'error connecting to /tmp/fake (Permission denied)'
+
+
+class StrictListingTests(unittest.TestCase):
+    def setUp(self):
+        self.box = Sandbox(self, real=False)
+        write_exec(self.box.bin / 'tmux', FAKE_LS_TMUX)
+        self.box.make_record('vault', self.box.repo, agent='shell')
+
+    def ls(self, *args, **extra):
+        return self.box.cli('ls', '--all', '--json', *args, check=False, **extra)
+
+    def unreadable_records(self):
+        if os.geteuid() == 0:
+            self.skipTest('root reads any directory')
+        sessions = self.box.state / 'sessions'
+        sessions.chmod(0)
+        self.addCleanup(sessions.chmod, 0o700)
+
+    def test_ls_strict_exits_2_on_missing_or_unreadable_records_or_pane_timeout(self):
+        box = self.box
+        cases = {
+            'no state directory': dict(AGENT_SESSION_STATE=str(box.root / 'nostate')),
+            'list-panes fails': dict(LS_SESSIONS=VAULT_RUNNING, LS_PANES='fail'),
+            'a refused connect': dict(LS_SESSIONS_ERR=PERMISSION),
+        }
+        for what, extra in cases.items():
+            result = self.ls('--strict', **extra)
+            self.assertEqual((result.returncode, result.stdout), (2, ''), what)
+        began = time.monotonic()
+        result = self.ls('--strict', LS_SESSIONS=VAULT_RUNNING, LS_PANES='wedge')
+        self.assertEqual((result.returncode, result.stdout), (2, ''))
+        # The strict watchdog waits ten seconds, where the plain one waits one.
+        self.assertGreater(time.monotonic() - began, 9)
+        for extra in ({}, dict(LS_SESSIONS=VAULT_RUNNING, LS_PANES='gone')):
+            rows = json.loads(self.ls('--strict', **extra).stdout)
+            self.assertEqual([row['name'] for row in rows], ['vault'], extra)
+        self.unreadable_records()
+        result = self.ls('--strict')
+        self.assertEqual((result.returncode, result.stdout), (2, ''))
+
+    def test_ls_strict_lists_empty_when_no_sessions_dir_exists_yet(self):
+        shutil.rmtree(self.box.state / 'sessions')
+        result = self.ls('--strict')
+        self.assertEqual((result.returncode, result.stdout), (0, '[]\n'))
+
+    def test_ls_without_strict_still_exits_0_on_missing_records(self):
+        box = self.box
+        result = self.ls(LS_SESSIONS=VAULT_RUNNING, LS_PANES='fail')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual([(row['state'], row['idle_days']) for row in json.loads(result.stdout)],
+                         [('running', None)])
+        self.assertEqual(self.ls(LS_SESSIONS_ERR=PERMISSION).returncode, 0)
+        self.assertEqual(self.ls(AGENT_SESSION_STATE=str(box.root / 'nostate')).stdout, '[]\n')
+        self.unreadable_records()
+        result = self.ls()
+        self.assertEqual((result.returncode, result.stdout), (0, '[]\n'))
+        self.assertIn('cannot read the records', result.stderr)
+
+    def test_ls_json_lists_a_session_that_dies_mid_listing_as_stopped(self):
+        rows = json.loads(self.ls('--strict', LS_SESSIONS=VAULT_RUNNING, LS_DIES='1').stdout)
+        self.assertEqual([(row['name'], row['state']) for row in rows], [('vault', 'stopped')])
+        rows = json.loads(self.ls('--strict', LS_SESSIONS=VAULT_RUNNING).stdout)
+        self.assertEqual([(row['name'], row['state'], row['idle_days']) for row in rows],
+                         [('vault', 'running', 0)])
 
 
 class ExtensionTests(unittest.TestCase):

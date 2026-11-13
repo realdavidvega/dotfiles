@@ -1,4 +1,7 @@
+import contextlib
+import dataclasses
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -228,7 +231,7 @@ class BridgeTests(unittest.TestCase):
         self.bridge.publish_guide(pin=True)
         sent = next(c.kwargs for c in self.tg.call.call_args_list if c.args[0] == 'sendMessage')
         self.assertEqual(sent['text'], self.bridge.render_guide())
-        self.assertLess(len(b.GUIDE.format(sessions='vault skp skills dotfiles black-system api')), 4096)
+        self.assertLess(len(b.GUIDE.format(sessions='vault skp skills dotfiles black-system api not pp-*', sleep_days=30)), 4096)
 
     def test_deleted_guide_id_is_cleared(self):
         self.state.guide_message_id = 20
@@ -513,7 +516,8 @@ class BridgeTests(unittest.TestCase):
         popen.assert_not_called()
 
     def test_topic_no_buttons_posts_without_a_keyboard(self):
-        args = b.argparse.Namespace(session='vault', text='closed vault', no_create=True, no_buttons=False)
+        args = b.argparse.Namespace(session='vault', text='closed vault', no_create=True, no_buttons=False,
+                                    control=False)
         with patch.object(b, 'build', return_value=self.bridge), patch.object(b.Config, 'from_env'):
             self.assertEqual(b.cmd_topic(args), 0)
             self.assertEqual(self.tg.send.call_args.kwargs['buttons'], ['peek', 'esc'])
@@ -662,6 +666,143 @@ class BridgeTests(unittest.TestCase):
                          [('5h', 100.0, 300), ('7d', 31.0, 400)])
 
 
+    def test_notify_for_a_refused_session_creates_no_topic(self):
+        self.bridge.config.session_patterns = ['*', '!pp-*']
+        args = b.argparse.Namespace(session='pp-rec', text='done', event='stop', dry_run=False)
+        with patch.object(b, 'build', return_value=self.bridge), patch.object(b.Config, 'from_env'):
+            self.assertEqual(b.cmd_notify(args), 0)
+        self.tg.call.assert_not_called()
+        self.tg.send.assert_not_called()
+        self.assertNotIn('pp-rec', b.State.load(self.path).topics)
+
+    def test_topic_control_posts_in_control_only_when_the_session_had_a_topic(self):
+        self.bridge.config.session_patterns = ['*']
+        self.state.topics[b.CONTROL] = 40
+        self.state.save()
+        args = b.argparse.Namespace(session='api', text='closed api at a terminal.', no_create=True,
+                                    no_buttons=True, control=True)
+        with patch.object(b, 'build', return_value=self.bridge), patch.object(b.Config, 'from_env'):
+            self.assertEqual(b.cmd_topic(args), 0)
+            self.tg.send.assert_not_called()
+            args.session, args.text = 'vault', 'closed vault at a terminal.'
+            self.assertEqual(b.cmd_topic(args), 0)
+        self.tg.call.assert_not_called()
+        self.assertEqual(self.tg.send.call_count, 1)
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 40)
+        self.assertEqual(self.tg.send.call_args.args[1], 'closed vault at a terminal.')
+        self.assertNotIn('api', b.State.load(self.path).topics)
+
+
+    def asleep(self, session='vault'):
+        self.state.reload()
+        self.state.set_icon(session, 'asleep')
+        self.state.save()
+
+    def test_icon_entry_for_another_thread_is_unknown(self):
+        self.asleep()
+        self.assertEqual(b.State.load(self.path).icon_state('vault'), 'asleep')
+        self.bridge.handle_command('bind', 'vault', None, 9)
+        saved = b.State.load(self.path)
+        self.assertEqual(saved.topics['vault'], 9)
+        self.assertIsNone(saved.icon_state('vault'))
+        self.asleep()
+        self.tg.send.side_effect = [b.TelegramError('400 message thread not found'), {}]
+        self.bridge.post('vault', 'hello')
+        saved = b.State.load(self.path)
+        self.assertEqual(saved.topic_icons['vault'], {'thread': 7, 'state': 'awake'})
+        other = b.State.load(self.path)
+        other.topics['vault'] = 11
+        other.save()
+        self.assertIsNone(b.State.load(self.path).icon_state('vault'))
+
+    def test_forget_topic_drops_and_creation_records_the_icon_entry(self):
+        self.assertEqual(self.bridge.topic_for('api'), 7)
+        self.assertEqual(b.State.load(self.path).topic_icons['api'], {'thread': 7, 'state': 'awake'})
+        self.state.forget_topic('api')
+        self.assertNotIn('api', b.State.load(self.path).topic_icons)
+        self.tg.call.return_value = {'ok': True, 'result': {'message_thread_id': 8}}
+        self.assertEqual(self.bridge.topic_for(b.CONTROL), 8)
+        self.assertNotIn(b.CONTROL, b.State.load(self.path).topic_icons)
+
+    def test_stale_writer_cannot_restore_a_removed_icon_entry(self):
+        self.asleep()
+        stale = b.State.load(self.path)
+        self.state.forget_topic('vault')
+        stale.offset = 10
+        stale.topics['api'] = 12
+        stale.save()
+        saved = b.State.load(self.path)
+        self.assertEqual(saved.topics, {'api': 12})
+        self.assertEqual(saved.topic_icons, {})
+
+
+    def test_tmux_alive_classifies_has_session_results(self):
+        tmux = b.Tmux()
+        cases = [
+            (Mock(return_value=Mock(returncode=0, stdout='', stderr='')), True),
+            (Mock(return_value=Mock(returncode=1, stdout='', stderr="can't find session: =api\n")), False),
+            (Mock(return_value=Mock(returncode=1, stdout='', stderr='no server running on /tmp/tmux-1/default\n')), False),
+            (Mock(return_value=Mock(returncode=1, stdout='',
+                                    stderr='error connecting to /tmp/tmux-1/default (No such file or directory)\n')), False),
+            (Mock(return_value=Mock(returncode=1, stdout='',
+                                    stderr='error connecting to /tmp/tmux-1/default (Permission denied)\n')), None),
+            (Mock(side_effect=b.subprocess.TimeoutExpired('tmux', 10)), None),
+            (Mock(side_effect=FileNotFoundError('tmux')), None),
+            (Mock(return_value=Mock(returncode=1, stdout='', stderr='server exited unexpectedly\n')), None),
+        ]
+        for run, expected in cases:
+            with patch.object(b.subprocess, 'run', run):
+                self.assertIs(tmux.alive('api'), expected)
+        self.assertEqual(run.call_args.args[0], ['tmux', 'has-session', '-t', '=api'])
+
+    def test_telegram_errors_keep_their_body(self):
+        body = {'ok': False, 'error_code': 429, 'description': 'Too Many Requests: retry after 7',
+                'parameters': {'retry_after': 7}}
+        error = b.HTTPError if hasattr(b, 'HTTPError') else b.urllib.error.HTTPError
+        reply = error('u', 429, 'Too Many Requests', {}, None)
+        reply.read = Mock(return_value=json.dumps(body).encode())
+        with patch.object(b.urllib.request, 'urlopen', side_effect=reply):
+            with self.assertRaises(b.TelegramError) as caught:
+                b.Telegram('t').call('editForumTopic')
+        self.assertEqual(caught.exception.retry_after, 7)
+        self.assertIsNone(b.TelegramError('editForumTopic: 400 Bad Request: TOPIC_NOT_MODIFIED').retry_after)
+        self.assertTrue(b.TelegramError('editForumTopic: 400 Bad Request: TOPIC_NOT_MODIFIED').not_modified)
+        self.assertTrue(b.TelegramError('deleteForumTopic: 400 Bad Request: TOPIC_ID_INVALID').topic_gone)
+        self.assertTrue(b.TelegramError('sendMessage: 400 Bad Request: message thread not found').topic_gone)
+        self.assertFalse(b.TelegramError('deleteForumTopic: 400 Bad Request: not enough rights').topic_gone)
+
+
+    ENV = {'AGENT_BRIDGE_BOT_TOKEN': 't', 'AGENT_BRIDGE_CHAT_ID': '-1', 'AGENT_BRIDGE_ALLOWED_USER_IDS': '2',
+           'AGENT_BRIDGE_SESSIONS': '* !pp-*'}
+
+    def test_exclusion_beats_a_matching_pattern(self):
+        with patch.dict(b.os.environ, self.ENV, clear=True):
+            config = b.Config.from_env()
+        self.assertTrue(config.session_allowed('vault'))
+        self.assertFalse(config.session_allowed('pp-rec'))
+        self.assertFalse(config.session_allowed('@control'))
+        self.assertEqual((config.sleep_days, config.tidy_enabled), (3, True))
+        self.bridge.config = config
+        self.assertIn('Sessions I may touch: * not pp-*', self.bridge.render_guide())
+        self.assertIn('idle 3 days', self.bridge.render_guide())
+        for off in ('off', '0', 'false', 'No'):
+            with patch.dict(b.os.environ, dict(self.ENV, AGENT_BRIDGE_TIDY=off), clear=True):
+                self.assertFalse(b.Config.from_env().tidy_enabled)
+
+    def test_only_exclusions_is_a_config_error(self):
+        with patch.dict(b.os.environ, dict(self.ENV, AGENT_BRIDGE_SESSIONS='!pp-* !tmp'), clear=True):
+            with self.assertRaises(b.ConfigError):
+                b.Config.from_env()
+
+    def test_bad_sleep_days_is_a_config_error(self):
+        for bad in ('0', '-2', 'three', '1.5'):
+            with patch.dict(b.os.environ, dict(self.ENV, AGENT_BRIDGE_SLEEP_DAYS=bad), clear=True):
+                with self.assertRaises(b.ConfigError):
+                    b.Config.from_env()
+        with patch.dict(b.os.environ, dict(self.ENV, AGENT_BRIDGE_SLEEP_DAYS='5'), clear=True):
+            self.assertEqual(b.Config.from_env().sleep_days, 5)
+
+
 class ControlTests(unittest.TestCase):
     callback = BridgeTests.callback
     helper = BridgeTests.helper
@@ -767,19 +908,45 @@ class ControlTests(unittest.TestCase):
         cb['message'].update(message_id=50, message_thread_id=40)
         self.bridge.handle_callback(cb)
 
-    def test_home_labels_stopped_and_closed_records_with_their_agent(self):
+    def test_control_home_drops_closed_keeps_topics_and_marks_sleep(self):
         self.bridge.config.session_patterns = ['*']
+        self.state.topics['old'] = 8
+        self.state.save()
         self.bridge.sessions = Mock(return_value=[
-            {'name': 'api', 'state': 'stopped', 'agent': 'codex', 'recorded': True, 'idle_days': 3},
-            {'name': 'old', 'state': 'closed', 'agent': 'claude', 'recorded': True, 'idle_days': 20},
-            {'name': 'gone', 'state': 'expired', 'agent': 'opencode', 'recorded': True, 'idle_days': 15},
+            {'name': 'api', 'state': 'stopped', 'agent': 'codex', 'recorded': True, 'idle_days': 0},
+            {'name': 'old', 'state': 'closed', 'agent': 'claude', 'recorded': True, 'idle_days': None},
+            {'name': 'gone', 'state': 'expired', 'agent': 'opencode', 'recorded': True, 'idle_days': None},
             {'name': 'live', 'state': 'running', 'agent': None, 'recorded': False, 'idle_days': None},
+            {'name': 'busy', 'state': 'running', 'agent': 'claude', 'recorded': True, 'idle_days': 2},
+            {'name': 'idle', 'state': 'running', 'agent': 'claude', 'recorded': True, 'idle_days': 3},
         ])
         self.bridge.control_panel()
-        labels = self.labels()
-        for label in ('⚪ api · Stopped, codex, 3d idle', '⚪ old · Closed, claude',
-                      '⚪ gone · Expired, opencode', '🟢 live · claude', '⚪ vault · Stopped'):
-            self.assertIn(label, labels)
+        sessions = [label for label in self.labels() if ' · ' in label]
+        self.assertEqual(sessions, ['💤 api · Stopped, codex, 0d idle', '🟢 busy · claude', '💤 idle · claude',
+                                    '🟢 live · claude', '⚪ vault · Stopped'])
+
+    def test_close_replies_in_control_and_queues_a_tidy(self):
+        run = BridgeTests.launcher(self)
+        self.bridge.handle_command('close', 'vault', 'vault', 6)
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 40)
+        text = self.tg.send.call_args.args[1]
+        self.assertTrue(text.startswith('closed vault.'))
+        self.assertNotIn('This topic stays', text)
+        self.assertNotIn('comes back to it', text)
+        self.assertIsNotNone(self.bridge.tidy_due)
+        self.bridge.tidy_due = None
+        self.bridge.handle_command('close', 'forget', 'vault', 6)
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 40)
+        self.assertIsNotNone(self.bridge.tidy_due)
+        self.bridge.tidy_due = None
+        self.tmux.exists.return_value = True
+        self.click('session', 'vault')
+        self.click('manage', 'vault')
+        self.click('kill', 'vault')
+        self.assertIsNone(self.bridge.tidy_due)
+        self.click('kill-confirm', 'vault')
+        self.assertIn(['/fake/agent-session', 'close', 'vault'], [c.args[0] for c in run.call_args_list])
+        self.assertIsNotNone(self.bridge.tidy_due)
 
     def test_recorded_stopped_page_resumes_with_its_agent(self):
         self.record()
@@ -809,6 +976,17 @@ class ControlTests(unittest.TestCase):
         self.press('change-run', 'vault', 'claude')
         self.bridge.close_session.assert_called_once_with('vault')
         self.bridge.launch.assert_called_once_with('vault', 'claude', mode='fresh')
+
+    def test_change_run_queues_no_tidy_between_its_close_and_its_launch(self):
+        self.record(state='closed')
+        due = []
+        self.bridge.launch = Mock(side_effect=lambda *a, **k: due.append(self.bridge.tidy_due) or 'started')
+        self.bridge.close_session = Mock(return_value=None)
+        self.click('session', 'vault')
+        self.click('change-agent', 'vault')
+        self.press('change-run', 'vault', 'claude')
+        self.assertEqual(due, [None])
+        self.assertIsNone(self.bridge.tidy_due)
 
     def test_change_agent_launches_nothing_when_close_fails(self):
         self.record()
@@ -1362,6 +1540,847 @@ class VoiceTests(unittest.TestCase):
             self.assertEqual(b.Config.from_env().voice_root, self.root)
         with patch.dict(b.os.environ, dict(env, AGENT_BRIDGE_VOICE_ROOT=''), clear=True):
             self.assertIsNone(b.Config.from_env().voice_root)
+
+
+
+class TidyFixture(unittest.TestCase):
+    """A fake launcher listing, a fake Telegram and tmux answers per name."""
+
+    STICKERS = [{'emoji': '⭐', 'custom_emoji_id': 'star'}, {'emoji': '\U0001F319', 'custom_emoji_id': 'moon'},
+                {'emoji': '\U0001F4A4️', 'custom_emoji_id': 'zzz'}]
+
+    def setUp(self):
+        offline = patch.object(b, 'find_user_command', return_value=None)
+        offline.start()
+        self.addCleanup(offline.stop)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / 'state.json'
+        self.state = b.State.load(self.path)
+        self.state.topics['@control'] = 40
+        self.state.save()
+        self.calls = []
+        self.errors = {}
+        self.stickers = list(self.STICKERS)
+        self.tg = Mock()
+        self.tg.call.side_effect = self.telegram
+        self.tg.send.return_value = {'ok': True, 'result': {'message_id': 50}}
+        self.tmux = Mock()
+        self.tmux.exists.return_value = True
+        self.tmux.alive.return_value = False
+        self.config = b.Config('fake', -1, {2}, ['*', '!pp-*'], self.path)
+        self.bridge = b.Bridge(self.config, self.state, self.tg, self.tmux)
+        self.rows = []
+        self.ls = Mock(side_effect=lambda *a, **k: Mock(returncode=0, stdout=json.dumps(self.rows), stderr=''))
+        for active in (patch.object(b, 'find_launcher', return_value='/fake/agent-session'),
+                       patch.object(b.subprocess, 'run', self.ls)):
+            active.start()
+            self.addCleanup(active.stop)
+
+    def telegram(self, method, http_timeout=20, **params):
+        self.calls.append((method, params))
+        error = self.errors.get((method, params.get('message_thread_id')))
+        if error is not None:
+            raise error
+        if method == 'getForumTopicIconStickers':
+            return {'ok': True, 'result': self.stickers}
+        if method == 'createForumTopic':
+            return {'ok': True, 'result': {'message_thread_id': 99}}
+        if method == 'getChatMember':
+            return {'ok': True, 'result': {'status': 'administrator', 'can_delete_messages': True,
+                                           'can_manage_topics': False}}
+        return {'ok': True, 'result': True}
+
+    def topics(self, **threads):
+        for name, thread in threads.items():
+            self.state.topics[name.replace('_', '-')] = thread
+        self.state.save()
+
+    def row(self, name, state='running', idle=None):
+        self.rows.append({'name': name, 'state': state, 'recorded': True, 'idle_days': idle})
+
+    def awake(self, *names):
+        for name in names:
+            self.state.set_icon(name, 'awake')
+        self.state.save()
+
+    def made(self, method):
+        return [params for called, params in self.calls if called == method]
+
+    def deleted(self):
+        return [params['message_thread_id'] for params in self.made('deleteForumTopic')]
+
+    def edits(self):
+        return [(params['message_thread_id'], params['icon_custom_emoji_id']) for params in self.made('editForumTopic')]
+
+    def saved(self):
+        return b.State.load(self.path)
+
+    @staticmethod
+    def limited(seconds):
+        return b.TelegramError(f'call: 429 Too Many Requests: retry after {seconds}',
+                               {'ok': False, 'error_code': 429, 'parameters': {'retry_after': seconds}})
+
+    def cli(self, *argv):
+        out = io.StringIO()
+        with patch.object(b, 'build', return_value=self.bridge), \
+                patch.object(b.Config, 'from_env', return_value=self.config), \
+                contextlib.redirect_stdout(out):
+            code = b.main(['tidy', *argv])
+        lines = out.getvalue().strip().splitlines()
+        return code, json.loads(lines[-1]), lines[:-1]
+
+
+class TidyTests(TidyFixture):
+    def test_tidy_deletes_closed_expired_and_unlisted_topics(self):
+        self.topics(old=11, gone=12, lost=13, vault=14)
+        self.row('old', 'closed')
+        self.row('gone', 'expired')
+        self.row('vault', 'running')
+        self.awake('vault')
+        result = self.bridge.tidy()
+        self.assertEqual(result['deleted'], ['gone', 'lost', 'old'])
+        self.assertEqual(sorted(self.deleted()), [11, 12, 13])
+        self.assertEqual(self.saved().topics, {'@control': 40, 'vault': 14})
+        self.assertTrue(result['ok'])
+
+    def test_tidy_deletes_a_refused_name_even_while_it_runs(self):
+        self.topics(pp_rec=11)
+        self.row('pp-rec', 'running')
+        self.tmux.alive.return_value = True
+        result = self.bridge.tidy()
+        self.assertEqual(result['deleted'], ['pp-rec'])
+        self.assertEqual(self.deleted(), [11])
+        self.tmux.alive.assert_not_called()
+
+    def test_tidy_keeps_a_topic_whose_tmux_session_still_runs(self):
+        self.topics(old=11)
+        self.row('old', 'closed')
+        self.tmux.alive.return_value = True
+        result = self.bridge.tidy()
+        self.assertEqual((result['deleted'], self.deleted(), self.edits()), ([], [], []))
+        self.assertEqual(self.saved().topics['old'], 11)
+
+    def tmux_answers(self, answer):
+        """A real Tmux whose has-session gets `answer`, a result or an exception, beside the listing."""
+        listing = self.ls.side_effect
+
+        def run(command, *args, **kwargs):
+            if command[0] != 'tmux':
+                return listing(command, *args, **kwargs)
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+        self.ls.side_effect = run
+        self.bridge.tmux = b.Tmux()
+
+    def test_tidy_keeps_a_topic_when_tmux_errors_times_out_or_cannot_start(self):
+        for answer in (Mock(returncode=1, stdout='', stderr='server exited unexpectedly'),
+                       Mock(returncode=1, stdout='', stderr='error connecting to /tmp/x (Permission denied)'),
+                       b.subprocess.TimeoutExpired('tmux', 10), FileNotFoundError('tmux')):
+            self.calls.clear()
+            self.ls.side_effect = lambda *a, **k: Mock(returncode=0, stdout=json.dumps(self.rows), stderr='')
+            self.topics(old=11)
+            self.tmux_answers(answer)
+            result = self.bridge.tidy()
+            self.assertEqual((result['deleted'], self.deleted()), ([], []), answer)
+            self.assertEqual(self.saved().topics['old'], 11)
+
+    def test_tidy_deletes_when_tmux_reports_no_server(self):
+        self.topics(old=11)
+        self.tmux_answers(Mock(returncode=1, stdout='', stderr='no server running on /tmp/tmux-1/default'))
+        self.assertEqual(self.bridge.tidy()['deleted'], ['old'])
+        self.assertNotIn('old', self.saved().topics)
+
+    def test_tidy_keeps_a_running_grouped_client(self):
+        self.topics(vault=14, vault_m=15)
+        self.row('vault', 'running')
+        self.awake('vault', 'vault-m')
+        self.tmux.alive.side_effect = lambda name: name == 'vault-m'
+        result = self.bridge.tidy()
+        self.assertEqual((result['deleted'], self.calls), ([], []))
+        self.assertEqual(self.saved().topics['vault-m'], 15)
+
+    def test_tidy_skips_a_deletion_when_the_thread_id_changed(self):
+        self.topics(old=11)
+        answers = iter([False])
+
+        def alive(name):
+            # The plan sees the old thread, then a post recreates the topic before the deletion.
+            other = b.State.load(self.path)
+            other.topics['old'] = 21
+            other.save()
+            return next(answers)
+        self.tmux.alive.side_effect = alive
+        result = self.bridge.tidy()
+        self.assertEqual((result['deleted'], self.deleted()), ([], []))
+        self.assertEqual(self.saved().topics['old'], 21)
+
+    def test_tidy_never_touches_reserved_names(self):
+        self.topics(**{'@limits': 41, '@other': 42}, vault=14)
+        self.row('vault', 'running', idle=9)
+        result = self.bridge.tidy()
+        self.assertEqual(self.deleted(), [])
+        self.assertEqual(self.edits(), [(14, 'zzz')])
+        self.assertEqual(result['slept'], ['vault'])
+        self.tmux.alive.assert_not_called()
+        self.assertEqual({k: v for k, v in self.saved().topics.items() if k.startswith('@')},
+                         {'@control': 40, '@limits': 41, '@other': 42})
+
+    def test_tidy_does_nothing_without_session_topics(self):
+        self.topics(**{'@limits': 41})
+        result = self.bridge.tidy()
+        self.ls.assert_not_called()
+        self.assertEqual(self.calls, [])
+        self.assertTrue(result['ok'])
+        self.assertIsNone(result['error'])
+
+    def test_tidy_leaves_an_unknown_state_alone(self):
+        self.topics(vault=14)
+        self.row('vault', 'hibernating', idle=9)
+        result = self.bridge.tidy()
+        self.assertEqual(self.calls, [])
+        self.assertEqual((result['deleted'], result['slept'], result['woke']), ([], [], []))
+        self.assertEqual(self.saved().topics['vault'], 14)
+
+    def test_tidy_changes_nothing_when_the_listing_fails(self):
+        self.topics(old=11, vault=14)
+        failures = [
+            ('missing launcher', None, None),
+            ('timeout', '/fake/agent-session', Mock(side_effect=b.subprocess.TimeoutExpired('ls', 60))),
+            ('exit 2', '/fake/agent-session', Mock(return_value=Mock(returncode=2, stdout='', stderr='ls: state unreadable'))),
+            ('exit 1', '/fake/agent-session', Mock(return_value=Mock(returncode=1, stdout='[]', stderr=''))),
+            ('bad JSON', '/fake/agent-session', Mock(return_value=Mock(returncode=0, stdout='[{', stderr=''))),
+        ]
+        for label, launcher, run in failures:
+            with patch.object(b, 'find_launcher', return_value=launcher), \
+                    patch.object(b.subprocess, 'run', run or Mock()):
+                result = self.bridge.tidy()
+            self.assertFalse(result['ok'], label)
+            self.assertTrue(result['error'].startswith('listing: '), label)
+            self.assertEqual(self.calls, [], label)
+            self.tmux.alive.assert_not_called()
+            if run is not None:
+                self.assertEqual(run.call_args.args[0], ['/fake/agent-session', 'ls', '--all', '--json', '--strict'])
+                self.assertEqual(run.call_args.kwargs['timeout'], 60)
+        self.assertEqual(self.saved().topics, {'@control': 40, 'old': 11, 'vault': 14})
+
+    def test_tidy_over_the_cap_deletes_nothing_until_forced(self):
+        self.topics(a=11, b=12, c=13, d=14, e=15, pp_x=16, vault=17)
+        self.row('vault', 'running')
+        result = self.bridge.tidy()
+        doomed = ['a', 'b', 'c', 'd', 'e', 'pp-x']
+        self.assertEqual(result['over_cap'], doomed)
+        self.assertEqual(result['plan'], b.Bridge.tidy_plan_id(doomed))
+        self.assertTrue(result['plan'].startswith('6:'))
+        self.assertEqual((result['deleted'], self.deleted()), ([], []))
+        self.assertEqual(self.edits(), [(17, b.SESSION_ICON)])
+        self.assertEqual(result['woke'], ['vault'])
+        self.tg.send.assert_not_called()
+        forced = self.bridge.tidy(force=result['plan'])
+        self.assertEqual(forced['deleted'], doomed)
+        self.assertIsNone(forced['over_cap'])
+        self.assertEqual(self.saved().topics, {'@control': 40, 'vault': 17})
+        # A confirmed plan also works at or under the cap.
+        self.topics(f=18, g=19)
+        self.assertEqual(self.bridge.tidy(force=b.Bridge.tidy_plan_id(['f', 'g']))['deleted'], ['f', 'g'])
+
+    def test_tidy_force_refuses_a_different_list_of_the_same_length(self):
+        self.topics(a=11, b=12, c=13, d=14, e=15, f=16)
+        stale = b.Bridge.tidy_plan_id(['a', 'b', 'c', 'd', 'e', 'z'])
+        code, result, lines = self.cli('--force', stale)
+        self.assertEqual(code, 1)
+        self.assertEqual(result['plan'], b.Bridge.tidy_plan_id(['a', 'b', 'c', 'd', 'e', 'f']))
+        self.assertIn(result['plan'], result['error'])
+        self.assertIn(f"The plan is now {result['plan']}", lines[0])
+        self.assertEqual((result['deleted'], self.calls), ([], []))
+        self.assertEqual(len(self.saved().topics), 7)
+
+    def test_tidy_deletes_and_forgets_in_one_lock_hold(self):
+        self.topics(old=11)
+        held = []
+
+        def locked():
+            with open(str(self.path) + '.topics.lock', 'a') as handle:
+                try:
+                    b.fcntl.flock(handle, b.fcntl.LOCK_EX | b.fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return True
+                b.fcntl.flock(handle, b.fcntl.LOCK_UN)
+                return False
+
+        def alive(name):
+            held.append(('alive', locked()))
+            return False
+
+        def telegram(method, http_timeout=20, **params):
+            if method == 'deleteForumTopic':
+                held.append(('delete', locked(), http_timeout))
+            return self.telegram(method, http_timeout, **params)
+        self.tmux.alive.side_effect = alive
+        self.tg.call.side_effect = telegram
+        original = self.state.forget_topic
+        self.state.forget_topic = lambda name: (held.append(('forget', locked())), original(name))
+        self.assertEqual(self.bridge.tidy()['deleted'], ['old'])
+        # The plan asks tmux unlocked, then alive, delete and forget share one hold.
+        self.assertEqual(held, [('alive', False), ('alive', True), ('delete', True, 5), ('forget', True)])
+        self.assertNotIn('old', self.saved().topics)
+
+    def test_cli_tidy_skips_while_another_holds_the_lock(self):
+        self.topics(old=11)
+        with open(str(self.path) + '.tidy.lock', 'a') as handle:
+            b.fcntl.flock(handle, b.fcntl.LOCK_EX)
+            code, result, _ = self.cli()
+        self.assertEqual((code, result['error'], result['ok']), (0, 'busy', True))
+        self.ls.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    def test_tidy_cli_posts_its_removals_in_control(self):
+        self.topics(old=11, gone=12)
+        code, result, _ = self.cli()
+        self.assertEqual((code, result['deleted']), (0, ['gone', 'old']))
+        self.assertEqual(self.tg.send.call_args.args[1], 'Tidied 2 topics: gone, old. /open NAME brings one back.')
+        self.assertEqual(self.tg.send.call_args.kwargs['thread_id'], 40)
+
+    def test_tidy_cli_line_omits_open_when_every_name_was_refused(self):
+        self.topics(pp_rec=11)
+        self.cli()
+        self.assertEqual(self.tg.send.call_args.args[1], 'Tidied 1 topic: pp-rec.')
+
+    def test_tidy_stopped_mid_run_still_posts_its_removals(self):
+        self.topics(gone=12, old=11)
+        self.errors[('deleteForumTopic', 11)] = SystemExit(143)
+        with self.assertRaises(SystemExit):
+            self.bridge.tidy()
+        self.assertEqual(self.tg.send.call_args.args[1], 'Tidied 1 topic: gone. /open NAME brings one back.')
+        self.assertEqual(self.saved().topics, {'@control': 40, 'old': 11})
+
+    def test_tidy_cli_turns_sigterm_into_an_exit(self):
+        self.topics(old=11)
+        with patch.object(b.signal, 'signal') as installed:
+            self.cli()
+        self.assertEqual(installed.call_args.args[0], b.signal.SIGTERM)
+        with self.assertRaises(SystemExit) as stopped:
+            installed.call_args.args[1](b.signal.SIGTERM, None)
+        self.assertEqual(stopped.exception.code, 143)
+
+    def test_tidy_sleeps_stopped_and_idle_running_and_wakes_active(self):
+        self.topics(two=11, three=12, busy=13, off=14)
+        self.row('two', idle=2)
+        self.row('three', idle=3)
+        self.row('busy', idle=None)
+        self.row('off', 'stopped', idle=None)
+        result = self.bridge.tidy()
+        self.assertEqual(sorted(result['slept']), ['off', 'three'])
+        self.assertEqual(sorted(result['woke']), ['busy', 'two'])
+        self.assertEqual(sorted(self.edits()), [(11, b.SESSION_ICON), (12, 'zzz'), (13, b.SESSION_ICON), (14, 'zzz')])
+        saved = self.saved()
+        self.assertEqual({n: saved.icon_state(n) for n in ('two', 'three', 'busy', 'off')},
+                         {'two': 'awake', 'three': 'asleep', 'busy': 'awake', 'off': 'asleep'})
+        self.calls.clear()
+        self.bridge.config = dataclasses.replace(self.config, sleep_days=2)
+        self.assertEqual(self.bridge.tidy()['slept'], ['two'])
+        self.assertEqual(self.edits(), [(11, 'zzz')])
+
+    def test_tidy_edits_an_unknown_icon_once_and_then_only_on_change(self):
+        self.topics(vault=14)
+        self.row('vault', idle=0)
+        self.bridge.tidy()
+        self.assertEqual(self.calls, [('editForumTopic', {'chat_id': -1, 'message_thread_id': 14,
+                                                          'icon_custom_emoji_id': b.SESSION_ICON})])
+        self.calls.clear()
+        self.bridge.tidy()
+        self.assertEqual(self.calls, [])
+        self.rows[0]['idle_days'] = 4
+        self.bridge.tidy()
+        self.assertEqual([c[0] for c in self.calls], ['getForumTopicIconStickers', 'editForumTopic'])
+        self.assertEqual(self.edits(), [(14, 'zzz')])
+        self.calls.clear()
+        self.bridge.tidy()
+        self.assertEqual(self.calls, [])
+
+    def test_tidy_stops_calling_on_a_429_and_reports_retry_after(self):
+        self.topics(one=11, two=12)
+        self.row('one', idle=0)
+        self.row('two', idle=0)
+        self.errors[('editForumTopic', 11)] = self.limited(9)
+        result = self.bridge.tidy()
+        self.assertEqual((result['retry_after'], result['failed'], result['error']), (9, [], None))
+        self.assertEqual(self.edits(), [(11, b.SESSION_ICON)])
+        self.assertIsNone(self.saved().icon_state('one'))
+        self.calls.clear()
+        self.rows = []
+        self.errors = {('deleteForumTopic', 11): self.limited(4)}
+        result = self.bridge.tidy()
+        self.assertEqual((result['retry_after'], result['deleted'], result['failed']), (4, [], []))
+        self.assertEqual(self.deleted(), [11])
+        self.assertEqual(self.saved().topics['one'], 11)
+        self.tg.send.assert_not_called()
+        self.calls.clear()
+        self.errors = {('getForumTopicIconStickers', None): self.limited(7)}
+        self.rows = [{'name': 'one', 'state': 'stopped'}, {'name': 'two', 'state': 'stopped'}]
+        result = self.bridge.tidy()
+        self.assertEqual((result['retry_after'], result['error'], result['icon']), (7, None, None))
+        self.assertEqual([c[0] for c in self.calls], ['getForumTopicIconStickers'])
+
+    def test_tidy_counts_not_modified_as_done(self):
+        self.topics(vault=14)
+        self.row('vault', idle=0)
+        self.errors[('editForumTopic', 14)] = b.TelegramError('editForumTopic: 400 Bad Request: TOPIC_NOT_MODIFIED')
+        result = self.bridge.tidy()
+        self.assertEqual((result['woke'], result['failed']), (['vault'], []))
+        self.assertEqual(self.saved().icon_state('vault'), 'awake')
+
+    def test_tidy_prefers_sleep_icons_in_order_and_strips_fe0f(self):
+        self.topics(off=14)
+        self.row('off', 'stopped')
+        self.assertEqual(self.bridge.tidy()['icon'], '\U0001F4A4')
+        self.assertEqual(self.edits(), [(14, 'zzz')])
+        self.stickers = [s for s in self.STICKERS if s['custom_emoji_id'] != 'zzz'] + [
+            {'emoji': '\U0001F634', 'custom_emoji_id': 'sleepy'}]
+        self.state.topic_icons.clear()
+        self.state.save()
+        self.calls.clear()
+        self.assertEqual(self.bridge.tidy()['icon'], '\U0001F634')
+        self.assertEqual(self.edits(), [(14, 'sleepy')])
+
+    def test_tidy_removes_the_icon_when_no_sleep_icon_is_offered(self):
+        self.topics(off=14)
+        self.row('off', 'stopped')
+        self.stickers = [self.STICKERS[0]]
+        result = self.bridge.tidy()
+        self.assertEqual((result['icon'], result['slept']), ('none', ['off']))
+        self.assertEqual(self.edits(), [(14, '')])
+
+    def test_tidy_skips_icons_when_the_sticker_list_fails(self):
+        self.topics(off=14, vault=15)
+        self.row('off', 'stopped')
+        self.row('vault', idle=0)
+        self.errors[('getForumTopicIconStickers', None)] = b.TelegramError('getForumTopicIconStickers: 500 oops')
+        result = self.bridge.tidy()
+        self.assertIsNone(result['icon'])
+        self.assertTrue(result['error'].startswith('sticker: '))
+        self.assertEqual(self.edits(), [])
+        self.assertEqual(self.saved().topic_icons, {})
+
+    def test_tidy_forgets_a_gone_topic_only_if_the_thread_is_unchanged(self):
+        self.topics(vault=14, old=11)
+        self.row('vault', idle=0)
+        gone = b.TelegramError('editForumTopic: 400 Bad Request: TOPIC_ID_INVALID')
+        self.errors = {('editForumTopic', 14): gone,
+                       ('deleteForumTopic', 11): b.TelegramError('deleteForumTopic: 400 Bad Request: message thread not found')}
+        result = self.bridge.tidy()
+        self.assertEqual((result['deleted'], result['failed']), ([], []))
+        self.assertEqual(self.saved().topics, {'@control': 40})
+        # A topic recreated while the edit was in flight keeps its new mapping.
+        self.topics(vault=14)
+
+        def telegram(method, http_timeout=20, **params):
+            if method == 'editForumTopic':
+                other = b.State.load(self.path)
+                other.topics['vault'] = 24
+                other.save()
+                raise gone
+            return self.telegram(method, http_timeout, **params)
+        self.tg.call.side_effect = telegram
+        self.bridge.tidy()
+        self.assertEqual(self.saved().topics['vault'], 24)
+
+    def test_tidy_dry_run_writes_nothing_and_reports_rights_and_icon(self):
+        self.bridge.config = dataclasses.replace(self.config, chat_id=-1001234)
+        self.config = self.bridge.config
+        self.topics(old=11, off=14, vault=15)
+        self.row('off', 'stopped')
+        self.row('vault', idle=0)
+        before = self.path.read_text()
+        code, result, lines = self.cli('--dry-run')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.path.read_text(), before)
+        self.assertEqual([c[0] for c in self.calls], ['getForumTopicIconStickers', 'getChatMember'])
+        self.assertEqual(self.calls[1][1]['user_id'], 0)
+        self.tg.send.assert_not_called()
+        self.assertEqual(result['would_delete'], ['old'])
+        self.assertEqual(result['plan'], b.Bridge.tidy_plan_id(['old']))
+        self.assertEqual((result['would_sleep'], result['would_wake']), (['off'], ['vault']))
+        self.assertEqual(result['icon'], '\U0001F4A4')
+        self.assertEqual(result['rights'], {'can_delete_messages': True, 'can_manage_topics': False})
+        self.assertEqual(result['kept'], [{'name': 'off', 'thread': 14, 'link': 'https://t.me/c/1234/14'},
+                                          {'name': 'vault', 'thread': 15, 'link': 'https://t.me/c/1234/15'}])
+        report = '\n'.join(lines)
+        self.assertIn('mapped topics only', report)
+        self.assertIn(f"tidy --force {result['plan']}", report)
+        self.assertIn('can_delete_messages=True', report)
+
+
+class FakeChild:
+    """A child process that runs until finished, holding any descriptor it was handed."""
+
+    def __init__(self, args, pass_fds=()):
+        self.args = args
+        self.returncode = None
+        self.stdout = io.StringIO('')
+        self.fds = [b.os.dup(fd) for fd in pass_fds]
+        self.terminated = False
+        self.killed = False
+
+    def finish(self, line=''):
+        self.stdout = io.StringIO(line)
+        self.returncode = 0
+        for fd in self.fds:
+            b.os.close(fd)
+        self.fds = []
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.finish()
+
+    def kill(self):
+        self.killed = True
+        self.finish()
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+class ScheduleTests(TidyFixture):
+    def setUp(self):
+        super().setUp()
+        self.now = 1000.0
+        self.children = []
+        clock = patch.object(b.time, 'time', side_effect=lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+        popen = patch.object(b.subprocess, 'Popen', side_effect=self.spawn)
+        popen.start()
+        self.addCleanup(popen.stop)
+        self.addCleanup(lambda: [child.finish() for child in self.children if child.returncode is None])
+
+    def spawn(self, args, **kwargs):
+        child = FakeChild(args, kwargs.get('pass_fds', ()))
+        child.kwargs = kwargs
+        self.children.append(child)
+        return child
+
+    def spawned(self, kind):
+        return [c for c in self.children if (c.args[-1] == 'tidy') == (kind == 'tidy')]
+
+    def prune_helper(self):
+        helper = patch.object(b, 'find_user_command', return_value=['py', 'helper'])
+        helper.start()
+        self.addCleanup(helper.stop)
+
+    def at(self, now):
+        self.now = now
+        self.bridge.schedule(now)
+
+    def summary(self, **fields):
+        result = {'ok': True, 'deleted': [], 'slept': [], 'woke': [], 'failed': [], 'over_cap': None,
+                  'plan': None, 'icon': None, 'retry_after': None, 'error': None}
+        result.update(fields)
+        return json.dumps(result)
+
+    def control_posts(self):
+        return [c.args[1] for c in self.tg.send.call_args_list if c.kwargs.get('thread_id') == 40]
+
+    def serve(self, hook):
+        """Run serve() until the hook asks to stop. The hook gets the poll number and the stop handler."""
+        handlers = {}
+        polls = []
+
+        def telegram(method, http_timeout=20, **params):
+            if method != 'getUpdates':
+                return self.telegram(method, http_timeout, **params)
+            polls.append(params['timeout'])
+            hook(len(polls), handlers[b.signal.SIGTERM])
+            return {'ok': True, 'result': []}
+        self.tg.call.side_effect = telegram
+        for name in ('publish_commands', 'publish_limits_panel', 'control_panel', 'drain_updates'):
+            setattr(self.bridge, name, Mock())
+        self.bridge.limits = Mock()
+        with patch.object(b.signal, 'signal', side_effect=lambda sig, handler: handlers.__setitem__(sig, handler)):
+            return self.bridge.serve(), polls
+
+    def test_serve_runs_one_tidy_at_a_time_and_never_beside_a_prune(self):
+        self.prune_helper()
+        self.bridge.next_prune, self.bridge.tidy_due = 1100.0, 1050.0
+        self.at(1050)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.bridge.request_tidy()
+        self.at(1056)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.at(1100)
+        self.assertEqual(self.spawned('prune'), [])
+        self.assertTrue(self.bridge.prune_due)
+        self.assertEqual(self.bridge.next_prune, 1100 + b.PRUNE_INTERVAL)
+        self.spawned('tidy')[0].finish(self.summary())
+        self.at(1101)
+        self.assertEqual(len(self.spawned('prune')), 1)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.assertFalse(self.bridge.prune_due)
+        self.spawned('prune')[0].finish('done')
+        self.at(1102)
+        self.assertEqual(len(self.spawned('tidy')), 2)
+        self.assertEqual(self.bridge.next_prune, 1100 + b.PRUNE_INTERVAL)
+        self.assertEqual(self.spawned('tidy')[1].args[-1], 'tidy')
+
+    def test_prune_defers_to_a_cli_tidy(self):
+        self.prune_helper()
+        self.bridge.next_prune = 1000.0
+        with open(str(self.path) + '.tidy.lock', 'a') as handle:
+            b.fcntl.flock(handle, b.fcntl.LOCK_EX)
+            self.at(1000)
+            self.assertEqual(self.children, [])
+            self.assertTrue(self.bridge.prune_due)
+            self.assertEqual(self.bridge.next_prune, 1000 + b.PRUNE_INTERVAL)
+        self.at(1030)
+        self.assertEqual(len(self.spawned('prune')), 1)
+        self.assertFalse(self.bridge.prune_due)
+
+    def test_cli_tidy_is_busy_while_a_prune_runs(self):
+        self.prune_helper()
+        self.topics(old=11)
+        self.bridge.next_prune = 1000.0
+        self.at(1000)
+        prune = self.spawned('prune')[0]
+        code, result, _ = self.cli()
+        self.assertEqual((code, result['error']), (0, 'busy'))
+        self.assertEqual(self.deleted(), [])
+        prune.finish()
+        self.assertEqual(self.cli()[1]['deleted'], ['old'])
+
+    def test_serve_terminates_a_prune_after_30_minutes(self):
+        self.prune_helper()
+        self.bridge.next_prune = 1000.0
+        self.at(1000)
+        prune = self.spawned('prune')[0]
+        self.at(1000 + b.PRUNE_LIMIT - 1)
+        self.assertFalse(prune.terminated)
+        self.at(1000 + b.PRUNE_LIMIT)
+        self.assertTrue(prune.terminated)
+        self.assertIsNone(self.bridge._prune)
+
+    def test_serve_poll_timeout_follows_the_tidy(self):
+        self.bridge.tidy_due = 1100.0
+        self.assertEqual(self.bridge.poll_timeout(), b.POLL_TIMEOUT)
+        self.bridge.tidy_due = 1007.0
+        self.assertEqual(self.bridge.poll_timeout(), 7)
+        self.bridge.tidy_due = 1000.2
+        self.assertEqual(self.bridge.poll_timeout(), 1)
+        self.bridge.tidy_retry_until = 1050.0
+        self.assertEqual(self.bridge.poll_timeout(), b.POLL_TIMEOUT)
+        self.bridge.tidy_retry_until = 0.0
+        self.bridge._prune = FakeChild(['py', 'helper'])
+        self.assertEqual(self.bridge.poll_timeout(), b.POLL_TIMEOUT)
+        self.bridge._prune = None
+        self.at(1001)
+        self.assertEqual(self.bridge.poll_timeout(), b.BUSY_POLL)
+
+    def test_serve_starts_the_first_tidy_at_two_minutes_and_a_request_after_five_seconds(self):
+        seen = {}
+
+        def hook(poll, stop):
+            seen.update(prune=self.bridge.next_prune, tidy=self.bridge.tidy_due)
+            stop(b.signal.SIGTERM, None)
+        self.serve(hook)
+        self.assertEqual(seen, {'prune': 1060.0, 'tidy': 1120.0})
+        self.at(1100)
+        self.assertEqual(self.spawned('tidy'), [])
+        self.bridge.request_tidy()
+        self.assertEqual(self.bridge.tidy_due, 1105.0)
+        self.at(1104)
+        self.assertEqual(self.spawned('tidy'), [])
+        self.at(1105)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.assertEqual(self.bridge.tidy_due, 1105 + b.TIDY_INTERVAL)
+
+    def test_serve_terminates_a_tidy_after_10_minutes(self):
+        self.bridge.tidy_due = 1000.0
+        self.at(1000)
+        tidy = self.spawned('tidy')[0]
+        self.bridge.tidy_due = 9000.0
+        self.at(1000 + b.TIDY_LIMIT - 1)
+        self.assertFalse(tidy.terminated)
+        self.at(1000 + b.TIDY_LIMIT)
+        self.assertTrue(tidy.terminated)
+        self.assertIsNone(self.bridge._tidy)
+        self.assertEqual(self.bridge.tidy_failures, 1)
+
+    def test_reexec_and_sigterm_stop_a_running_tidy(self):
+        script = Path(self.tmp.name) / 'agent-bridge.py'
+        script.write_text('')
+
+        def reexec_hook(poll, stop):
+            self.bridge.tidy_due = self.now
+            self.bridge.schedule(self.now)
+            b.os.utime(script, (1, 1))
+        with patch.object(b, '__file__', str(script)), \
+                patch.object(b.os, 'execv', side_effect=RuntimeError('re-exec')) as execv:
+            with self.assertRaises(RuntimeError):
+                self.serve(reexec_hook)
+        execv.assert_called_once()
+        self.assertTrue(self.spawned('tidy')[0].terminated)
+        self.assertIsNone(self.bridge._tidy)
+
+        def stop_hook(poll, stop):
+            self.bridge.tidy_due = self.now
+            self.bridge.schedule(self.now)
+            stop(b.signal.SIGTERM, None)
+        self.assertEqual(self.serve(stop_hook)[0], 0)
+        self.assertTrue(self.spawned('tidy')[1].terminated)
+
+    def test_reexec_and_sigterm_stop_a_running_prune(self):
+        self.prune_helper()
+
+        def stop_hook(poll, stop):
+            self.bridge.next_prune = self.now
+            self.bridge.schedule(self.now)
+            stop(b.signal.SIGTERM, None)
+        self.assertEqual(self.serve(stop_hook)[0], 0)
+        prune = self.spawned('prune')[0]
+        self.assertTrue(prune.terminated)
+        self.assertEqual(prune.fds, [])
+        self.assertIsNone(self.bridge._prune)
+
+    def test_the_tidy_child_logs_to_the_daemon_stderr(self):
+        self.bridge.tidy_due = 1000.0
+        self.at(1000)
+        self.assertNotIn('stderr', self.spawned('tidy')[0].kwargs)
+
+    def test_tidy_is_off_with_the_switch_but_runs_by_hand(self):
+        self.bridge.config = dataclasses.replace(self.config, tidy_enabled=False)
+        self.config = self.bridge.config
+        self.serve(lambda poll, stop: stop(b.signal.SIGTERM, None))
+        self.assertIsNone(self.bridge.tidy_due)
+        self.bridge.request_tidy()
+        self.assertIsNone(self.bridge.tidy_due)
+        self.at(1000 + 10 * b.TIDY_INTERVAL)
+        self.assertEqual(self.spawned('tidy'), [])
+        self.topics(old=11)
+        code, result, _ = self.cli()
+        self.assertEqual((code, result['deleted']), (0, ['old']))
+
+    def finish_tidy(self, now, **fields):
+        self.bridge.tidy_due = now
+        self.at(now)
+        self.spawned('tidy')[-1].finish(self.summary(**fields))
+        self.at(now + 1)
+
+    def test_reaped_tidy_posts_new_over_cap_lists_and_only_the_third_failure(self):
+        over = ['a', 'b', 'c', 'd', 'e', 'f']
+        self.finish_tidy(1000, over_cap=over, plan='6:abcdef12')
+        posts = self.control_posts()
+        self.assertEqual(len(posts), 1)
+        self.assertIn('a, b, c, d, e, f', posts[0])
+        self.assertIn('agent-bridge.py tidy --force 6:abcdef12', posts[0])
+        self.finish_tidy(1100, over_cap=over, plan='6:abcdef12')
+        self.assertEqual(len(self.control_posts()), 1)
+        self.finish_tidy(1200, over_cap=over[:5] + ['g'], plan='6:99999999')
+        self.assertEqual(len(self.control_posts()), 2)
+        self.finish_tidy(1300, deleted=['x'])
+        self.assertEqual(len(self.control_posts()), 2)
+        failure = {'name': 'x', 'action': 'delete', 'kind': 'rights', 'error': 'not enough rights to delete'}
+        self.finish_tidy(1400, failed=[failure])
+        self.finish_tidy(1500, failed=[failure])
+        self.assertEqual(len(self.control_posts()), 2)
+        self.finish_tidy(1600, failed=[failure])
+        self.assertIn('not enough rights to delete', self.control_posts()[-1])
+        self.finish_tidy(1700, failed=[failure])
+        self.assertEqual(len(self.control_posts()), 3)
+        self.bridge.tidy_due = 1800
+        self.at(1800)
+        self.spawned('tidy')[-1].finish('no summary here')
+        self.at(1801)
+        self.assertEqual(len(self.control_posts()), 4)
+        self.assertIn('without a summary', self.control_posts()[-1])
+        self.finish_tidy(1900, ok=False, error='listing: the launcher exited 2')
+        self.assertEqual(len(self.control_posts()), 5)
+        self.finish_tidy(2000)
+        self.assertEqual((self.bridge.tidy_failures, self.bridge.tidy_kinds_posted), (0, None))
+        self.finish_tidy(2100, failed=[failure])
+        self.assertEqual(len(self.control_posts()), 5)
+
+    def test_busy_run_neither_counts_nor_resets_failures(self):
+        failure = {'name': 'x', 'action': 'asleep', 'kind': 'edit', 'error': 'bad request'}
+        self.finish_tidy(1000, failed=[failure])
+        self.finish_tidy(1100, failed=[failure])
+        self.finish_tidy(1200, error='busy')
+        self.assertEqual((self.bridge.tidy_failures, self.control_posts()), (2, []))
+        self.finish_tidy(1300, failed=[failure])
+        self.assertEqual(len(self.control_posts()), 1)
+
+    def test_a_run_cut_short_by_a_429_neither_counts_nor_resets_failures(self):
+        failure = {'name': 'x', 'action': 'delete', 'kind': 'rights', 'error': 'not enough rights to delete'}
+        self.finish_tidy(1000, failed=[failure])
+        self.finish_tidy(1100, failed=[failure])
+        self.finish_tidy(1200, retry_after=5)
+        self.assertEqual((self.bridge.tidy_failures, self.control_posts()), (2, []))
+        self.finish_tidy(1300, failed=[failure])
+        self.assertIn('not enough rights to delete', self.control_posts()[-1])
+
+    def test_serve_waits_out_retry_after(self):
+        self.finish_tidy(1000, retry_after=30)
+        self.assertEqual((self.bridge.tidy_failures, self.control_posts()), (0, []))
+        self.bridge.request_tidy()
+        self.at(1010)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.at(1030)
+        self.assertEqual(len(self.spawned('tidy')), 1)
+        self.at(1031)
+        self.assertEqual(len(self.spawned('tidy')), 2)
+
+    def test_typing_into_a_sleeping_session_queues_a_tidy(self):
+        self.topics(vault=14)
+        self.tmux.type_text.return_value = None
+        self.bridge.act('vault', 'say', 'hi')
+        self.assertEqual(self.bridge.tidy_due, 1005.0)
+        self.bridge.tidy_due = None
+        self.awake('vault')
+        self.bridge.act('vault', 'say', 'hi')
+        self.assertIsNone(self.bridge.tidy_due)
+        self.state.set_icon('vault', 'asleep')
+        self.state.save()
+        self.bridge.act('vault', 'say', 'hi')
+        self.assertEqual(self.bridge.tidy_due, 1005.0)
+
+    def test_a_successful_launch_queues_a_tidy(self):
+        self.topics(vault=14)
+        self.ls.side_effect = lambda *a, **k: Mock(returncode=1, stdout='', stderr='locked')
+        self.bridge.launch('vault', None)
+        self.assertIsNone(self.bridge.tidy_due)
+        self.ls.side_effect = lambda *a, **k: Mock(returncode=0, stdout='started vault\n', stderr='')
+        self.assertEqual(self.bridge.launch('vault', None), 'started vault')
+        self.assertEqual(self.bridge.tidy_due, 1005.0)
+
+
+class NotifyScriptTests(unittest.TestCase):
+    def notify(self, session, *flags):
+        """Run agent-notify.sh inside a fake tmux session, and say whether it reached the bridge."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'bin').mkdir()
+            tmux = root / 'bin' / 'tmux'
+            tmux.write_text('#!/bin/sh\ncase "$1" in display-message) echo %s ;; esac\nexit 0\n' % session)
+            tmux.chmod(0o755)
+            marker = root / 'reached'
+            bridge = root / 'bridge.py'
+            bridge.write_text(f'open({str(marker)!r}, "w").close()\n')
+            env_file = root / 'bridge.env'
+            env_file.write_text('')
+            env = {k: v for k, v in b.os.environ.items() if k not in ('TELEGRAM_BOT_ID', 'TELEGRAM_CHAT_ID')}
+            env.update(PATH=f"{root / 'bin'}:{env.get('PATH', '/usr/bin:/bin')}", TMUX='/tmp/fake,1,0',
+                       TMUX_PANE='%1', HOME=tmp, DOTFILES_PATH=tmp, AGENT_BRIDGE_ENV=str(env_file),
+                       AGENT_BRIDGE_BIN=str(bridge))
+            b.subprocess.run(['bash', str(Path(__file__).with_name('agent-notify.sh')), *flags, '{}'],
+                             env=env, cwd=tmp, stdin=b.subprocess.DEVNULL, capture_output=True, timeout=30)
+            return marker.exists()
+
+    def test_notify_script_ignores_pp_sessions(self):
+        self.assertFalse(self.notify('pp-rec'))
+        self.assertFalse(self.notify('pp-rec', '--force'))
+        self.assertTrue(self.notify('vault'))
 
 
 if __name__ == '__main__':
