@@ -26,9 +26,12 @@ Terminal commands:
   remote [args...]         Run the same command on the hub over SSH
   adopt [name [agent]]     Write records for running sessions started before
                           records existed
-  restore [--dry-run]      Start every open record that is not running, each
+  restore [--dry-run | --hint]
+                          Start every open record that is not running, each
                           in its own conversation. A record idle for
-                          AGENT_SESSION_EXPIRE_DAYS is expired instead
+                          AGENT_SESSION_EXPIRE_DAYS is expired instead.
+                          --hint prints one line when a stopped session is
+                          new to this boot, for a shell's first prompt
   history [name]          List each name's conversations, newest first
   unlock                  Unlock the hub's encrypted home, then run restore
                           (hub only). Runs restore when already unlocked too
@@ -146,6 +149,8 @@ scrubbed_var() {
   case "$name" in
     AGENT_BRIDGE_BIN|AGENT_BRIDGE_ENV) return 1 ;;
     AGENT_BRIDGE_*|PANEPORT_*) return 0 ;;
+    # A tab id names the terminal one client is in, and a pane outlives it.
+    ITERM_SESSION_ID|TERM_SESSION_ID) return 0 ;;
     GIT_EDITOR) [[ "$value" == true ]]; return ;;
   esac
   for each in $CLAUDE_CHILD_VARS; do
@@ -155,8 +160,8 @@ scrubbed_var() {
 }
 
 # The command that starts the server also seeds tmux's global environment, which
-# every later pane inherits. The callers' quiet flags, paneport's settings and
-# the variables above describe this one call, so they stay out of it, or a
+# every later pane inherits. The callers' quiet flags, paneport's settings,
+# the terminal's tab and the variables above describe this one call, so they stay out of it, or a
 # session opened later at a terminal would go unannounced.
 tmux_with_conf() {
   local name
@@ -300,10 +305,16 @@ has_conversation() {
       ;;
     codex)
       # The first line of each rollout is its session_meta, carrying the cwd.
+      # awk rather than head -q, which BSD head lacks, reading each file
+      # itself so one it cannot open is skipped rather than ending the scan.
+      # grep -c reads all its input, so nothing upstream dies of SIGPIPE.
+      local count
       codex_home="${CODEX_HOME:-$HOME/.codex}"
       [[ -d "$codex_home/sessions" ]] || return 1
-      find "$codex_home/sessions" -name 'rollout-*.jsonl' -print0 2>/dev/null \
-        | xargs -0 -r head -qn1 2>/dev/null | grep -qF "\"cwd\":\"$dir\""
+      count="$(find "$codex_home/sessions" -name 'rollout-*.jsonl' -print0 2>/dev/null \
+        | xargs -0 -r awk 'BEGIN { for (i = 1; i < ARGC; i++) { if ((getline line < ARGV[i]) > 0) print line; close(ARGV[i]) } }' 2>/dev/null \
+        | grep -cF "\"cwd\":\"$dir\"" || true)"
+      ((${count:-0} > 0))
       ;;
     *) return 1 ;;
   esac
@@ -492,16 +503,37 @@ idle_days() {
   printf '%s\n' "$days"
 }
 
-# The boot time as epoch seconds, or 0 where it is not known (the Mac, until
-# 0007 defines it). A lock or a sessions file is then never judged by its age.
+# The system's name, when a caller has already read it. The hint reads it once
+# for both boot functions, since every process counts at a shell's first prompt.
+UNAME_S=""
+
+# The boot time as epoch seconds, or 0 where it is not known. A lock or a
+# sessions file is then never judged by its age. Darwin never falls through to
+# /proc, so a failing sysctl reads as unknown on any host.
 boot_epoch() {
   local boot=""
   if [[ -n "${AGENT_SESSION_BOOT_EPOCH:-}" ]]; then
     boot="$AGENT_SESSION_BOOT_EPOCH"
+  elif [[ "${UNAME_S:-$(uname -s)}" == Darwin ]]; then
+    boot="$({ sysctl -n kern.boottime 2>/dev/null || true; } | sed -n 's/^{ sec = \([0-9]*\),.*/\1/p')"
   elif [[ -r /proc/stat ]]; then
     boot="$(awk '/^btime /{ print $2 }' /proc/stat)"
   fi
   printf '%s\n' "${boot:-0}"
+}
+
+# This boot's identity, or nothing where it is not known. Separate from the
+# epoch, which moves when the clock is stepped.
+boot_id() {
+  local id=""
+  if [[ -n "${AGENT_SESSION_BOOT_ID:-}" ]]; then
+    id="$AGENT_SESSION_BOOT_ID"
+  elif [[ "${UNAME_S:-$(uname -s)}" == Darwin ]]; then
+    id="$({ sysctl -n kern.bootsessionuuid 2>/dev/null || true; })"
+  elif [[ -r /proc/sys/kernel/random/boot_id ]]; then
+    id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+  fi
+  [[ -z "$id" ]] || printf '%s\n' "$id"
 }
 
 # The newer of seen's time and, for a Claude record, the time of the last
@@ -760,14 +792,38 @@ newest_unpinned_transcript() {
   return 1
 }
 
-# Inside tmux, attaching is an error. Switching is what was meant.
+# Inside tmux, attaching is an error. Switching is what was meant. A message
+# shows in the status line for 10 seconds once the screen has changed.
 enter_session() {
-  local name="$1"
+  local name="$1" message="${2:-}"
+  local -a show=()
 
+  [[ -z "$message" ]] || show=(\; display-message -d 10000 "$message")
   if [[ -n "${TMUX:-}" ]]; then
-    tmux switch-client -t "=$name"
+    tmux switch-client -t "=$name" ${show[@]+"${show[@]}"}
   else
-    tmux attach-session -t "=$name"
+    tmux attach-session -t "=$name" ${show[@]+"${show[@]}"}
+  fi
+}
+
+# Why /clear would go unfollowed, or nothing. The file is the one Claude reads
+# its hooks from, and its JSON always stores the pin command's quote escaped.
+# A missing file means Claude has not run yet. The short form fits the status
+# line, which cuts a message at the client's width.
+PIN_WARNING=""
+PIN_WARNING_SHORT="ags: pin hook missing, /clear will not be followed. Run 51-agent-sessions.sh."
+pin_hook_check() {
+  local settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" shown
+  local fix="Run agent session setup again (restoration_scripts/51-agent-sessions.sh, with DOTFILES_PATH set to the checkout)."
+
+  PIN_WARNING=""
+  [[ -f "$settings" ]] || return 0
+  shown="$settings"
+  [[ "$shown" != "$HOME"/* ]] || shown="~${shown#"$HOME"}"
+  if ! grep -qF 'agent-session.sh\" pin' "$settings" 2>/dev/null; then
+    PIN_WARNING="ags: the pin hook is missing from $shown, so /clear will not be followed. $fix"
+  elif [[ ! -x "$HOME/.dotfiles/scripts/agent-session.sh" ]]; then
+    PIN_WARNING="ags: ~/.dotfiles/scripts/agent-session.sh is missing, so the pin hook does nothing and /clear will not be followed. $fix"
   fi
 }
 
@@ -1030,7 +1086,9 @@ cmd_open() {
   ensure_config
   clean_server_environment
 
-  if ! pane="$(tmux_with_conf new-session -d -s "$name" -c "$dir" -n agent -P -F '#{pane_id}' 2>&1)"; then
+  # oh-my-zsh's update prompt would read the first key send-keys types.
+  if ! pane="$(tmux_with_conf new-session -d -s "$name" -c "$dir" -n agent -e DISABLE_AUTO_UPDATE=true \
+       -P -F '#{pane_id}' 2>&1)"; then
     # Another start won the race. Nothing was written, so attach to it.
     if tmux has-session -t "=$name" 2>/dev/null; then
       if [[ "$detached" == true ]]; then
@@ -1071,12 +1129,21 @@ cmd_open() {
   [[ -z "$phrase" ]] || tail=", $phrase$note"
   announce_session "$name" --text "🟢 $name $how, $agent in $dir$tail."
 
-  # The first line is what Telegram shows, so it stands on its own.
+  # The first line is what Telegram shows, so it stands on its own. restore
+  # warns once for all its starts.
   printf 'Started %s with %s in %s %s%s.\n' "$name" "$agent" "$dir" "$label" "$tail"
+  local short=""
+  if [[ "$agent" == claude && "${AGENT_SESSION_VIA:-}" != restore ]]; then
+    pin_hook_check
+    if [[ -n "$PIN_WARNING" ]]; then
+      printf '%s\n' "$PIN_WARNING" >&2
+      short="$PIN_WARNING_SHORT"
+    fi
+  fi
   if [[ "$detached" == true ]]; then
     printf 'Use ags open %s to attach.\n' "$name"
   else
-    enter_session "$name"
+    enter_session "$name" "$short"
   fi
 }
 
@@ -1425,29 +1492,242 @@ cmd_adopt() {
 
 # Starts every open record with no running session, one at a time, each in a
 # process of its own so a refused record cannot stop the loop.
+# Whether a restore holds this lock: its pid is running and the lock is no
+# older than the boot. A lock left by a power cut mid-restore fails both.
+restore_lock_live() {
+  local lock="$1" pid since
+  pid="$(cat "$lock/pid" 2>/dev/null || true)"
+  since="$(file_mtime "$lock" || echo 0)"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && ((since >= $(boot_epoch)))
+}
+
+# One "mtime path" line per file that exists, from a single stat call. The
+# flavour follows the stat on PATH rather than the system's name.
+file_mtimes() {
+  (($# > 0)) || return 0
+  if stat -c %Y / >/dev/null 2>&1; then
+    stat -c '%Y %n' "$@" 2>/dev/null || true
+  else
+    stat -f '%m %N' "$@" 2>/dev/null || true
+  fi
+}
+
+# Every pane on the server, one line each, as name|group|attached|group
+# attached|activity|window|command. | keeps an empty field in place, which a
+# tab would not, being whitespace to read. A wedged server must not hang a
+# shell's first prompt, so the listing gets a second, and returns 1 when it is
+# cut short. The watchdog writes to /dev/null, because killing it leaves its
+# sleep running, and a sleep holding stdout would hold a caller's capture.
+PANES=""
+list_panes_watched() {
+  local tmp lister watchdog status=0
+  PANES=""
+  command -v tmux >/dev/null 2>&1 || return 0
+  tmp="$STATE_DIR/.panes.$$"
+  tmux list-panes -a -F '#{session_name}|#{session_group}|#{session_attached}|#{session_group_attached}|#{session_activity}|#{window_name}|#{pane_current_command}' \
+    > "$tmp" 2>/dev/null &
+  lister=$!
+  ( sleep 1; kill "$lister" 2>/dev/null ) >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$lister" 2>/dev/null || status=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  if ((status > 128)); then
+    rm -f "$tmp"
+    return 1
+  fi
+  IFS= read -r -d '' PANES < "$tmp" || true
+  rm -f "$tmp"
+}
+
+# Removes every boot's hint entries but this one's.
+prune_hint_boots() {
+  local keep="$1" path
+  for path in "$STATE_DIR/hint"/*; do
+    [[ -e "$path" && "${path##*/}" != "$keep" ]] || continue
+    rm -rf "$path" 2>/dev/null || true
+  done
+}
+
+# restore --hint: one line when a recorded session is not running and no hint
+# in this boot has named it, and for 10 seconds after, so every tab a reboot
+# reopens together shows it. Reads no transcript and writes no record.
+restore_hint() {
+  local id boot lock since name names=$'\n' lefts path each days reference=0 when
+  local count=0 fresh=false newest=0 now
+  local -a counted=() files=() left=()
+
+  UNAME_S="$(uname -s)"
+  id="$(boot_id)"
+  [[ -n "$id" && -d "$STATE_DIR" ]] || return 0
+  home_locked && return 0
+  boot="$(boot_epoch)"
+  lock="$STATE_DIR/restore.lock"
+  if [[ -d "$lock" ]]; then
+    restore_lock_live "$lock" && return 0
+    # restore writes its pid just after making the lock.
+    each=""
+    IFS= read -r each < "$lock/pid" 2>/dev/null || true
+    if [[ -z "$each" ]]; then
+      since="$(file_mtime "$lock" || echo 0)"
+      ((since < boot)) || return 0
+    fi
+  fi
+
+  list_panes_watched || return 0
+  while IFS='|' read -r name _; do
+    [[ -z "$name" ]] || names+="$name"$'\n'
+  done <<<"$PANES"
+
+  # record_open would re-list the records once per record.
+  for path in "$SESSIONS_DIR"/*/; do
+    path="${path%/}"
+    name="${path##*/}"
+    [[ -f "$path/dir" && ! -e "$path/closed" ]] || continue
+    [[ "$names" != *$'\n'"$name"$'\n'* ]] || continue
+    counted+=("$name")
+  done
+
+  # Leave out what restore is sure to expire. The reference is the newest
+  # activity from before the boot, as restore's is, from fewer records.
+  days="${AGENT_SESSION_EXPIRE_DAYS:-14}"
+  if ((days > 0 && ${#counted[@]} > 0)); then
+    local -a seen=() transcript=() activity=() kept=()
+    local i pin agent dir
+    for ((i = 0; i < ${#counted[@]}; i++)); do
+      name="${counted[i]}"
+      seen[i]="$SESSIONS_DIR/$name/seen"
+      transcript[i]=""
+      agent="" pin="" dir=""
+      IFS= read -r agent < "$SESSIONS_DIR/$name/agent" 2>/dev/null || true
+      if [[ "$agent" == claude ]]; then
+        IFS= read -r pin < "$SESSIONS_DIR/$name/conversation" 2>/dev/null || true
+        IFS= read -r dir < "$SESSIONS_DIR/$name/dir" 2>/dev/null || true
+        [[ -z "$pin" ]] || transcript[i]="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${dir//[^A-Za-z0-9]/-}/$pin.jsonl"
+      fi
+      activity[i]=0
+      files+=("${seen[i]}")
+      [[ -z "${transcript[i]}" ]] || files+=("${transcript[i]}")
+    done
+    while read -r when path; do
+      [[ -n "$path" ]] || continue
+      for ((i = 0; i < ${#counted[@]}; i++)); do
+        if [[ "$path" == "${seen[i]}" || "$path" == "${transcript[i]}" ]] && ((when > activity[i])); then
+          activity[i]="$when"
+        fi
+      done
+    done <<<"$(file_mtimes "${files[@]}")"
+    for ((i = 0; i < ${#counted[@]}; i++)); do
+      if ((activity[i] < boot && activity[i] > reference)); then
+        reference="${activity[i]}"
+      fi
+    done
+    ((reference > 0)) || reference="$boot"
+    # A record with neither file is kept.
+    for ((i = 0; i < ${#counted[@]}; i++)); do
+      if ((activity[i] > 0 && (reference - activity[i]) / 86400 >= days)); then
+        left+=("${counted[i]}")
+        continue
+      fi
+      kept+=("${counted[i]}")
+    done
+    counted=(${kept[@]+"${kept[@]}"})
+  fi
+  count="${#counted[@]}"
+
+  path="$STATE_DIR/hint/$id"
+  if ((count > 0 || ${#left[@]} > 0)); then
+    [[ -d "$path" ]] || mkdir -p "$path" 2>/dev/null || true
+  fi
+  for name in ${counted[@]+"${counted[@]}"}; do
+    [[ ! -f "$path/$name" ]] || rm -f "$path/$name" 2>/dev/null || true
+    if [[ ! -d "$path/$name" ]] && mkdir "$path/$name" 2>/dev/null; then fresh=true; fi
+  done
+  # A running, closed or left-out session loses its entry, so its next stop
+  # is new again. A left-out session gets a file instead, which tells ags.zsh
+  # this boot has judged it without starting the launcher at every new tab.
+  names=$'\n'
+  for name in ${counted[@]+"${counted[@]}"}; do names+="$name"$'\n'; done
+  lefts=$'\n'
+  for name in ${left[@]+"${left[@]}"}; do lefts+="$name"$'\n'; done
+  for each in "$path"/*; do
+    if [[ -d "$each" ]]; then
+      [[ "$names" != *$'\n'"${each##*/}"$'\n'* ]] || continue
+    elif [[ -f "$each" ]]; then
+      [[ "$lefts" != *$'\n'"${each##*/}"$'\n'* ]] || continue
+    else
+      continue
+    fi
+    rm -rf "$each" 2>/dev/null || true
+  done
+  for name in ${left[@]+"${left[@]}"}; do
+    [[ -e "$path/$name" ]] || : 2>/dev/null > "$path/$name" || true
+  done
+  if ((count > 0)) && [[ "$fresh" == false ]]; then
+    files=()
+    for name in "${counted[@]}"; do files+=("$path/$name"); done
+    while read -r when each; do
+      if [[ -n "$when" ]] && ((when > newest)); then newest="$when"; fi
+    done <<<"$(file_mtimes "${files[@]}")"
+    now="$(date +%s)"
+    if ((now - newest < 10)); then fresh=true; fi
+  fi
+  if [[ "$fresh" == true ]]; then
+    if ((count == 1)); then
+      printf 'ags: 1 recorded session is not running. ags restore resumes it unless it expired.\n'
+    else
+      printf 'ags: %s recorded sessions are not running. ags restore resumes those not expired.\n' "$count"
+    fi
+  fi
+  prune_hint_boots "$id"
+  return 0
+}
+
+# Marks the sessions restore failed to start as already hinted, dated 60
+# seconds back so they never reopen the hint's burst window.
+hint_restore_failures() {
+  local id path when stamp name
+  id="$(boot_id)"
+  [[ -n "$id" ]] || return 0
+  path="$STATE_DIR/hint/$id"
+  if (($# > 0)); then
+    when=$(( $(date +%s) - 60 ))
+    stamp="$(date -d "@$when" +%Y%m%d%H%M.%S 2>/dev/null || date -r "$when" +%Y%m%d%H%M.%S 2>/dev/null || true)"
+    mkdir -p "$path" 2>/dev/null || true
+    for name in "$@"; do
+      [[ ! -f "$path/$name" ]] || rm -f "$path/$name" 2>/dev/null || true
+      mkdir "$path/$name" 2>/dev/null || true
+      [[ -z "$stamp" ]] || touch -t "$stamp" "$path/$name" 2>/dev/null || true
+    done
+  fi
+  prune_hint_boots "$id"
+}
+
 cmd_restore() {
   local dry=false lock pid since days reference each idle restored=0 expired=0 failed=0
   local gap="${AGENT_SESSION_RESTORE_GAP:-5}" output started=false server
-  local -a starting=()
+  local -a starting=() failures=()
+  local hint=false
 
   while (($# > 0)); do
     case "$1" in
-      --dry-run) dry=true ;;
-      *) printf 'Usage: ags restore [--dry-run]\n' >&2; exit 1 ;;
+      --dry-run) [[ "$hint" == false ]] || restore_usage; dry=true ;;
+      --hint) [[ "$dry" == false && "$hint" == false ]] || restore_usage; hint=true ;;
+      *) restore_usage ;;
     esac
     shift
   done
+  if [[ "$hint" == true ]]; then
+    restore_hint
+    return 0
+  fi
   home_locked && { printf 'The home is locked, run ags unlock first.\n' >&2; exit 1; }
   ensure_state || exit 1
 
   if [[ "$dry" == false ]]; then
     lock="$STATE_DIR/restore.lock"
     if ! mkdir "$lock" 2>/dev/null; then
-      # A lock left by a power cut mid-restore names a pid that is not running,
-      # or is older than the boot.
-      pid="$(cat "$lock/pid" 2>/dev/null || true)"
-      since="$(file_mtime "$lock" || echo 0)"
-      if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && ((since >= $(boot_epoch))); then
+      if restore_lock_live "$lock"; then
         printf 'a restore is already running\n' >&2
         exit 1
       fi
@@ -1479,6 +1759,15 @@ cmd_restore() {
     starting+=("$each")
   done < <(record_names)
 
+  if [[ "$dry" == false ]]; then
+    for each in ${starting[@]+"${starting[@]}"}; do
+      [[ "$(record_get "$each" agent)" == claude ]] || continue
+      pin_hook_check
+      [[ -z "$PIN_WARNING" ]] || printf '%s\n' "$PIN_WARNING" >&2
+      break
+    done
+  fi
+
   for each in ${starting[@]+"${starting[@]}"}; do
     if [[ "$dry" == true ]]; then
       printf 'would start %s (%s in %s)\n' "$each" "$(record_get "$each" agent)" "$(record_get "$each" dir)"
@@ -1493,11 +1782,14 @@ cmd_restore() {
       printf '%s\n' "$(printf '%s\n' "$output" | head -n 1)"
     else
       failed=$((failed + 1))
+      failures+=("$each")
       printf 'failed %s: %s\n' "$each" "$(printf '%s\n' "$output" | head -n 1)"
     fi
   done
 
   [[ "$dry" == false ]] || return 0
+  # Each failure printed here is one the hint need not repeat.
+  hint_restore_failures ${failures[@]+"${failures[@]}"}
   printf 'Restored %s, expired %s, failed %s.\n' "$restored" "$expired" "$failed"
 
   # A server the bridge's sandboxed unit started cannot sudo from its panes.
@@ -1506,6 +1798,11 @@ cmd_restore() {
     printf 'Warning: this tmux server was started by the bridge, so its panes cannot sudo. If it holds only sessions started while the home was locked, run tmux kill-server, then ags restore again.\n' >&2
   fi
   ((failed == 0))
+}
+
+restore_usage() {
+  printf 'Usage: ags restore [--dry-run | --hint]\n' >&2
+  exit 1
 }
 
 cmd_history() {
@@ -1658,6 +1955,18 @@ case "${1:-}" in
   pin)  shift; cmd_pin "$@" 2>/dev/null || true; exit 0 ;;
   seen) shift; cmd_seen "$@" 2>/dev/null || true; exit 0 ;;
 esac
+
+# A shell's first prompt runs the hint wherever tmux is missing too. Its usage
+# error still exits 1.
+if [[ "${1:-}" == restore ]]; then
+  for arg in "${@:2}"; do
+    if [[ "$arg" == --hint ]]; then
+      shift
+      cmd_restore "$@"
+      exit 0
+    fi
+  done
+fi
 
 if ! command -v tmux >/dev/null 2>&1; then
   printf 'tmux is not installed or not on PATH.\n' >&2

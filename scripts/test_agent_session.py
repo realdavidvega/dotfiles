@@ -13,6 +13,9 @@ import uuid
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name('agent-session.sh').resolve()
+# A Mac runs the launcher with its stock bash 3.2, the one a fresh account has,
+# so the suite proves the portability the launcher promises.
+BASH = '/bin/bash' if os.uname().sysname == 'Darwin' else 'bash'
 UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 D3_VARS = ('CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID',
            'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_PROJECT_DIR',
@@ -98,7 +101,7 @@ class Sandbox:
         # A run on the hub must never reach the live state, server or bridge.
         assert env.get('AGENT_SESSION_STATE', '').startswith(str(self.root))
         assert not self.real or env.get('TMUX_TMPDIR', '').startswith(str(self.root))
-        result = subprocess.run(['bash', str(SCRIPT), *args], env=env, cwd=str(cwd or self.repo),
+        result = subprocess.run([BASH, str(SCRIPT), *args], env=env, cwd=str(cwd or self.repo),
                                 capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
         if check and result.returncode != 0:
             self.case.fail(f'{args} exited {result.returncode}: {result.stdout}{result.stderr}')
@@ -191,6 +194,43 @@ class Sandbox:
         self.tmux('send-keys', '-t', target, '-l', '--', f'{command}; touch {shlex.quote(str(marker))}')
         self.tmux('send-keys', '-t', target, 'Enter')
         self.wait_for(marker.exists, f'{command!r} in {target}')
+
+
+def write_exec(path, body):
+    path.write_text('#!/usr/bin/env bash\n' + body)
+    path.chmod(0o755)
+    return path
+
+
+def path_without(root, *names):
+    """A PATH of one directory linking every command on PATH but names. tmux
+    and the agents can sit in /usr/bin beside bash and sed, so dropping a
+    directory from PATH would take those with them."""
+    shim = root / ('without-' + '-'.join(names))
+    shim.mkdir()
+    for folder in os.environ.get('PATH', '').split(os.pathsep):
+        if not folder or not os.path.isdir(folder):
+            continue
+        for entry in os.scandir(folder):
+            link = shim / entry.name
+            if entry.name in names or os.path.lexists(link):
+                continue
+            if os.path.isfile(entry.path) and os.access(entry.path, os.X_OK):
+                link.symlink_to(entry.path)
+    return str(shim)
+
+
+def fake_darwin(folder, boot=None):
+    """A uname that says Darwin and a sysctl that knows the boot, or fails."""
+    write_exec(folder / 'uname', 'echo Darwin\n')
+    if boot is None:
+        write_exec(folder / 'sysctl', 'exit 1\n')
+    else:
+        write_exec(folder / 'sysctl', 'case "$*" in\n'
+                   f'  *kern.boottime*) echo "{{ sec = {boot}, usec = 0 }} Tue Nov 10 09:00:00 2026" ;;\n'
+                   '  *kern.bootsessionuuid*) echo 5d1c2a8e-0000-4000-8000-000000000007 ;;\n'
+                   '  *) exit 1 ;;\n'
+                   'esac\n')
 
 
 real_tmux = unittest.skipUnless(shutil.which('tmux'), 'tmux is not installed')
@@ -948,6 +988,433 @@ class FakeTmuxTests(unittest.TestCase):
         result = box.cli('open', 'race', 'shell', '--detached')
         self.assertEqual(result.stdout, 'race is already running.\n')
         self.assertFalse((box.state / 'sessions/race').exists())
+
+
+@real_tmux
+class CodexDetectionTests(unittest.TestCase):
+    # A recorded Codex session reopens with resume --last only when a rollout's
+    # first line names its directory. The scan must hold on BSD tools too.
+    def setUp(self):
+        self.box = Sandbox(self)
+        self.sessions = Path(self.box.env['CODEX_HOME']) / 'sessions/2026/11/10'
+        self.sessions.mkdir(parents=True)
+
+    def rollout(self, name, cwd, padding=0):
+        meta = {'type': 'session_meta', 'payload': {'cwd': str(cwd), 'pad': 'x' * padding}}
+        path = self.sessions / f'rollout-{name}.jsonl'
+        path.write_text(json.dumps(meta, separators=(',', ':')) + '\n{"type":"event"}\n')
+        return path
+
+    def reopened(self):
+        box = self.box
+        box.make_record('cx', box.repo, agent='codex')
+        given = box.started('cx')[2]
+        box.cli('close', 'cx')
+        return given
+
+    def test_a_rollout_naming_the_directory_resumes(self):
+        self.rollout('other', self.box.root)
+        self.assertEqual(self.reopened(), '')
+        self.rollout('mine', self.box.repo)
+        self.assertEqual(self.reopened(), 'resume --last')
+
+    def test_many_long_first_lines_still_resume(self):
+        for index in range(40):
+            self.rollout(f'{index:02d}', self.box.repo, padding=30 * 1024)
+        self.assertEqual(self.reopened(), 'resume --last')
+
+    def test_a_dangling_rollout_is_skipped(self):
+        for index in range(3):
+            (self.sessions / f'rollout-gone-{index}.jsonl').symlink_to(self.box.root / f'missing-{index}')
+        self.rollout('mine', self.box.repo)
+        self.assertEqual(self.reopened(), 'resume --last')
+
+
+@real_tmux
+class DarwinBootTests(unittest.TestCase):
+    def test_the_lock_is_judged_by_the_darwin_boot(self):
+        box = Sandbox(self)
+        box.make_record('one', box.repo, agent='shell')
+        lock = box.state / 'restore.lock'
+        lock.mkdir(parents=True)
+        (lock / 'pid').write_text(f'{os.getpid()}\n')
+        os.utime(lock, (time.time() - 60,) * 2)
+        # This host booted well before the lock, so a live pid holds it.
+        result = box.cli('restore', check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('a restore is already running', result.stderr)
+        fake_darwin(box.bin, boot=int(time.time()) - 10)
+        box.cli('restore')
+        self.assertTrue(box.running('one'))
+        self.assertFalse(lock.exists())
+
+    def test_a_failing_sysctl_reads_as_an_unknown_boot(self):
+        box = Sandbox(self)
+        box.make_record('one', box.repo, agent='shell')
+        fake_darwin(box.bin)
+        self.assertIn('would start one', box.out('restore', '--dry-run'))
+
+
+PLURAL = 'ags: {} recorded sessions are not running. ags restore resumes those not expired.\n'
+SINGULAR = 'ags: 1 recorded session is not running. ags restore resumes it unless it expired.\n'
+
+
+@real_tmux
+class HintTests(unittest.TestCase):
+    def setUp(self):
+        self.box = Sandbox(self)
+        self.epoch = int(time.time()) - 3600
+        self.box.env.update(AGENT_SESSION_BOOT_ID='boot-a', AGENT_SESSION_BOOT_EPOCH=str(self.epoch))
+
+    def hint(self, **extra):
+        return self.box.out('restore', '--hint', **extra)
+
+    def entries(self, boot='boot-a'):
+        path = self.box.state / 'hint' / boot
+        return sorted(item.name for item in path.iterdir() if item.is_dir()) if path.exists() else []
+
+    def marks(self, boot='boot-a'):
+        path = self.box.state / 'hint' / boot
+        return sorted(item.name for item in path.iterdir() if item.is_file()) if path.exists() else []
+
+    def age(self, seconds, boot='boot-a'):
+        for name in self.entries(boot):
+            path = self.box.state / 'hint' / boot / name
+            when = path.stat().st_mtime - seconds
+            os.utime(path, (when, when))
+
+    def test_each_new_stop_is_named_once_and_by_every_tab_of_the_burst(self):
+        box = self.box
+        box.cli('open', 'run', 'shell', '--detached')
+        for name in ('a', 'b'):
+            box.make_record(name, box.repo, agent='shell')
+        box.make_record('c', box.repo, agent='shell', closed='closed')
+        self.assertEqual(self.hint(), PLURAL.format(2))
+        self.assertEqual(self.entries(), ['a', 'b'])
+        self.assertEqual(self.hint(), PLURAL.format(2))
+        self.age(11)
+        self.assertEqual(self.hint(), '')
+        if os.geteuid() != 0:
+            self.age(-9)
+            folder = box.state / 'hint/boot-a'
+            folder.chmod(0o555)
+            try:
+                self.assertEqual(self.hint(), PLURAL.format(2))
+            finally:
+                folder.chmod(0o755)
+            self.age(11)
+        box.make_record('d', box.repo, agent='shell')
+        self.assertEqual(self.hint(), PLURAL.format(3))
+        self.age(11)
+        box.cli('open', 'a', '--detached')
+        self.assertEqual(self.hint(), '')
+        self.assertEqual(self.entries(), ['b', 'd'])
+        box.tmux('kill-session', '-t', '=a')
+        self.assertEqual(self.hint(), PLURAL.format(3))
+        self.age(11)
+        self.assertEqual(self.hint(), '')
+        self.assertEqual(self.hint(AGENT_SESSION_BOOT_ID='boot-b'), PLURAL.format(3))
+        self.assertFalse((box.state / 'hint/boot-a').exists())
+        self.assertEqual(self.entries('boot-b'), ['a', 'b', 'd'])
+
+    def test_what_restore_will_expire_is_left_out(self):
+        box = self.box
+        reference = self.epoch - 3600
+        box.make_record('recent', box.repo, agent='shell', seen=reference)
+        box.make_record('stale', box.repo, agent='shell', seen=reference - 20 * 86400)
+        pin = box.transcript(box.repo, when=reference - 20 * 86400)
+        box.make_record('talked', box.repo, pin=pin, seen=reference - 20 * 86400)
+        transcript = box.project(box.repo) / f'{pin}.jsonl'
+        os.utime(transcript, (reference - 86400,) * 2)
+        bare = box.make_record('bare', box.repo, agent='shell')
+        (bare / 'seen').unlink()
+        self.assertEqual(self.hint(), PLURAL.format(3))
+        self.assertEqual(self.entries(), ['bare', 'recent', 'talked'])
+        self.assertEqual(self.marks(), ['stale'])
+        self.assertEqual(self.hint(AGENT_SESSION_EXPIRE_DAYS='0', AGENT_SESSION_BOOT_ID='boot-b'),
+                         PLURAL.format(4))
+        self.assertEqual(self.marks('boot-b'), [])
+
+    def test_a_left_out_session_is_marked_until_it_counts_or_closes(self):
+        box = self.box
+        reference = self.epoch - 3600
+        box.make_record('recent', box.repo, agent='shell', seen=reference)
+        box.make_record('stale', box.repo, agent='shell', seen=reference - 20 * 86400)
+        self.assertEqual(self.hint(), SINGULAR)
+        self.assertEqual((self.entries(), self.marks()), (['recent'], ['stale']))
+        self.age(11)
+        self.assertEqual(self.hint(), '')
+        self.assertEqual(self.hint(AGENT_SESSION_EXPIRE_DAYS='0'), PLURAL.format(2))
+        self.assertEqual((self.entries(), self.marks()), (['recent', 'stale'], []))
+        self.assertEqual(self.hint(), '')
+        self.assertEqual((self.entries(), self.marks()), (['recent'], ['stale']))
+        box.make_record('stale', box.repo, agent='shell', seen=self.epoch)
+        self.assertEqual(self.hint(), PLURAL.format(2))
+        self.assertEqual((self.entries(), self.marks()), (['recent', 'stale'], []))
+        box.make_record('stale', box.repo, agent='shell', closed='closed')
+        self.hint()
+        self.assertEqual(self.marks(), [])
+        box.make_record('gone', box.repo, agent='shell', seen=reference - 20 * 86400)
+        self.hint()
+        self.assertEqual(self.marks(), ['gone'])
+        shutil.rmtree(box.state / 'sessions/gone')
+        self.hint()
+        self.assertEqual(self.marks(), [])
+
+    def test_one_session_and_none(self):
+        box = self.box
+        self.assertEqual(self.hint(), '')
+        box.make_record('one', box.repo, agent='shell')
+        partial = box.state / 'sessions/zzz'
+        partial.mkdir()
+        (partial / 'agent').write_text('shell\n')
+        self.assertEqual(self.hint(), SINGULAR)
+        self.assertEqual(self.entries(), ['one'])
+        box.make_record('one', box.repo, agent='shell', closed='closed')
+        self.assertEqual(self.hint(), '')
+        self.assertEqual(self.entries(), [])
+
+
+class HintGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.box = Sandbox(self, real=False)
+        self.epoch = int(time.time()) - 3600
+        self.box.env.update(AGENT_SESSION_BOOT_ID='boot-a', AGENT_SESSION_BOOT_EPOCH=str(self.epoch))
+        self.no_tmux = path_without(self.box.root, 'tmux')
+
+    def hint(self, **extra):
+        result = self.box.cli('restore', '--hint', check=False, **extra)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def records(self):
+        for name in ('a', 'b'):
+            self.box.make_record(name, self.box.repo, agent='shell')
+
+    def test_silent_where_it_cannot_judge(self):
+        box = self.box
+        self.assertEqual(self.hint(PATH=self.no_tmux), '')
+        self.assertFalse(box.state.exists())
+        self.records()
+        self.assertEqual(self.hint(PATH=self.no_tmux, AGENT_SESSION_LOCKED='1'), '')
+        fake_darwin(box.bin)
+        env = dict(box.env)
+        del env['AGENT_SESSION_BOOT_ID']
+        box.env = env
+        self.assertEqual(self.hint(PATH=self.no_tmux), '')
+        self.assertFalse((box.state / 'hint').exists())
+
+    def test_a_restore_in_progress_silences_it(self):
+        box = self.box
+        self.records()
+        lock = box.state / 'restore.lock'
+        lock.mkdir()
+        (lock / 'pid').write_text(f'{os.getpid()}\n')
+        self.assertEqual(self.hint(PATH=self.no_tmux), '')
+        (lock / 'pid').unlink()
+        self.assertEqual(self.hint(PATH=self.no_tmux), '')
+        os.utime(lock, (self.epoch - 60,) * 2)
+        self.assertEqual(self.hint(PATH=self.no_tmux), PLURAL.format(2))
+        (lock / 'pid').write_text(f'{os.getpid()}\n')
+        os.utime(lock, (self.epoch - 60,) * 2)
+        self.assertEqual(self.hint(PATH=self.no_tmux), PLURAL.format(2))
+        self.assertTrue((lock / 'pid').exists())
+
+    def test_a_wedged_tmux_does_not_hold_the_prompt(self):
+        box = self.box
+        self.records()
+        write_exec(box.bin / 'tmux', 'exec sleep 5\n')
+        began = time.monotonic()
+        self.assertEqual(self.hint(), '')
+        self.assertLess(time.monotonic() - began, 2)
+        self.assertFalse((box.state / 'hint').exists())
+
+    def test_usage(self):
+        write_exec(self.box.bin / 'tmux', 'exit 0\n')
+        for path in (self.box.env['PATH'], self.no_tmux):
+            for args in (('--hint', '--dry-run'), ('--dry-run', '--hint'), ('--hint', 'x')):
+                result = self.box.cli('restore', *args, check=False, PATH=path)
+                self.assertEqual(result.returncode, 1, args)
+                self.assertEqual(result.stderr, 'Usage: ags restore [--dry-run | --hint]\n')
+
+
+@real_tmux
+class RestoreHintTests(unittest.TestCase):
+    def test_a_failure_restore_printed_is_not_hinted_again(self):
+        box = Sandbox(self)
+        box.env.update(AGENT_SESSION_BOOT_ID='boot-a',
+                       AGENT_SESSION_BOOT_EPOCH=str(int(time.time()) - 3600),
+                       PATH=path_without(box.root, 'codex'))
+        (box.bin / 'codex').unlink()
+        box.make_record('cl', box.repo)
+        box.make_record('cx', box.repo, agent='codex')
+        (box.state / 'hint/boot-old/stale').mkdir(parents=True)
+        result = box.cli('restore', check=False)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('failed cx', result.stdout)
+        self.assertTrue(box.running('cl'))
+        entry = box.state / 'hint/boot-a/cx'
+        self.assertTrue(entry.is_dir())
+        self.assertLess(entry.stat().st_mtime, time.time() - 30)
+        self.assertFalse((box.state / 'hint/boot-old').exists())
+        self.assertEqual(box.out('restore', '--hint'), '')
+        again = box.cli('restore', check=False)
+        self.assertIn('Restored 0, expired 0, failed 1.', again.stdout)
+
+
+@real_tmux
+class TabIdentifierTests(unittest.TestCase):
+    TAB = {'ITERM_SESSION_ID': 'w0t0p0:F00D', 'TERM_SESSION_ID': 'w0t0p0:F00D', 'LC_TERMINAL': 'iTerm2'}
+
+    def pane_env(self, box, name):
+        dump = box.root / f'{name}.env'
+        box.type_in(f'{name}:agent', f'env > {dump}', stop=False)
+        return dict(line.split('=', 1) for line in dump.read_text().splitlines() if '=' in line)
+
+    def test_the_tab_ids_stay_out_of_the_server(self):
+        box = Sandbox(self)
+        box.cli('open', 'first', 'shell', '--detached', **self.TAB)
+        server = box.tmux('show-environment', '-g')
+        for name in ('ITERM_SESSION_ID', 'TERM_SESSION_ID'):
+            self.assertNotIn(name + '=', server)
+        self.assertIn('LC_TERMINAL=iTerm2', server)
+        env = self.pane_env(box, 'first')
+        self.assertNotIn('ITERM_SESSION_ID', env)
+        self.assertNotIn('TERM_SESSION_ID', env)
+        self.assertEqual(env.get('LC_TERMINAL'), 'iTerm2')
+        self.assertEqual(box.tmux('show-environment', '-t', '=first', 'DISABLE_AUTO_UPDATE'),
+                         'DISABLE_AUTO_UPDATE=true')
+
+    def test_a_server_started_by_hand_loses_them(self):
+        box = Sandbox(self)
+        subprocess.run(['tmux', 'new-session', '-d', '-s', 'seed'], env=dict(box.env, **self.TAB), check=True)
+        self.assertIn('ITERM_SESSION_ID=', box.tmux('show-environment', '-g'))
+        box.cli('open', 'second', 'shell', '--detached')
+        server = box.tmux('show-environment', '-g')
+        self.assertNotIn('ITERM_SESSION_ID=', server)
+        self.assertNotIn('TERM_SESSION_ID=', server)
+        self.assertNotIn('ITERM_SESSION_ID', self.pane_env(box, 'second'))
+
+
+CLIPBOARD = SCRIPT.with_name('tmux-clipboard.sh')
+
+
+class ClipboardTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix='clip-')
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        self.tmp = self.root / 'tmp'
+        self.tmp.mkdir()
+        self.record = self.root / 'record'
+        self.env = {key: value for key, value in os.environ.items()
+                    if key not in ('TMUX', 'TMUX_PANE', 'DISPLAY', 'WAYLAND_DISPLAY', 'LC_ALL', 'LC_CTYPE')}
+        self.env.update(PATH=f'{self.bin}{os.pathsep}{os.environ["PATH"]}', TMPDIR=str(self.tmp),
+                        TMUX_TMPDIR=str(self.root))
+        for tool in ('pbcopy', 'xclip', 'wl-copy'):
+            write_exec(self.bin / tool, f'{{ printf "%s|%s|%s|" {tool} "${{LC_CTYPE-unset}}" '
+                       f'"${{LC_ALL-unset}}"; cat; }} >> {shlex.quote(str(self.record))}\n')
+
+    def copy(self, text, *args, **extra):
+        result = subprocess.run(['bash', str(CLIPBOARD), *args], input=text.encode(), capture_output=True,
+                                env=dict(self.env, **extra), timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        delivered = self.record.read_bytes().decode() if self.record.exists() else ''
+        if self.record.exists():
+            self.record.unlink()
+        return delivered
+
+    def test_darwin_sends_a_selection_to_pbcopy_in_utf8(self):
+        write_exec(self.bin / 'uname', 'echo Darwin\n')
+        self.assertEqual(self.copy('héllo ✓'), 'pbcopy|UTF-8|unset|héllo ✓')
+        self.assertEqual(self.copy('héllo', LC_ALL='C'), 'pbcopy|UTF-8|unset|héllo')
+        self.assertEqual(self.copy(''), '')
+        self.assertEqual(self.copy('named', '--buffer-hook'), '')
+        self.assertEqual(list(self.tmp.iterdir()), [])
+
+    def test_linux_ignores_the_hook_flag(self):
+        write_exec(self.bin / 'uname', 'echo Linux\n')
+        self.assertEqual(self.copy('text', DISPLAY=':99'), 'xclip|unset|unset|text')
+        self.assertEqual(self.copy('text', '--buffer-hook', DISPLAY=':99'), 'xclip|unset|unset|text')
+
+
+PIN_MISSING = ('ags: the pin hook is missing from {file}, so /clear will not be followed. Run agent session '
+               'setup again (restoration_scripts/51-agent-sessions.sh, with DOTFILES_PATH set to the checkout).')
+PIN_DANGLING = ('ags: ~/.dotfiles/scripts/agent-session.sh is missing, so the pin hook does nothing and /clear '
+                'will not be followed. Run agent session setup again (restoration_scripts/51-agent-sessions.sh, '
+                'with DOTFILES_PATH set to the checkout).')
+
+
+@real_tmux
+class PinWarningTests(unittest.TestCase):
+    def setUp(self):
+        self.box = Sandbox(self)
+        self.settings = self.box.home / '.claude/settings.json'
+        self.settings.parent.mkdir()
+        self.settings.write_text('{"hooks": {}}\n')
+
+    def merged(self, *args, **extra):
+        """stdout and stderr in the order they were written."""
+        return subprocess.run([BASH, str(SCRIPT), *args], env=dict(self.box.env, **extra),
+                              cwd=str(self.box.repo), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, timeout=60, stdin=subprocess.DEVNULL).stdout.splitlines()
+
+    def pinned(self):
+        from test_agent_sessions_setup import baseline_parses, pinned_settings
+        if not baseline_parses():
+            self.skipTest('config/claude is locked, unlock it with git-crypt')
+        pinned_settings(self, self.settings)
+
+    def test_open_warns_after_its_started_line(self):
+        lines = self.merged('open', 'w1', '--detached')
+        self.assertTrue(lines[0].startswith('Started w1 with claude'), lines)
+        self.assertEqual(lines[1], PIN_MISSING.format(file='~/.claude/settings.json'))
+        self.assertEqual(lines[2], 'Use ags open w1 to attach.')
+
+    def test_a_present_hook_warns_only_when_its_launcher_is_gone(self):
+        self.pinned()
+        dotfiles = self.box.home / '.dotfiles'
+        dotfiles.symlink_to(SCRIPT.parent.parent)
+        lines = self.merged('open', 'w1', '--detached')
+        self.assertEqual([line for line in lines if line.startswith('ags:')], [], lines)
+        dotfiles.unlink()
+        dotfiles.symlink_to(self.box.root / 'gone')
+        lines = self.merged('open', 'w2', '--detached')
+        self.assertEqual(lines[1], PIN_DANGLING, lines)
+
+    def test_claude_config_dir_names_the_file_checked(self):
+        self.pinned()
+        (self.box.home / '.dotfiles').symlink_to(SCRIPT.parent.parent)
+        other = self.box.root / 'claude-config'
+        other.mkdir()
+        (other / 'settings.json').write_text('{}\n')
+        lines = self.merged('open', 'w1', '--detached', CLAUDE_CONFIG_DIR=str(other))
+        self.assertEqual(lines[1], PIN_MISSING.format(file=other / 'settings.json'), lines)
+
+    def test_restore_warns_once(self):
+        box = self.box
+        box.env['AGENT_SESSION_BOOT_EPOCH'] = str(int(time.time()) - 3600)
+        box.make_record('r1', box.repo)
+        box.make_record('r2', box.repo)
+        dry = box.cli('restore', '--dry-run')
+        self.assertNotIn('ags:', dry.stdout + dry.stderr)
+        result = box.cli('restore')
+        self.assertEqual(result.stderr.splitlines(), [PIN_MISSING.format(file='~/.claude/settings.json')])
+        started = [line for line in result.stdout.splitlines() if line.startswith('Started')]
+        self.assertEqual(len(started), 2, result.stdout)
+        self.assertNotIn('ags:', result.stdout)
+
+    def test_no_settings_file_no_warning(self):
+        self.settings.unlink()
+        lines = self.merged('open', 'w1', '--detached')
+        self.assertEqual([line for line in lines if line.startswith('ags:')], [], lines)
+
+
+def setUpModule():
+    version = subprocess.run([BASH, '-c', 'echo "$BASH_VERSION"'], capture_output=True, text=True).stdout
+    print(f'launcher bash: {BASH} {version.strip()}')
 
 
 if __name__ == '__main__':

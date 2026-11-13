@@ -233,7 +233,11 @@ reopen or a restore after a reboot resumes that session's own conversation. A
 `agent-session.sh pin` to follow `/clear` and in-app `/resume`. `config/tmux/tmux.conf` is
 linked to `~/.tmux.conf` and also staged as a plaintext copy under
 `/srv/services/agents/` on the hub, whose home is encrypted and unreadable
-before login. `scripts/agent-notify.sh` is a Claude Code `Stop`/`Notification` hook and the
+before login. On a Mac without the full install, run
+`DOTFILES_PATH="$PWD" bash restoration_scripts/51-agent-sessions.sh` from the
+checkout. Its Mac branch links `~/.dotfiles` and `~/.tmux.conf` when absent,
+appends a line sourcing `shell/zsh/ags.zsh` to `~/.zshrc` and adds the pin
+hook, and leaves the hub's staging alone. `scripts/agent-notify.sh` is a Claude Code `Stop`/`Notification` hook and the
 Codex `notify` program; it reports only when no client is attached, and
 withholds agent output outside an allowlist of personal roots.
 `scripts/agent-bridge.py` is a stdlib-only Telegram control plane that drives
@@ -338,7 +342,8 @@ recovered.
 - `shell/` — the actual shell setup. `init.sh` is the single entry point that
   bash and zsh RCs source. It sources `secrets/secrets.sh` (from a separate
   encrypted checkout, not this repo), then `exports.sh`, `functions.sh`,
-  `aliases.sh`.
+  `aliases.sh`. `shell/zsh/ags.zsh` sits outside `init.sh`: a Mac's own
+  `~/.zshrc` sources it for the agent session aliases and restore hint.
 - `symlinks/*.yaml` — dotbot manifests read by dotly. `conf.yaml` is the base,
   `conf.macos.yaml` / `conf.linux.yaml` / `conf.macos-intel.yaml` layer on OS
   specifics. This is where you add a new "symlink X into home" rule.
@@ -372,6 +377,10 @@ matching those patterns.
   → dotly bindings, p10k, sdkman, conda, fzf, bun, zoxide
   → defines ocv/ocvp helpers inline
 ```
+
+A Mac that runs agent sessions without the full install keeps its own
+`~/.zshrc`, which sources only `shell/zsh/ags.zsh` (the aliases from
+`aliases/.tmux-aliases`, `AGENT_SESSION_REPOS` and the restore hint).
 
 `exports.sh` has two big top-level branches on `$OSTYPE`. Both branches set the
 same conceptual vars (`OS_WORKSPACE`, `BREW_PATH`, `DOWNLOADS`,
@@ -426,10 +435,13 @@ both.
   scripts (check-before-install, or `if ! command -v foo`).
 - **New home-directory symlinks go in `symlinks/conf.yaml`** (cross-OS) or the
   per-OS variant. Do not add ad-hoc `ln -s` calls to restoration scripts for
-  things that dotbot can express declaratively.
-- **Cross-OS scripts must branch on `$OSTYPE`.** See
-  `restoration_scripts/24-ollama-setup.sh` for the pattern (`darwin*` vs
-  `linux-gnu*`).
+  things that dotbot can express declaratively. The one exception is the Mac
+  branch of `51-agent-sessions.sh`, which links `~/.dotfiles` and
+  `~/.tmux.conf` only when absent, because running dotbot there would replace
+  the user's own `~/.zshrc`.
+- **Cross-OS scripts branch on `$OSTYPE` or `uname -s`.** Either can be faked
+  in tests. See `restoration_scripts/24-ollama-setup.sh` for `$OSTYPE`
+  (`darwin*` vs `linux-gnu*`) and `scripts/tmux-clipboard.sh` for `uname -s`.
 - **The `modules/dotly` submodule is upstream code.** Bumping it means
   `git -C modules/dotly pull` then committing the new submodule SHA. Do not
   patch dotly in place.
