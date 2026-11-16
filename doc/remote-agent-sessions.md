@@ -54,6 +54,7 @@ Most of it exists because an agent TUI is not an ordinary program.
 | Setting | Reason |
 |---|---|
 | `allow-passthrough on` | OSC sequences reach the outer terminal. Without it, titles, progress reports and notifications stop at tmux |
+| `*:hyperlinks` terminal feature | Links Claude Code prints stay clickable (OSC 8). Without it tmux strips them and Ctrl+click opens nothing. An attached client picks it up only after detaching and attaching again |
 | `extended-keys on` plus `xterm*:extkeys` | Shift+Enter stays distinguishable from Enter, which is how both agents take a newline inside a prompt instead of submitting |
 | `escape-time 25` | Esc is the interrupt key in both agents. The 500ms default makes it feel broken. 25ms stays responsive without splitting escape sequences that arrive in separate packets over a relayed mobile link |
 | `history-limit 200000` | The run is the artifact. A few MB per pane buys reading what happened instead of guessing |
