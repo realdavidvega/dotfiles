@@ -16,6 +16,7 @@
 
 # NUL-separated paths of the stale subfolders of $1
 stale() {
+  emulate -L zsh
   local root="${1:?usage: stale <dir> [days]}" days="${2:-14}" d
   [[ -d "$root" ]] || { echo "stale: not a directory: $root" >&2; return 1; }
   for d in "$root"/*(N/) "$root"/.*(N/); do
