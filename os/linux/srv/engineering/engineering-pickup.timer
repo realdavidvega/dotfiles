@@ -1,0 +1,8 @@
+[Unit]
+Description=Pick up a ready agent engineering task four times a day
+
+[Timer]
+OnCalendar=*-*-* 04,10,16,22:00:00
+
+[Install]
+WantedBy=timers.target

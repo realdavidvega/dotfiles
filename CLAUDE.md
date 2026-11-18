@@ -287,14 +287,15 @@ The vault's `07 - Engineering/` holds one space per world, `01 - Personal/` and
   the vault. Its engineering commits leave with the next vault bundle.
 
 Only the hub writes personal task fields, and only the Mac writes work ones. `restoration_scripts/55-engineering.sh`, run
-as the desktop user, stages `engineering.py` with sdlc-init's `check_gates.py`
+as the desktop user, stages `engineering.py` and `pickup.py` with sdlc-init's `check_gates.py`
 and project-wiki's `lint_wiki.py` beside it under `/srv/services/engineering/`,
 taken from skills-registry's `origin/main` (`ENGINEERING_STAGE_REF` names another
 commit) and swapped in under the applier's lock. It writes the git identity the
 applier commits with, adds `ENGINEERING_VAULTS`, naming the personal space, to
 `/srv/services/system/system.env` when missing, moves a value that still names
 the vault root to that space, and installs
-`os/linux/srv/engineering/engineering-apply.{service,timer}`. The timer runs
+`os/linux/srv/engineering/engineering-apply.{service,timer}` and
+`engineering-pickup.{service,timer}`, which must name the same `User=`. The apply timer runs
 `engineering.py apply` every five minutes with that env file. Enabling it is
 explicit: `sudo systemctl enable --now engineering-apply.timer`. While the
 ecryptfs home is locked the applier still commits, and its push waits until the
@@ -304,7 +305,18 @@ staged.
 
 The staging swap holds the applier lock and restores existing parts if a
 replacement fails. A remaining `.old` path blocks another attempt until it is
-recovered.
+recovered. Every entry in `STAGED_FILES` must exist at the stage ref, so a
+missing one blocks the whole run before anything is swapped or installed.
+
+The pickup timer fires at 04:00, 10:00, 16:00 and 22:00 and runs `pickup.py` as
+`black` under `flock -n` on `/srv/services/engineering/pickup.lock`, which
+starts a crew on the next ready agent task from `pickup.json`. The service sets
+`GIT_CONFIG_GLOBAL` and a `PATH` reaching paneport, `ags-crew` (linked into
+`/home/black/.local/bin`), `tmux` and `git`, reads no env file and keeps the
+shared `/tmp` so tmux's socket is reachable. The script installs the timer and
+never enables it. It stays off until one `sudo systemctl start
+engineering-pickup.service` by hand succeeds under the unit's own environment,
+then `sudo systemctl enable --now engineering-pickup.timer`.
 
 ## Architecture
 
