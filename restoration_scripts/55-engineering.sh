@@ -29,9 +29,14 @@ DOTFILES_PATH="${DOTFILES_PATH:-$HOME/.dotfiles}"
 ROOT="/srv/services/engineering"
 UNIT_SOURCE_DIR="$DOTFILES_PATH/os/linux/srv/engineering"
 
-# The unit runs as its User=, and the staged tree, its lock and the identity
-# below must all be that user's.
+# Both units run as their User=, and the staged tree, its locks and the
+# identity below must all be that user's, so the two must name the same one.
 UNIT_USER="$(sed -n 's/^User=//p' "$UNIT_SOURCE_DIR/engineering-apply.service")"
+PICKUP_USER="$(sed -n 's/^User=//p' "$UNIT_SOURCE_DIR/engineering-pickup.service")"
+if [ "$PICKUP_USER" != "$UNIT_USER" ]; then
+  echo "blocked: engineering-pickup.service runs as '$PICKUP_USER' and engineering-apply.service as '$UNIT_USER'. They must match."
+  return 1 2>/dev/null || exit 1
+fi
 if [ "$(id -un)" != "$UNIT_USER" ]; then
   echo "blocked: run this as $UNIT_USER, the unit's user. It asks sudo only to install the units."
   return 1 2>/dev/null || exit 1
@@ -42,6 +47,7 @@ STAGE_REF="${ENGINEERING_STAGE_REF:-origin/main}"
 STAGED_FILES=(
   "engineering-vault/SKILL.md skills/engineering/engineering-vault/SKILL.md"
   "engineering-vault/scripts/engineering.py skills/engineering/engineering-vault/scripts/engineering.py"
+  "engineering-vault/scripts/pickup.py skills/engineering/engineering-vault/scripts/pickup.py"
   "sdlc-init/assets/check_gates.py skills/engineering/sdlc-init/assets/check_gates.py"
   "project-wiki/scripts/lint_wiki.py skills/engineering/project-wiki/scripts/lint_wiki.py"
 )
@@ -101,7 +107,7 @@ for ENTRY in "${STAGED_FILES[@]}"; do
     return 1 2>/dev/null || exit 1
   fi
 done
-chmod 0755 "$NEXT/engineering-vault/scripts/engineering.py"
+chmod 0755 "$NEXT/engineering-vault/scripts/engineering.py" "$NEXT/engineering-vault/scripts/pickup.py"
 
 # The commit identity comes first, so the home's own config, included after it
 # and read whenever the ecryptfs home is unlocked, overrides it.
@@ -112,7 +118,9 @@ printf 'skills-registry %s %s\n' "$STAGED_SHA" "$STAGE_REF" >"$NEXT/STAGED"
 
 # Swapped in under the applier's own lock, so no run reads a half-staged tree.
 # Each part is moved aside before its replacement lands, and the old copies are
-# removed only once every part is in place.
+# removed only once every part is in place. Pickup does not take this lock
+# (its engineering.py children do), so a tick that starts during a restage may
+# read a moved tree and fail that tick.
 if ! flock "$ROOT/apply.lock" bash -c '
   set -e
   root="$1" next="$2"
@@ -171,13 +179,14 @@ else
   fi
 fi
 
-if ! systemd-analyze verify "$UNIT_SOURCE_DIR/engineering-apply.service" "$UNIT_SOURCE_DIR/engineering-apply.timer"; then
-  echo 'blocked: the engineering-apply units did not pass systemd verification'
+if ! systemd-analyze verify "$UNIT_SOURCE_DIR/engineering-apply.service" "$UNIT_SOURCE_DIR/engineering-apply.timer" \
+  "$UNIT_SOURCE_DIR/engineering-pickup.service" "$UNIT_SOURCE_DIR/engineering-pickup.timer"; then
+  echo 'blocked: the engineering units did not pass systemd verification'
   return 1 2>/dev/null || exit 1
 fi
 FAILED=0
 INSTALLED=0
-for UNIT in engineering-apply.service engineering-apply.timer; do
+for UNIT in engineering-apply.service engineering-apply.timer engineering-pickup.service engineering-pickup.timer; do
   SOURCE="$UNIT_SOURCE_DIR/$UNIT"
   TARGET="/etc/systemd/system/$UNIT"
   if [ -f "$TARGET" ] && cmp -s "$SOURCE" "$TARGET"; then
@@ -199,4 +208,8 @@ if [ "$FAILED" = 1 ]; then
 fi
 if ! systemctl is-enabled --quiet engineering-apply.timer 2>/dev/null; then
   echo 'activation remains explicit: sudo systemctl enable --now engineering-apply.timer'
+fi
+# The pickup timer is never enabled here. The service runs once by hand first.
+if ! systemctl is-enabled --quiet engineering-pickup.timer 2>/dev/null; then
+  echo 'pickup stays off until one run by hand succeeds: sudo systemctl start engineering-pickup.service, then sudo systemctl enable --now engineering-pickup.timer'
 fi

@@ -1,0 +1,26 @@
+[Unit]
+Description=Start a crew on the next ready agent engineering task
+Documentation=file:///srv/services/engineering/engineering-vault/SKILL.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=black
+# The home is ecryptfs, so ~/.gitconfig can be unreadable at boot. This file
+# includes it when it is readable and carries the identity otherwise.
+Environment=GIT_CONFIG_GLOBAL=/srv/services/engineering/gitconfig
+# paneport's crew skill links ags-crew into the home's ~/.local/bin, so a
+# locked home makes the listing fail and pickup ends the tick unchanged.
+Environment=PATH=/srv/services/paneport/bin:/home/black/.local/bin:/usr/local/bin:/usr/bin:/bin
+# A tick that hangs, say on a paneport that never answers, must not keep the
+# timer from ever firing again.
+TimeoutStartSec=15min
+# A tick that finds the lock held, because the last one is still running,
+# exits 0 as a skip rather than failing the unit.
+ExecStart=/usr/bin/flock -n -E 0 /srv/services/engineering/pickup.lock /usr/bin/python3 /srv/services/engineering/engineering-vault/scripts/pickup.py
+WorkingDirectory=/srv/services/engineering
+NoNewPrivileges=yes
+# No PrivateTmp, because ags-crew and tmux reach the tmux server's socket
+# under /tmp.
+SyslogIdentifier=engineering-pickup
