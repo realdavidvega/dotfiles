@@ -35,7 +35,7 @@ flowchart TD
 
 | Layer | Purpose | Managed files |
 |---|---|---|
-| tmux configuration | Terminal behaviour the agent TUIs depend on | `config/tmux/tmux.conf` |
+| tmux configuration | Terminal behaviour the agent TUIs depend on | `config/tmux/tmux.conf`, `scripts/agent-copy.py` |
 | Session launcher | Create, attach and reach sessions, locally or over SSH | `scripts/agent-session.sh` |
 | Session records | Each session's directory, agent and Claude conversation, kept across reboots | the state directory with `sessions/` and `history.log`, the `SessionStart` pin hook in `config/claude/settings.json` |
 | Notification | Report on a detached session, finished or blocked | `scripts/agent-notify.sh`, `config/claude/settings.json`, `config/codex/config.baseline.toml` |
@@ -66,6 +66,7 @@ Most of it exists because an agent TUI is not an ordinary program.
 | `set-titles-string` | The terminal title is `NAME · TITLE` when the session has a title, so an iTerm tab says what the session is doing, and `NAME · WINDOW` without one |
 | `status-left`, `status-left-length 70` | The session's title follows its name, dimmed and cut to 40 cells, wide characters counting two. It is hidden under 100 columns so the phone keeps its window list. It reads `@ags-title-status`, a copy with `#` doubled, because the status line treats `#[...]` in an option as a style |
 | `ags-title-edit`, `MouseDown1StatusLeft`, prefix `T` | A click on the session name, or prefix `T`, opens a popup that edits the title. The popup is written once, as a command alias both keys are bound to. It expands no format in its command, so it finds the launcher through the global `@ags-launcher`, which `ags` sets. prefix `T` set the pane title by default, which nothing here uses |
+| prefix `y` | Opens a popup listing the fenced blocks, and any `>` blockquotes, from the last five replies of the Claude conversation in the pane, and copies the chosen one. `scripts/agent-copy.py` finds the conversation through Claude Code's session registry, `~/.claude/sessions/<pid>.json`, walking down from the pane's shell to the first process registered there, so it needs no hook, and a pane where Claude has exited, or a leftover entry from a crash, offers nothing. Each line shows the flavour Enter copies. A `slack` block, a blockquote, or an untagged block labelled as Slack copies as rich text on macOS, one pasteboard item holding HTML and the text as written, and anything else as plain text through `load-buffer -w` and `pbcopy`. Slack with "Format messages with markup" on takes the text and converts its markdown links and code itself, while with it off, and in rich editors, the HTML carries them. Off macOS, or for a client attached over SSH or mosh, everything copies as plain text, since a rich copy reaches only this Mac's pasteboard. ctrl-r copies in the other flavour. A rich copy skips the tmux buffer, because OSC 52 would replace the HTML with plain text. The key goes through `run-shell -b` because a popup expands no format in its command |
 
 The prefix stays `C-b`. `C-a` is beginning-of-line in every shell here, which
 the Linux keyd configuration deliberately preserves, and moving the prefix onto
@@ -504,7 +505,8 @@ shows a short form in tmux's status line for 10 seconds. Run setup again.
 the aliases and the hint. Deleting it lasts only until setup runs again. The
 pin hook can stay, since it returns at once outside a recorded pane. Never
 restore the `.pre-ags` backups, which would revert every later edit to those
-files.
+files. `prefix y` needs none of this, since it reads Claude Code's own session
+registry, and goes with its `bind y` line in `tmux.conf`.
 
 ## Notifications
 
@@ -848,6 +850,7 @@ Run the offline regression suite with:
 
 ```bash
 python3 scripts/test_agent_bridge.py
+python3 scripts/test_agent_copy.py
 python3 scripts/test_agent_session.py
 python3 scripts/test_agent_sessions_setup.py
 ```

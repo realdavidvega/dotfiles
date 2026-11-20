@@ -2417,6 +2417,11 @@ class TitleTests(unittest.TestCase):
         self.assertTrue(bound('probe', 'x').startswith('display-popup'))
         self.assertEqual(bound('root', 'MouseDown1StatusLeft'), bound('probe', 'x'))
         self.assertEqual(bound('prefix', 'T'), bound('probe', 'x'))
+        # prefix y runs the draft picker through run-shell, which expands the
+        # pane and client a popup could not.
+        copy = bound('prefix', 'y')
+        self.assertTrue(copy.startswith('run-shell -b'))
+        self.assertIn('agent-copy.py --pane #{pane_id} --client #{client_name}', copy)
 
     def test_hostile_title_rendered(self):
         # Every redraw expands the status line and the terminal title, so a

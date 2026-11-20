@@ -252,6 +252,10 @@ so the bridge and the Black System transport in its own private repo stay stdlib
 `ls`, `new`, `resume`, `kill`, `peek`, `say`, `esc` and `enter`. The terminal
 requires a session name, while Telegram can infer it from the topic. Pane
 commands target the `agent` window even when a different window is selected.
+`prefix y` runs `scripts/agent-copy.py` in a popup, which finds the pane's
+Claude conversation through Claude Code's session registry and copies one of
+the last replies' fenced blocks or quotes, a `slack` block, a quote or a block
+labelled Slack as rich text on macOS.
 Full reasoning and the alternatives considered are in `doc/remote-agent-sessions.md`.
 
 ### Voice notes (hub)
@@ -351,7 +355,8 @@ then `sudo systemctl enable --now engineering-pickup.timer`.
   Order matters. Adding a new step means picking a sensible number.
 - `scripts/` — repo-owned scripts callable from anywhere (not necessarily
   during bootstrap). Includes `opencode-session.sh`, `hindsight-local.sh`,
-  `agent-session.sh`, `agent-notify.sh`, `agent-bridge.py`, `voice.py`, `voice_pin.py`,
+  `agent-session.sh`, `agent-notify.sh`, `agent-bridge.py`, `agent-copy.py`, `voice.py`,
+  `voice_pin.py`,
   `skills/{sync,verify}.sh`,
   `mp3-tagger/*`, etc.
 - `shell/` — the actual shell setup. `init.sh` is the single entry point that
